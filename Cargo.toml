@@ -1,0 +1,6 @@
+[package]
+name = "eventstore"
+version = "0.1.0"
+authors = ["YoEight <yo.eight@gmail.com>"]
+
+[dependencies]
