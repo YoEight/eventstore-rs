@@ -9,7 +9,8 @@ use core::option::Option;
 use core::result::Result;
 use std::io::{ Error, ErrorKind };
 
-use bytes::BytesMut;
+use bytes::{ BytesMut, LittleEndian };
+use bytes::buf::BufMut;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
 use tokio_io::codec::{ Encoder, Decoder };
@@ -20,16 +21,25 @@ pub struct Pkg {
     pub correlation: Uuid,
 }
 
+impl Pkg {
+    fn size(&self) -> u32 {
+        18
+    }
+}
+
 pub struct PkgCodec;
 
 impl Encoder for PkgCodec {
     type Item  = Pkg;
     type Error = Error;
 
-    fn encode(&mut self, _: Pkg, _: &mut BytesMut) -> Result<(), Error> {
-        let e = Error::new(ErrorKind::Other, "not implemented yet");
+    fn encode(&mut self, item: Pkg, dest: &mut BytesMut) -> Result<(), Error> {
+        dest.put_u32::<LittleEndian>(item.size());
+        dest.put_u8(item.cmd);
+        dest.put_u8(0); // Package credential flag.
+        dest.put_slice(item.correlation.as_bytes());
 
-        Result::Err(e)
+        Result::Ok(())
     }
 }
 
