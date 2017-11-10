@@ -7,9 +7,9 @@ extern crate uuid;
 
 use core::option::Option;
 use core::result::Result;
-use std::io::{ Error, ErrorKind };
+use std::io::{ Error, Cursor };
 
-use bytes::{ BytesMut, LittleEndian };
+use bytes::{ Buf, BytesMut, LittleEndian };
 use bytes::buf::BufMut;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
@@ -22,6 +22,13 @@ pub struct Pkg {
 }
 
 impl Pkg {
+    fn new(cmd: u8, correlation: Uuid) -> Pkg {
+        Pkg {
+            cmd:         cmd,
+            correlation: correlation,
+        }
+    }
+
     fn size(&self) -> u32 {
         18
     }
@@ -47,10 +54,24 @@ impl Decoder for PkgCodec {
     type Item  = Pkg;
     type Error = Error;
 
-    fn decode(&mut self, _: &mut BytesMut) -> Result<Option<Pkg>, Error> {
-        let e = Error::new(ErrorKind::Other, "not implemented yet");
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Pkg>, Error> {
+        // Checks if the frame size has been sent.
+        if src.len() < 4 {
+            Result::Ok(Option::None)
+        } else {
+            let mut frame_cursor = Cursor::new(src.split_to(3));
+            let frame            = frame_cursor.get_u32::<LittleEndian>() as usize;
 
-        Result::Err(e)
+            // Checks if all the message payload has been sent.
+            if src.len() < frame {
+                Result::Ok(Option::None)
+            } else {
+                let cmd         = src[0];
+                let correlation = Uuid::from_bytes(&src[2..18]).unwrap();
+
+                Result::Ok(Option::Some(Pkg::new(cmd, correlation)))
+            }
+        }
     }
 }
 
