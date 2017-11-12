@@ -3,17 +3,22 @@ extern crate bytes;
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate two_lock_queue;
 extern crate uuid;
 
 use core::option::Option;
 use core::result::Result;
-use std::io::{ Error, Cursor };
+use std::io::{ Error, ErrorKind, Cursor };
+use std::net::{ TcpStream, SocketAddrV4 };
+use std::thread::{ spawn, JoinHandle };
 
 use bytes::{ Buf, BytesMut, LittleEndian };
 use bytes::buf::BufMut;
+use futures::{ Future, Sink, Stream };
 use tokio_core::reactor::Core;
-use tokio_core::net::TcpStream;
 use tokio_io::codec::{ Encoder, Decoder };
+use tokio_io::AsyncRead;
+use two_lock_queue::{ Sender, Receiver, unbounded };
 use uuid::Uuid;
 
 pub struct Pkg {
@@ -31,6 +36,14 @@ impl Pkg {
 
     fn size(&self) -> u32 {
         18
+    }
+
+    // Copies the Pkg except its payload.
+    fn copy_headers_only(&self) -> Pkg {
+        Pkg {
+            cmd:         self.cmd,
+            correlation: self.correlation,
+        }
     }
 }
 
@@ -75,12 +88,83 @@ impl Decoder for PkgCodec {
     }
 }
 
-pub fn workbench() {
-    let core   = Core::new().unwrap();
-    let handle = core.handle();
-    let host   = "127.0.0.1".parse().unwrap();
+enum Msg {
+    Start,
+    Shutdown,
+    Established(Uuid),
+}
 
-    let _ = TcpStream::connect(&host, &handle);
+pub struct Client {
+    worker: JoinHandle<()>,
+    sender: Sender<Msg>,
+}
+
+struct Connection {
+    id:     Uuid,
+    sender: Sender<Pkg>,
+    worker: JoinHandle<()>,
+}
+
+impl Connection {
+    fn new(bus: Sender<Msg>, addr: SocketAddrV4) -> Connection {
+        let (sender, recv) = unbounded();
+        let id             = Uuid::new_v4();
+        let worker         = spawn(move || Connection::create_conn(id, recv, bus, addr));
+
+        Connection {
+            id:     id,
+            sender: sender,
+            worker: worker,
+        }
+    }
+
+    fn create_conn(id: Uuid, rx: Receiver<Pkg>, bus: Sender<Msg>, addr: SocketAddrV4) {
+        let stream = TcpStream::connect(addr).unwrap();
+
+        bus.send(Msg::Established(id)).unwrap();
+    }
+}
+
+impl Client {
+    pub fn new(addr: SocketAddrV4) -> Client {
+        let (sender, recv) = unbounded();
+        let tx             = sender.clone();
+        let handle         = spawn(move || Client::worker_thread(addr, tx, recv));
+
+        Client {
+            worker: handle,
+            sender: sender,
+        }
+    }
+
+    fn worker_thread(addr: SocketAddrV4, bus: Sender<Msg>, queue: Receiver<Msg>) {
+        let mut keepGoing  = true;
+        let mut connection = Option::None;
+        let mut connected  = false;
+
+        while keepGoing {
+            let msg = queue.recv().unwrap();
+
+            match msg {
+                Msg::Start => {
+                    connection = Option::Some(Connection::new(bus.clone(), addr));
+                },
+
+                Msg::Shutdown => {
+                    keepGoing = false;
+                    println!("Shutting down...");
+                },
+
+                Msg::Established(id) => {
+                    for conn in &connection {
+                        if conn.id == id {
+                            connected = true;
+                        }
+                    }
+                },
+            }
+        }
+    }
 }
 
 #[cfg(test)]
