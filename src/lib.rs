@@ -20,66 +20,46 @@ pub struct Pkg {
 }
 
 impl Pkg {
-    fn new(cmd: u8, correlation: Uuid) -> Pkg {
+    pub fn new(cmd: u8, correlation: Uuid) -> Pkg {
         Pkg {
             cmd:         cmd,
             correlation: correlation,
         }
     }
 
-    fn size(&self) -> u32 {
+    pub fn size(&self) -> u32 {
         18
     }
 
     // Copies the Pkg except its payload.
-    fn copy_headers_only(&self) -> Pkg {
+    pub fn copy_headers_only(&self) -> Pkg {
         Pkg {
             cmd:         self.cmd,
             correlation: self.correlation,
         }
     }
-}
 
-// pub struct PkgCodec;
-//
-// impl Encoder for PkgCodec {
-//     type Item  = Pkg;
-//     type Error = Error;
-//
-//     fn encode(&mut self, item: Pkg, dest: &mut BytesMut) -> Result<(), Error> {
-//         dest.put_u32::<LittleEndian>(item.size());
-//         dest.put_u8(item.cmd);
-//         dest.put_u8(0); // Package credential flag.
-//         dest.put_slice(item.correlation.as_bytes());
-//
-//         Result::Ok(())
-//     }
-// }
-//
-// impl Decoder for PkgCodec {
-//     type Item  = Pkg;
-//     type Error = Error;
-//
-//     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Pkg>, Error> {
-//         // Checks if the frame size has been sent.
-//         if src.len() < 4 {
-//             Result::Ok(Option::None)
-//         } else {
-//             let mut frame_cursor = Cursor::new(src.split_to(3));
-//             let frame            = frame_cursor.get_u32::<LittleEndian>() as usize;
-//
-//             // Checks if all the message payload has been sent.
-//             if src.len() < frame {
-//                 Result::Ok(Option::None)
-//             } else {
-//                 let cmd         = src[0];
-//                 let correlation = Uuid::from_bytes(&src[2..18]).unwrap();
-//
-//                 Result::Ok(Option::Some(Pkg::new(cmd, correlation)))
-//             }
-//         }
-//     }
-// }
+    pub fn toBytes(&self) -> BytesMut {
+        // FIXME - Use with_capacity instead.
+        let mut bytes = BytesMut::new();
+
+        bytes.put_u32::<LittleEndian>(self.size());
+        bytes.put_u8(self.cmd);
+        bytes.put_u8(0); // Package credential flag.
+        bytes.put_slice(self.correlation.as_bytes());
+
+        bytes
+    }
+
+    pub fn from_bytes(src: &mut BytesMut) -> Pkg {
+        let mut frame_cursor = Cursor::new(src.split_to(3));
+        let     frame        = frame_cursor.get_u32::<LittleEndian>() as usize;
+        let     cmd          = src[0];
+        let     correlation  = Uuid::from_bytes(&src[2..18]).unwrap();
+
+        Pkg::new(cmd, correlation)
+    }
+}
 
 enum Msg {
     Start,
