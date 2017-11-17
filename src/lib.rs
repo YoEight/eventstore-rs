@@ -13,13 +13,8 @@ use std::thread::{ spawn, JoinHandle };
 use chan::{ Sender, Receiver, async };
 use uuid::Uuid;
 
+use internal::messaging::Msg;
 use internal::package::Pkg;
-
-enum Msg {
-    Start,
-    Shutdown,
-    Established(Uuid),
-}
 
 pub struct Client {
     worker: JoinHandle<()>,
