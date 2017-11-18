@@ -31,4 +31,8 @@ impl Connection {
 
         bus.send(Msg::Established(id));
     }
+
+    pub fn enqueue(&self, pkg: Pkg) {
+        self.sender.send(pkg);
+    }
 }

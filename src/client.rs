@@ -25,7 +25,7 @@ impl Client {
     }
 
     fn worker_thread(addr: SocketAddrV4, bus: Sender<Msg>, queue: Receiver<Msg>) {
-        let mut keep_going  = true;
+        let mut keep_going = true;
         let mut connection = Option::None;
         let mut connected  = false;
 
@@ -47,6 +47,26 @@ impl Client {
                         for conn in &connection {
                             if conn.id == id {
                                 connected = true;
+                            }
+                        }
+                    },
+
+                    Msg::Arrived(pkg) => {
+                        if connected {
+                            match pkg.cmd {
+                                0x01 => {
+                                    for conn in &connection {
+                                        let mut resp = pkg.copy_headers_only();
+
+                                        resp.cmd = 0x02;
+
+                                        conn.enqueue(resp);
+                                    }
+                                },
+
+                                unknown => {
+                                    println!("Unknown command [{}].", unknown);
+                                }
                             }
                         }
                     },
