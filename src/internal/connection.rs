@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::{ TcpStream, SocketAddrV4 };
 use std::thread::{ JoinHandle, spawn };
 
@@ -27,9 +28,35 @@ impl Connection {
     }
 
     fn create_conn(id: Uuid, rx: Receiver<Pkg>, bus: Sender<Msg>, addr: SocketAddrV4) {
-        let stream = TcpStream::connect(addr).unwrap();
+        let     stream = TcpStream::connect(addr).unwrap();
+        let mut send   = stream.try_clone().unwrap();
 
         bus.send(Msg::Established(id));
+
+        let recv_handle = spawn(move || {
+            let mut recv = stream.try_clone().unwrap();
+
+            loop {
+                let pkg = Pkg::from_stream(&mut recv);
+                bus.send(Msg::Arrived(pkg));
+            }
+        });
+
+        let mut keep_going = true;
+
+        while keep_going {
+            let pkg_opt = rx.recv();
+
+            for pkg in &pkg_opt {
+                let bytes = pkg.to_bytes();
+
+                send.write_all(&bytes).unwrap();
+            }
+
+            keep_going = pkg_opt.is_some();
+        }
+
+        recv_handle.join().unwrap();
     }
 
     pub fn enqueue(&self, pkg: Pkg) {

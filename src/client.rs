@@ -24,6 +24,10 @@ impl Client {
         }
     }
 
+    pub fn start(&self) {
+        self.sender.send(Msg::Start);
+    }
+
     fn worker_thread(addr: SocketAddrV4, bus: Sender<Msg>, queue: Receiver<Msg>) {
         let mut keep_going = true;
         let mut connection = Option::None;
@@ -55,6 +59,8 @@ impl Client {
                         if connected {
                             match pkg.cmd {
                                 0x01 => {
+                                    println!("Heartbeat request received");
+
                                     for conn in &connection {
                                         let mut resp = pkg.copy_headers_only();
 
