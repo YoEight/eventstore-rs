@@ -13,38 +13,13 @@ use std::thread::{ spawn, JoinHandle };
 use chan::{ Sender, Receiver, async };
 use uuid::Uuid;
 
+use internal::connection::Connection;
 use internal::messaging::Msg;
 use internal::package::Pkg;
 
 pub struct Client {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
-}
-
-struct Connection {
-    id:     Uuid,
-    sender: Sender<Pkg>,
-    worker: JoinHandle<()>,
-}
-
-impl Connection {
-    fn new(bus: Sender<Msg>, addr: SocketAddrV4) -> Connection {
-        let (sender, recv) = async();
-        let id             = Uuid::new_v4();
-        let worker         = spawn(move || Connection::create_conn(id, recv, bus, addr));
-
-        Connection {
-            id:     id,
-            sender: sender,
-            worker: worker,
-        }
-    }
-
-    fn create_conn(id: Uuid, rx: Receiver<Pkg>, bus: Sender<Msg>, addr: SocketAddrV4) {
-        let stream = TcpStream::connect(addr).unwrap();
-
-        bus.send(Msg::Established(id));
-    }
 }
 
 impl Client {
