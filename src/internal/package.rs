@@ -1,9 +1,10 @@
-use std::io::{ Cursor, Read };
+use std::io::{ Cursor, Read, Error, ErrorKind, Result };
 use std::net::TcpStream;
+use std::result::Result::{ Ok };
 
 use bytes::{ Buf, BytesMut, LittleEndian };
 use bytes::buf::BufMut;
-use uuid::Uuid;
+use uuid::{ Uuid, ParseError };
 
 pub struct Pkg {
     pub cmd:         u8,
@@ -42,20 +43,24 @@ impl Pkg {
         bytes
     }
 
-    pub fn from_stream(stream: &mut TcpStream) -> Pkg {
+    pub fn from_stream(stream: &mut TcpStream) -> Result<Pkg> {
         let mut frame: [u8; 4] = [0; 4];
 
-        stream.read_exact(&mut frame).unwrap();
+        stream.read_exact(&mut frame)?;
 
         let mut frame_cursor = Cursor::new(frame);
         let     frame_size   = frame_cursor.get_u32::<LittleEndian>() as usize;
         let mut pkg_buf      = vec![0; frame_size];
 
-        stream.read_exact(&mut pkg_buf).unwrap();
+        stream.read_exact(&mut pkg_buf)?;
+
+        fn to_error(err: ParseError) -> Error {
+            Error::new(ErrorKind::Other, format!("ParseError {}", err))
+        }
 
         let cmd         = pkg_buf[0];
-        let correlation = Uuid::from_bytes(&pkg_buf[2..18]).unwrap();
+        let correlation = Uuid::from_bytes(&pkg_buf[2..18]).map_err(|e| to_error(e))?;
 
-        Pkg::new(cmd, correlation)
+        Ok(Pkg::new(cmd, correlation))
     }
 }

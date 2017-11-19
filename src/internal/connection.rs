@@ -34,11 +34,16 @@ impl Connection {
         bus.send(Msg::Established(id));
 
         let recv_handle = spawn(move || {
-            let mut recv = stream.try_clone().unwrap();
+            let mut recv       = stream.try_clone().unwrap();
+            let mut keep_going = true;
 
-            loop {
-                let pkg = Pkg::from_stream(&mut recv);
-                bus.send(Msg::Arrived(pkg));
+            while keep_going {
+                let pkg_opt = Pkg::from_stream(&mut recv);
+
+                match pkg_opt {
+                    Result::Ok(pkg) => bus.send(Msg::Arrived(pkg)),
+                    _               => { keep_going = false; },
+                }
             }
         });
 
