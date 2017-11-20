@@ -2,6 +2,9 @@ extern crate chan;
 extern crate core;
 extern crate bytes;
 extern crate uuid;
+extern crate chrono;
+extern crate timer;
+extern crate time;
 
 mod internal;
 pub mod client;
