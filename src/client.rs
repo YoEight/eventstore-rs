@@ -5,6 +5,7 @@ use std::thread::{ spawn, JoinHandle };
 use chan::{ Sender, Receiver, async };
 use time::Duration;
 use timer::Timer;
+use uuid::Uuid;
 
 use internal::connection::Connection;
 use internal::messaging::Msg;
@@ -24,7 +25,8 @@ enum ConnState {
 struct Internal {
    sender: Sender<Msg>,
    receiver: Receiver<Msg>,
-   connection: ConnState,
+   connected: bool,
+   connection: Option<Connection>,
 }
 
 impl Internal {
@@ -34,7 +36,8 @@ impl Internal {
         Internal {
             sender: sender,
             receiver: recv,
-            connection: ConnState::Disconnected,
+            connected: false,
+            connection: Option::None,
         }
     }
 
@@ -46,24 +49,34 @@ impl Internal {
         self.receiver.clone()
     }
 
+    fn recv_msg(&self) -> Option<Msg> {
+        self.receiver.recv()
+    }
+
     fn is_connected(&self) -> bool {
-        match self.connection {
-            ConnState::Connected(_) => true,
-            _                       => false,
-        }
+        self.connected
     }
 
     fn set_pending(&mut self, conn: Connection) {
-        self.connection = ConnState::Pending(conn);
+        self.connected  = false;
+        self.connection = Option::Some(conn);
+    }
+
+    fn switch_to_connected_if_same_connection(&mut self, cid: Uuid) {
+        match self.connection {
+            Option::Some(ref conn) if conn.id == cid => {
+                self.connected = true;
+            },
+            _ => ()
+        }
     }
 
     fn with_connection<F>(&self, func: F)
         where F: FnOnce(&Connection)
     {
         match self.connection {
-            ConnState::Pending(ref conn)   => func(conn),
-            ConnState::Connected(ref conn) => func(conn),
-            _                              => (),
+            Option::Some(ref conn) => func(conn),
+            _                      => (),
         }
     }
 
@@ -71,8 +84,8 @@ impl Internal {
         where F: FnOnce(&Connection)
     {
         match self.connection {
-            ConnState::Connected(ref conn) => func(conn),
-            _                              => (),
+            Option::Some(ref conn) if self.connected => func(conn),
+            _                                        => (),
         }
     }
 
@@ -80,9 +93,9 @@ impl Internal {
 
 impl Client {
     pub fn new(addr: SocketAddrV4) -> Client {
-        let (sender, recv) = async();
-        let tx             = sender.clone();
-        let handle         = spawn(move || Client::worker_thread(addr, tx, recv));
+        let mut state  = Internal::new();
+        let     sender = state.clone_sender();
+        let     handle = spawn(move || Client::worker_thread(&mut state, addr));
 
         Client {
             worker: handle,
@@ -108,18 +121,19 @@ impl Client {
         self.worker.join().unwrap();
     }
 
-    fn worker_thread(addr: SocketAddrV4, bus: Sender<Msg>, queue: Receiver<Msg>) {
+    fn worker_thread(state: &mut Internal, addr: SocketAddrV4) {
         let mut keep_going = true;
-        let mut connection = Option::None;
-        let mut connected  = false;
 
         while keep_going {
-            let msg_opt = queue.recv();
+            let msg_opt = state.recv_msg();
 
             match msg_opt {
                 Option::Some(msg) => match msg {
                     Msg::Start => {
-                        connection = Option::Some(Connection::new(bus.clone(), addr));
+                        let bus  = state.clone_sender();
+                        let conn = Connection::new(bus, addr);
+
+                        state.set_pending(conn);
                     },
 
                     Msg::Shutdown => {
@@ -128,33 +142,27 @@ impl Client {
                     },
 
                     Msg::Established(id) => {
-                        for conn in &connection {
-                            if conn.id == id {
-                                connected = true;
-                            }
-                        }
+                        state.switch_to_connected_if_same_connection(id);
                     },
 
                     Msg::Arrived(pkg) => {
-                        if connected {
+                        state.when_connected(|conn| {
                             match pkg.cmd {
                                 0x01 => {
                                     println!("Heartbeat request received");
 
-                                    for conn in &connection {
-                                        let mut resp = pkg.copy_headers_only();
+                                    let mut resp = pkg.copy_headers_only();
 
-                                        resp.cmd = 0x02;
+                                    resp.cmd = 0x02;
 
-                                        conn.enqueue(resp);
-                                    }
+                                    conn.enqueue(resp);
                                 },
 
                                 unknown => {
                                     println!("Unknown command [{}].", unknown);
                                 }
                             }
-                        }
+                        });
                     },
 
                     Msg::Tick => {
