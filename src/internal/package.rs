@@ -23,6 +23,10 @@ impl Pkg {
         18
     }
 
+    pub fn heartbeat_request() -> Pkg {
+        Pkg::new(0x01, Uuid::new_v4())
+    }
+
     // Copies the Pkg except its payload.
     pub fn copy_headers_only(&self) -> Pkg {
         Pkg {

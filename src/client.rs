@@ -3,41 +3,69 @@ use std::net::SocketAddrV4;
 use std::thread::{ spawn, JoinHandle };
 
 use chan::{ Sender, Receiver, async };
-use time::Duration;
+use time::{ Duration, Timespec, get_time };
 use timer::Timer;
 use uuid::Uuid;
 
 use internal::connection::Connection;
 use internal::messaging::Msg;
+use internal::package::Pkg;
 
 pub struct Client {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
     timer:  Timer,
-}
-
-enum ConnState {
-    Disconnected,
-    Pending(Connection),
-    Connected(Connection),
+    settings: Settings,
 }
 
 struct Internal {
    sender: Sender<Msg>,
    receiver: Receiver<Msg>,
+   pkg_num: u32,
    connected: bool,
    connection: Option<Connection>,
+   heartbeat: Option<HeartbeatStatus>,
+   settings: Settings,
+}
+
+#[derive(Copy, Clone)]
+pub struct Settings {
+    heartbeat_delay: Duration,
+    heartbeat_timeout: Duration,
+}
+
+impl Settings {
+    pub fn default() -> Settings {
+        Settings {
+            heartbeat_delay: Duration::milliseconds(750),
+            heartbeat_timeout: Duration::seconds(1),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum HeartbeatStatus {
+    Delay(u32, Timespec),
+    Timeout(u32, Timespec),
+}
+
+enum Heartbeat {
+    Valid,
+    Failure,
 }
 
 impl Internal {
-    fn new() -> Internal {
+    fn new(settings: Settings) -> Internal {
         let (sender, recv) = async();
 
         Internal {
             sender: sender,
             receiver: recv,
+            pkg_num: 0,
             connected: false,
             connection: Option::None,
+            heartbeat: Option::None,
+            settings: settings,
         }
     }
 
@@ -71,6 +99,60 @@ impl Internal {
         }
     }
 
+    fn manage_heartbeat(&mut self) -> Heartbeat {
+        match self.heartbeat {
+            Some(status) => {
+                match status {
+                    HeartbeatStatus::Delay(num, start) => {
+                        if self.pkg_num != num {
+                            let new_status = HeartbeatStatus::Delay(self.pkg_num, get_time());
+
+                            self.heartbeat = Option::Some(new_status);
+                        } else {
+                            let now = get_time();
+
+                            if now - start >= self.settings.heartbeat_delay {
+                                let new_status = HeartbeatStatus::Timeout(self.pkg_num, now);
+                                let req        = Pkg::heartbeat_request();
+
+                                self.heartbeat = Option::Some(new_status);
+                                self.when_connected(move |conn| conn.enqueue(req));
+                            }
+                        }
+
+                        Heartbeat::Valid
+                    },
+
+                    HeartbeatStatus::Timeout(num, start) => {
+                        if self.pkg_num != num {
+                            let new_status = HeartbeatStatus::Delay(self.pkg_num, get_time());
+
+                            self.heartbeat = Some(new_status);
+
+                            Heartbeat::Valid
+                        } else {
+                            let now = get_time();
+
+                            if now - start >= self.settings.heartbeat_timeout {
+                                Heartbeat::Failure
+                            } else {
+                                Heartbeat::Valid
+                            }
+                        }
+                    },
+                }
+            },
+
+            _ => {
+                let new_status = HeartbeatStatus::Delay(self.pkg_num, get_time());
+
+                self.heartbeat = Some(new_status);
+
+                Heartbeat::Valid
+            },
+        }
+    }
+
     fn with_connection<F>(&self, func: F)
         where F: FnOnce(&Connection)
     {
@@ -92,8 +174,8 @@ impl Internal {
 }
 
 impl Client {
-    pub fn new(addr: SocketAddrV4) -> Client {
-        let mut state  = Internal::new();
+    pub fn new(settings: Settings, addr: SocketAddrV4) -> Client {
+        let mut state  = Internal::new(settings);
         let     sender = state.clone_sender();
         let     handle = spawn(move || Client::worker_thread(&mut state, addr));
 
@@ -101,6 +183,7 @@ impl Client {
             worker: handle,
             sender: sender,
             timer:  Timer::new(),
+            settings: settings,
         }
     }
 
@@ -146,6 +229,8 @@ impl Client {
                     },
 
                     Msg::Arrived(pkg) => {
+                        state.pkg_num += 1;
+
                         state.when_connected(|conn| {
                             match pkg.cmd {
                                 0x01 => {
@@ -166,7 +251,16 @@ impl Client {
                     },
 
                     Msg::Tick => {
-                    
+                        if state.connected {
+                            match state.manage_heartbeat() {
+                                Heartbeat::Valid   => { keep_going = true; },
+                                Heartbeat::Failure => {
+                                    keep_going = false;
+
+                                    println!("Heartbeat TIMEOUT");
+                                },
+                            }
+                        }
                     },
                 },
 
