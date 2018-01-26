@@ -5,6 +5,7 @@ extern crate uuid;
 extern crate chrono;
 extern crate timer;
 extern crate time;
+extern crate protobuf;
 
 mod internal;
 pub mod client;

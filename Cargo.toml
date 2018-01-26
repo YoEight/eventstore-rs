@@ -2,6 +2,7 @@
 name = "eventstore"
 version = "0.1.0"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
+build = "build.rs"
 
 [dependencies]
 tokio-core = "0.1.10"
@@ -13,3 +14,7 @@ chan = "0.1.19"
 chrono = "0.4.0"
 timer = "0.2.0"
 time = "0.1.38"
+protobuf = "1.4.3"
+
+[build-dependencies]
+protoc-rust = "1.4"

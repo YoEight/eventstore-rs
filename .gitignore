@@ -11,3 +11,5 @@ Cargo.lock
 /target/
 **/*.rs.bk
 Cargo.lock
+
+src/internal/messages.rs
