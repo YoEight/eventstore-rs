@@ -2,11 +2,6 @@ use uuid::Uuid;
 
 use internal::messages;
 
-pub enum Payload {
-    Raw(Vec<u8>),
-    Json(Vec<u8>),
-}
-
 pub struct EventData {
     inner: messages::NewEvent,
 }

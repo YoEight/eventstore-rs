@@ -9,6 +9,7 @@ use uuid::{ Uuid, ParseError };
 pub struct Pkg {
     pub cmd:         u8,
     pub correlation: Uuid,
+    pub payload:     Option<Vec<u8>>,
 }
 
 impl Pkg {
@@ -16,11 +17,21 @@ impl Pkg {
         Pkg {
             cmd:         cmd,
             correlation: correlation,
+            payload: None,
         }
     }
 
+    pub fn set_payload(&mut self, payload: Vec<u8>) {
+        self.payload = Some(payload);
+    }
+
     pub fn size(&self) -> u32 {
-        18
+        let data_len = match self.payload {
+            None            => 0,
+            Some(ref bytes) => bytes.len(),
+        };
+
+        18 + (data_len as u32)
     }
 
     pub fn heartbeat_request() -> Pkg {
@@ -32,6 +43,7 @@ impl Pkg {
         Pkg {
             cmd:         self.cmd,
             correlation: self.correlation,
+            payload:     None,
         }
     }
 
@@ -43,6 +55,10 @@ impl Pkg {
         bytes.put_u8(self.cmd);
         bytes.put_u8(0); // Package credential flag.
         bytes.put_slice(self.correlation.as_bytes());
+
+        if let Some(ref payload) = self.payload {
+            bytes.put_slice(payload.as_slice());
+        }
 
         bytes
     }
@@ -62,9 +78,16 @@ impl Pkg {
             Error::new(ErrorKind::Other, format!("ParseError {}", err))
         }
 
-        let cmd         = pkg_buf[0];
-        let correlation = Uuid::from_bytes(&pkg_buf[2..18]).map_err(|e| to_error(e))?;
+        let     cmd         = pkg_buf[0];
+        let     correlation = Uuid::from_bytes(&pkg_buf[2..18]).map_err(|e| to_error(e))?;
+        let mut pkg         = Pkg::new(cmd, correlation);
 
-        Ok(Pkg::new(cmd, correlation))
+        if frame_size > 18 {
+            let payload = &pkg_buf[18..frame_size];
+
+            pkg.set_payload(payload.to_vec());
+        }
+
+        Ok(pkg)
     }
 }
