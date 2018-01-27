@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use internal::connection::Connection;
 use internal::messaging::Msg;
+use internal::messages;
 use internal::package::Pkg;
+
+use protobuf;
 
 pub struct Client {
     worker: JoinHandle<()>,
