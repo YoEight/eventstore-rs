@@ -30,7 +30,7 @@ pub enum Decision {
     Failed(OperationError),
 }
 
-trait Operation {
+pub trait Operation {
     fn create(&self, correlation: Uuid) -> Pkg;
     fn inspect(&self, pkg: Pkg) -> Decision;
 }

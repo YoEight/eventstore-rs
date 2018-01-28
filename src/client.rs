@@ -11,6 +11,7 @@ use internal::connection::Connection;
 use internal::messaging::Msg;
 use internal::messages;
 use internal::package::Pkg;
+use internal::types::Settings;
 
 use protobuf;
 
@@ -29,21 +30,6 @@ struct Internal {
    connection: Option<Connection>,
    heartbeat: Option<HeartbeatStatus>,
    settings: Settings,
-}
-
-#[derive(Copy, Clone)]
-pub struct Settings {
-    heartbeat_delay: Duration,
-    heartbeat_timeout: Duration,
-}
-
-impl Settings {
-    pub fn default() -> Settings {
-        Settings {
-            heartbeat_delay: Duration::milliseconds(750),
-            heartbeat_timeout: Duration::seconds(1),
-        }
-    }
 }
 
 #[derive(Copy, Clone)]
