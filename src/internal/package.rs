@@ -9,7 +9,7 @@ use uuid::{ Uuid, ParseError };
 pub struct Pkg {
     pub cmd:         u8,
     pub correlation: Uuid,
-    pub payload:     Option<Vec<u8>>,
+    pub payload:     Vec<u8>,
 }
 
 impl Pkg {
@@ -17,21 +17,16 @@ impl Pkg {
         Pkg {
             cmd:         cmd,
             correlation: correlation,
-            payload: None,
+            payload:     Vec::new(),
         }
     }
 
     pub fn set_payload(&mut self, payload: Vec<u8>) {
-        self.payload = Some(payload);
+        self.payload = payload;
     }
 
     pub fn size(&self) -> u32 {
-        let data_len = match self.payload {
-            None            => 0,
-            Some(ref bytes) => bytes.len(),
-        };
-
-        18 + (data_len as u32)
+        18 + (self.payload.len() as u32)
     }
 
     pub fn heartbeat_request() -> Pkg {
@@ -43,7 +38,7 @@ impl Pkg {
         Pkg {
             cmd:         self.cmd,
             correlation: self.correlation,
-            payload:     None,
+            payload:     Vec::new(),
         }
     }
 
@@ -55,10 +50,7 @@ impl Pkg {
         bytes.put_u8(self.cmd);
         bytes.put_u8(0); // Package credential flag.
         bytes.put_slice(self.correlation.as_bytes());
-
-        if let Some(ref payload) = self.payload {
-            bytes.put_slice(payload.as_slice());
-        }
+        bytes.put_slice(self.payload.as_slice());
 
         bytes
     }

@@ -1,15 +1,38 @@
 use uuid::Uuid;
 
 use protobuf::{ RepeatedField, Message };
+use protobuf::core::parse_from_bytes;
 
 use internal::data::EventData;
 use internal::messages;
 use internal::package::Pkg;
-use internal::types::ExpectedVersion;
+use internal::types::{ ExpectedVersion, Position, WriteResult };
+
+use self::messages::OperationResult;
+
+pub enum OperationError {
+    WrongExpectedVersion(String, ExpectedVersion),
+    StreamDeleted(String),
+    InvalidTransaction,
+    AccessDenied(String),
+    ProtobufDecodingError(String),
+    ServerError(Option<String>),
+    InvalidOperation(String),
+    StreamNotFound(String),
+    AuthenticationRequired,
+    Aborted,
+    WrongClientImpl(u8),
+}
+
+pub enum Decision {
+    Success,
+    Retry,
+    Failed(OperationError),
+}
 
 trait Operation {
     fn create(&self, correlation: Uuid) -> Pkg;
-    fn inspect(&self, pkg: Pkg) -> bool;
+    fn inspect(&self, pkg: Pkg) -> Decision;
 }
 
 pub struct WriteEvents {
@@ -52,7 +75,57 @@ impl Operation for WriteEvents {
         pkg
     }
 
-    fn inspect(&self, _: Pkg) -> bool {
-        false
+    fn inspect(&self, pkg: Pkg) -> Decision {
+        match pkg.cmd {
+            0x83 => {
+                let response: messages::WriteEventsCompleted =
+                        parse_from_bytes(&pkg.payload.as_slice()).unwrap();
+
+                match response.get_result() {
+                    OperationResult::Success => {
+                        let position = Position {
+                            commit: response.get_commit_position(),
+                            prepare: response.get_prepare_position(),
+                        };
+
+                        let result = WriteResult {
+                            next_expected_version: response.get_current_version(),
+                            position: position,
+                        };
+
+                        Decision::Success
+                    },
+
+                    OperationResult::PrepareTimeout => Decision::Retry,
+                    OperationResult::ForwardTimeout => Decision::Retry,
+                    OperationResult::CommitTimeout  => Decision::Retry,
+
+                    OperationResult::WrongExpectedVersion => {
+                        let stream_id = self.inner.get_event_stream_id().to_string();
+                        let exp_i64   = self.inner.get_expected_version();
+                        let exp       = ExpectedVersion::from_i64(exp_i64);
+
+                        Decision::Failed(OperationError::WrongExpectedVersion(stream_id, exp))
+                    },
+
+                    OperationResult::StreamDeleted => {
+                        let stream_id = self.inner.get_event_stream_id().to_string();
+
+                        Decision::Failed(OperationError::StreamDeleted(stream_id))
+                    },
+
+                    OperationResult::InvalidTransaction =>
+                        Decision::Failed(OperationError::InvalidTransaction),
+
+                    OperationResult::AccessDenied => {
+                        let stream_id = self.inner.get_event_stream_id().to_string();
+
+                        Decision::Failed(OperationError::AccessDenied(stream_id))
+                    },
+                }
+            },
+
+            _ => Decision::Failed(OperationError::WrongClientImpl(pkg.cmd)),
+        }
     }
 }
