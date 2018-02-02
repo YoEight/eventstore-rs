@@ -14,6 +14,11 @@ struct Register {
     op:      Box<Operation>,
 }
 
+enum Checking {
+    Delete(Uuid),
+    Retry(Uuid),
+}
+
 impl Register {
     fn new(op: Box<Operation>) -> Register {
         Register {
@@ -48,20 +53,26 @@ impl Registry {
             None => self.awaiting.push(op),
 
             Some(conn) => {
-                let     correlation = Uuid::new_v4();
-                let     pkg         = op.create(correlation);
-                let mut reg         = Register::new(op);
+                let reg = Register::new(op);
 
-                reg.tries += 1;
-                self.pending.insert(correlation, reg);
-                conn.enqueue(pkg);
+                self.send_register(conn, reg);
             }
         }
     }
 
+    fn send_register(&mut self, conn: &Connection, mut reg: Register) {
+        let correlation = Uuid::new_v4();
+        let pkg         = reg.op.create(correlation);
+        let now         = get_time();
+
+        reg.tries  += 1;
+        reg.started =  now;
+        self.pending.insert(correlation, reg);
+        conn.enqueue(pkg);
+    }
+
     pub fn check_and_retry(&mut self, conn: &Connection) {
-        // let mut to_retry  = vec![];
-        let mut to_delete = vec![];
+        let mut to_process = vec![];
 
         while let Some(op) = self.awaiting.pop() {
             self.register(op, Some(conn));
@@ -69,24 +80,36 @@ impl Registry {
 
         let now = get_time();
 
-        for (key, reg) in self.pending.iter_mut() {
+        for (key, reg) in self.pending.iter() {
             if now - reg.started >= self.settings.operation_timeout {
                 match self.settings.operation_retry {
                     Retry::Undefinately => {
-                        reg.tries   += 1;
-                        reg.started = now;
-
-                        to_delete.push(key);
+                        to_process.push(Checking::Retry(*key));
                     }
 
-                    Retry::Only(_) => (),
+                    Retry::Only(n) => {
+                        if reg.tries + 1 >= n {
+                            to_process.push(Checking::Delete(*key));
+                        } else {
+                            to_process.push(Checking::Retry(*key));
+                        }
+                    },
                 }
             }
         }
 
-        // Won't work because self.pending already mutable.
-        // for key in to_delete {
-        //     let _ = self.pending.remove(key);
-        // }
+        for status in to_process {
+            match status {
+                Checking::Delete(key) => {
+                    self.pending.remove(&key);
+                },
+
+                Checking::Retry(key) => {
+                    if let Some(reg) = self.pending.remove(&key) {
+                        self.send_register(conn, reg);
+                    }
+                },
+            }
+        }
     }
 }
