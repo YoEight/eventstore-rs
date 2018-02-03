@@ -25,21 +25,33 @@ pub enum OperationError {
 }
 
 pub enum Decision {
-    Success,
-    Retry,
-    Failed(OperationError),
+    Done,
+    Continue,
 }
 
 pub trait Operation {
     fn create(&self, correlation: Uuid) -> Pkg;
-    fn inspect(&self, pkg: Pkg) -> Decision;
+    fn inspect(&mut self, pkg: Pkg) -> Decision;
+}
+
+pub trait Promise<A> {
+    fn accept(&self, result: A);
+    fn reject(&self, error: OperationError);
 }
 
 pub struct WriteEvents {
     inner: messages::WriteEvents,
+    promise: Box<Promise<WriteResult>>,
 }
 
 impl WriteEvents {
+    pub fn new(promise: Box<Promise<WriteResult>>) -> WriteEvents {
+        WriteEvents {
+            inner: messages::WriteEvents::new(),
+            promise: promise,
+        }
+    }
+
     pub fn set_event_stream_id(&mut self, stream_id: String) {
         self.inner.set_event_stream_id(stream_id);
     }
@@ -75,7 +87,7 @@ impl Operation for WriteEvents {
         pkg
     }
 
-    fn inspect(&self, pkg: Pkg) -> Decision {
+    fn inspect(&mut self, pkg: Pkg) -> Decision {
         match pkg.cmd {
             0x83 => {
                 let response: messages::WriteEventsCompleted =
@@ -93,39 +105,54 @@ impl Operation for WriteEvents {
                             position: position,
                         };
 
-                        Decision::Success
+                        self.promise.accept(result);
+
+                        Decision::Done
                     },
 
-                    OperationResult::PrepareTimeout => Decision::Retry,
-                    OperationResult::ForwardTimeout => Decision::Retry,
-                    OperationResult::CommitTimeout  => Decision::Retry,
+                    OperationResult::PrepareTimeout => Decision::Continue,
+                    OperationResult::ForwardTimeout => Decision::Continue,
+                    OperationResult::CommitTimeout  => Decision::Continue,
 
                     OperationResult::WrongExpectedVersion => {
                         let stream_id = self.inner.get_event_stream_id().to_string();
                         let exp_i64   = self.inner.get_expected_version();
                         let exp       = ExpectedVersion::from_i64(exp_i64);
 
-                        Decision::Failed(OperationError::WrongExpectedVersion(stream_id, exp))
+                        self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
+
+                        Decision::Done
                     },
 
                     OperationResult::StreamDeleted => {
                         let stream_id = self.inner.get_event_stream_id().to_string();
 
-                        Decision::Failed(OperationError::StreamDeleted(stream_id))
+                        self.promise.reject(OperationError::StreamDeleted(stream_id));
+
+                        Decision::Done
                     },
 
-                    OperationResult::InvalidTransaction =>
-                        Decision::Failed(OperationError::InvalidTransaction),
+                    OperationResult::InvalidTransaction => {
+                        self.promise.reject(OperationError::InvalidTransaction);
+
+                        Decision::Done
+                    }
 
                     OperationResult::AccessDenied => {
                         let stream_id = self.inner.get_event_stream_id().to_string();
 
-                        Decision::Failed(OperationError::AccessDenied(stream_id))
+                        self.promise.reject(OperationError::AccessDenied(stream_id));
+
+                        Decision::Done
                     },
                 }
             },
 
-            _ => Decision::Failed(OperationError::WrongClientImpl(pkg.cmd)),
+            _ => {
+                self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+
+                Decision::Done
+            },
         }
     }
 }

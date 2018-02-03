@@ -5,13 +5,19 @@ use time::{ Duration, Timespec, get_time };
 use uuid::Uuid;
 
 use internal::connection::Connection;
-use internal::operations::Operation;
+use internal::operations::{ Operation, Decision };
+use internal::package::Pkg;
 use internal::types::{ Settings, Retry };
 
 struct Register {
     started: Timespec,
     tries:   u32,
     op:      Box<Operation>,
+}
+
+enum Outcome {
+    Handled,
+    NotHandled,
 }
 
 enum Checking {
@@ -71,6 +77,24 @@ impl Registry {
         conn.enqueue(pkg);
     }
 
+    pub fn handle(&mut self, pkg: Pkg) -> Outcome {
+        match self.pending.remove(&pkg.correlation) {
+            Some(mut reg) => {
+                match reg.op.inspect(pkg) {
+                    Decision::Continue => {
+                        self.register(reg.op, None);
+
+                        Outcome::Handled
+                    },
+
+                    Decision::Done => Outcome::Handled,
+                }
+            },
+
+            None => Outcome::NotHandled
+        }
+    }
+
     pub fn check_and_retry(&mut self, conn: &Connection) {
         let mut to_process = vec![];
 
@@ -88,7 +112,7 @@ impl Registry {
                     }
 
                     Retry::Only(n) => {
-                        if reg.tries + 1 >= n {
+                        if reg.tries + 1 > n {
                             to_process.push(Checking::Delete(*key));
                         } else {
                             to_process.push(Checking::Retry(*key));
