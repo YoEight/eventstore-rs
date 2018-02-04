@@ -3,6 +3,7 @@ use uuid::Uuid;
 use protobuf::{ RepeatedField, Message };
 use protobuf::core::parse_from_bytes;
 
+use internal::command::Cmd;
 use internal::data::EventData;
 use internal::messages;
 use internal::package::Pkg;
@@ -21,7 +22,7 @@ pub enum OperationError {
     StreamNotFound(String),
     AuthenticationRequired,
     Aborted,
-    WrongClientImpl(u8),
+    WrongClientImpl(Cmd),
 }
 
 pub enum Decision {
@@ -77,7 +78,7 @@ impl WriteEvents {
 
 impl Operation for WriteEvents {
     fn create(&self, correlation: Uuid) -> Pkg {
-        let mut pkg     = Pkg::new(0x82, correlation);
+        let mut pkg     = Pkg::new(Cmd::WriteEvents, correlation);
         let mut payload = Vec::new();
 
         self.inner.write_to_vec(&mut payload).unwrap();
@@ -89,7 +90,7 @@ impl Operation for WriteEvents {
 
     fn inspect(&mut self, pkg: Pkg) -> Decision {
         match pkg.cmd {
-            0x83 => {
+            Cmd::WriteEventsCompleted => {
                 let response: messages::WriteEventsCompleted =
                         parse_from_bytes(&pkg.payload.as_slice()).unwrap();
 

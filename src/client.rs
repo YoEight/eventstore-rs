@@ -7,6 +7,7 @@ use time::{ Duration, Timespec, get_time };
 use timer::Timer;
 use uuid::Uuid;
 
+use internal::command::Cmd;
 use internal::connection::Connection;
 use internal::messaging::Msg;
 use internal::messages;
@@ -222,18 +223,18 @@ impl Client {
 
                         state.when_connected(|conn| {
                             match pkg.cmd {
-                                0x01 => {
+                                Cmd::HeartbeatRequest => {
                                     println!("Heartbeat request received");
 
                                     let mut resp = pkg.copy_headers_only();
 
-                                    resp.cmd = 0x02;
+                                    resp.cmd = Cmd::HeartbeatResponse;
 
                                     conn.enqueue(resp);
                                 },
 
                                 unknown => {
-                                    println!("Unknown command [{}].", unknown);
+                                    println!("Unknown command [{}].", unknown.to_u8());
                                 }
                             }
                         });

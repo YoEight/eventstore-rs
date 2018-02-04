@@ -6,14 +6,16 @@ use bytes::{ Buf, BytesMut, LittleEndian };
 use bytes::buf::BufMut;
 use uuid::{ Uuid, ParseError };
 
+use internal::command::Cmd;
+
 pub struct Pkg {
-    pub cmd:         u8,
+    pub cmd:         Cmd,
     pub correlation: Uuid,
     pub payload:     Vec<u8>,
 }
 
 impl Pkg {
-    pub fn new(cmd: u8, correlation: Uuid) -> Pkg {
+    pub fn new(cmd: Cmd, correlation: Uuid) -> Pkg {
         Pkg {
             cmd:         cmd,
             correlation: correlation,
@@ -30,7 +32,7 @@ impl Pkg {
     }
 
     pub fn heartbeat_request() -> Pkg {
-        Pkg::new(0x01, Uuid::new_v4())
+        Pkg::new(Cmd::HeartbeatRequest, Uuid::new_v4())
     }
 
     // Copies the Pkg except its payload.
@@ -47,7 +49,7 @@ impl Pkg {
         let mut bytes = BytesMut::new();
 
         bytes.put_u32::<LittleEndian>(self.size());
-        bytes.put_u8(self.cmd);
+        bytes.put_u8(self.cmd.to_u8());
         bytes.put_u8(0); // Package credential flag.
         bytes.put_slice(self.correlation.as_bytes());
         bytes.put_slice(self.payload.as_slice());
@@ -70,7 +72,7 @@ impl Pkg {
             Error::new(ErrorKind::Other, format!("ParseError {}", err))
         }
 
-        let     cmd         = pkg_buf[0];
+        let     cmd         = Cmd::from_u8(pkg_buf[0]);
         let     correlation = Uuid::from_bytes(&pkg_buf[2..18]).map_err(|e| to_error(e))?;
         let mut pkg         = Pkg::new(cmd, correlation);
 
