@@ -196,6 +196,8 @@ impl Driver {
         if let Some(conn) = self.candidate.take() {
             if conn.id == id {
                 self.state = ConnectionState::Connected(conn);
+            } else {
+                self.candidate = Some(conn);
             }
         }
     }
