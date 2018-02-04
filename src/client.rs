@@ -12,6 +12,7 @@ use internal::connection::Connection;
 use internal::messaging::Msg;
 use internal::messages;
 use internal::package::Pkg;
+use internal::registry::{ Registry, Outcome };
 use internal::types::Settings;
 
 use protobuf;
@@ -195,9 +196,9 @@ impl Client {
     }
 
     fn worker_thread(state: &mut Internal, addr: SocketAddrV4) {
-        let mut keep_going = true;
+        let mut registry = Registry::new(state.settings);
 
-        while keep_going {
+        loop {
             let msg_opt = state.recv_msg();
 
             match msg_opt {
@@ -210,8 +211,8 @@ impl Client {
                     },
 
                     Msg::Shutdown => {
-                        keep_going = false;
                         println!("Shutting down...");
+                        break;
                     },
 
                     Msg::Established(id) => {
@@ -233,22 +234,20 @@ impl Client {
                                     conn.enqueue(resp);
                                 },
 
-                                unknown => {
-                                    println!("Unknown command [{}].", unknown.to_u8());
-                                }
+                                _ => registry.handle(pkg),
                             }
                         });
                     },
 
                     Msg::Tick => {
-                        if state.connected {
-                            match state.manage_heartbeat() {
-                                Heartbeat::Valid   => { keep_going = true; },
-                                Heartbeat::Failure => {
-                                    keep_going = false;
-
-                                    println!("Heartbeat TIMEOUT");
-                                },
+                        if state.connected  {
+                            if let Heartbeat::Valid = state.manage_heartbeat() {
+                                if let Some(ref conn) = state.connection {
+                                    registry.check_and_retry(conn);
+                                }
+                            } else {
+                                println!("Heartbeat TIMEOUT");
+                                break;
                             }
                         }
                     },
@@ -256,7 +255,7 @@ impl Client {
 
                 Option::None => {
                     println!("Main bus closed");
-                    keep_going = false;
+                    break;
                 }
             }
         }

@@ -15,7 +15,7 @@ struct Register {
     op:      Box<Operation>,
 }
 
-enum Outcome {
+pub enum Outcome {
     Handled,
     NotHandled,
 }
@@ -35,7 +35,7 @@ impl Register {
     }
 }
 
-struct Registry {
+pub struct Registry {
     settings: Settings,
     awaiting: Vec<Box<Operation>>,
     pending: HashMap<Uuid, Register>,
@@ -73,21 +73,14 @@ impl Registry {
         conn.enqueue(pkg);
     }
 
-    pub fn handle(&mut self, pkg: Pkg) -> Outcome {
-        match self.pending.remove(&pkg.correlation) {
-            Some(mut reg) => {
-                match reg.op.inspect(pkg) {
-                    Decision::Continue => {
-                        self.register(reg.op, None);
-
-                        Outcome::Handled
-                    },
-
-                    Decision::Done => Outcome::Handled,
-                }
-            },
-
-            None => Outcome::NotHandled
+    pub fn handle(&mut self, pkg: Pkg) {
+        if let Some(mut reg) = self.pending.remove(&pkg.correlation) {
+            if let Decision::Continue = reg.op.inspect(pkg) {
+                self.register(reg.op, None)
+            }
+        } else {
+            println!("Package [{}] not handled: command [{}].",
+                     pkg.correlation, pkg.cmd.to_u8())
         }
     }
 
