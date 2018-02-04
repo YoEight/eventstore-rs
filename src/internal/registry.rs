@@ -33,10 +33,6 @@ impl Register {
             op: op,
         }
     }
-
-    fn elapsed(self) -> Duration {
-        get_time() - self.started
-    }
 }
 
 struct Registry {
@@ -96,7 +92,7 @@ impl Registry {
     }
 
     pub fn check_and_retry(&mut self, conn: &Connection) {
-        let mut to_process = vec![];
+        let mut to_process = Vec::new();
 
         while let Some(op) = self.awaiting.pop() {
             self.register(op, Some(conn));
