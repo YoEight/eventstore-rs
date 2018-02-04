@@ -14,12 +14,13 @@ pub mod client;
 mod tests {
     use std::time::Duration;
     use std::thread;
-    use client::{ Client, Settings };
+    use client::Client;
+    use internal::types::Settings;
 
     #[test]
     fn it_works() {
         let settings = Settings::default();
-        let client   = Client::new(settings, "127.0.0.1:32770".parse().unwrap());
+        let client   = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
 
         client.start();
 

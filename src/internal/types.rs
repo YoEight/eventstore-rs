@@ -6,12 +6,17 @@ pub enum Retry {
     Only(u32),
 }
 
-#[derive(Copy, Clone)]
+pub struct Credentials {
+    pub login: String,
+    pub password: String,
+}
+
 pub struct Settings {
     pub heartbeat_delay: Duration,
     pub heartbeat_timeout: Duration,
     pub operation_timeout: Duration,
     pub operation_retry: Retry,
+    pub default_user: Option<Credentials>,
 }
 
 impl Settings {
@@ -21,6 +26,7 @@ impl Settings {
             heartbeat_timeout: Duration::seconds(1),
             operation_timeout: Duration::seconds(3),
             operation_retry: Retry::Only(3),
+            default_user: None,
         }
     }
 }

@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use internal::command::Cmd;
 use internal::connection::Connection;
+use internal::endpoint::Endpoint;
 use internal::messaging::Msg;
 use internal::messages;
 use internal::package::Pkg;
@@ -92,27 +93,166 @@ impl HealthTracker {
     }
 }
 
-fn worker_thread(settings: &Settings, addr: SocketAddrV4, sender: Sender<Msg>, receiver: Receiver<Msg>) {
-    let mut registry  = Registry::new(settings);
-    let mut connected = false;
-    let mut conn_opt  = None;
-    let mut tracker   = HealthTracker::new(settings);
-    let     timer     = Timer::new();
+enum ConnectionState {
+    Init,
+    Connecting,
+    Connected(Connection),
+    Closed,
+}
+
+enum ConnectionPhase {
+    Reconnecting,
+    EndpointDiscovery,
+    Establishing,
+    Authentication { correlation: Uuid, conn_id: Uuid, started: Timespec },
+    Identification { correlation: Uuid, conn_id: Uuid, started: Timespec },
+}
+
+struct Attempt {
+    started: Timespec,
+    tries: u32,
+}
+
+impl Attempt {
+    fn new() -> Attempt {
+        Attempt {
+            started: get_time(),
+            tries: 0,
+        }
+    }
+}
+
+struct StaticDiscovery {
+    addr: SocketAddrV4,
+}
+
+impl Discovery for StaticDiscovery {
+    fn discover(&mut self, _: Option<&Endpoint>) -> Endpoint {
+        Endpoint {
+            addr: self.addr,
+        }
+    }
+}
+
+impl StaticDiscovery {
+    fn new(addr: SocketAddrV4) -> StaticDiscovery {
+        StaticDiscovery {
+            addr: addr,
+        }
+    }
+}
+
+trait Discovery {
+    fn discover(&mut self, last: Option<&Endpoint>) -> Endpoint;
+}
+
+enum Report {
+    Continue,
+    Quit,
+}
+
+struct Driver {
+    registry: Registry,
+    candidate: Option<Connection>,
+    tracker: HealthTracker,
+    attempt: Option<Attempt>,
+    state: ConnectionState,
+    phase: ConnectionPhase,
+    last_endpoint: Option<Endpoint>,
+    discovery: Box<Discovery>,
+}
+
+impl Driver {
+    fn new(setts: &Settings, disc: Box<Discovery>) -> Driver {
+        Driver {
+            registry: Registry::new(setts),
+            candidate: None,
+            tracker: HealthTracker::new(setts),
+            attempt: None,
+            state: ConnectionState::Init,
+            phase: ConnectionPhase::Reconnecting,
+            last_endpoint: None,
+            discovery: disc,
+        }
+    }
+
+    fn discover(&mut self, sender: Sender<Msg>) {
+        let endpoint = self.discovery.discover(None);
+
+        self.state = ConnectionState::Connecting;
+        self.phase = ConnectionPhase::EndpointDiscovery;
+
+        // TODO - Will be performed in a different thread.
+        sender.send(Msg::Establish(endpoint));
+    }
+
+    fn on_establish(&mut self, sender: Sender<Msg>, endpoint: Endpoint) {
+        self.phase         = ConnectionPhase::Establishing;
+        self.candidate     = Some(Connection::new(sender, endpoint.addr));
+        self.last_endpoint = Some(endpoint);
+    }
+
+    fn on_established(&mut self, id: Uuid) {
+        if let Some(conn) = self.candidate.take() {
+            if conn.id == id {
+                self.state = ConnectionState::Connected(conn);
+            }
+        }
+    }
+
+    fn on_package_arrived(&mut self, pkg: Pkg) {
+         self.tracker.incr_pkg_num();
+
+         if let ConnectionState::Connected(ref conn) = self.state {
+             match pkg.cmd {
+                 Cmd::HeartbeatRequest => {
+                     println!("Heartbeat request received");
+
+                     let mut resp = pkg.copy_headers_only();
+
+                     resp.cmd = Cmd::HeartbeatResponse;
+
+                     conn.enqueue(resp);
+                 },
+
+                 _ => self.registry.handle(pkg),
+             }
+         }
+    }
+
+    fn on_tick(&mut self) -> Report {
+        if let ConnectionState::Connected(ref conn) = self.state {
+            if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
+                self.registry.check_and_retry(conn);
+
+                Report::Continue
+            } else {
+                println!("Heartbeat TIMEOUT");
+
+                Report::Quit
+            }
+        } else {
+            Report::Continue
+        }
+    }
+}
+
+fn worker_thread(settings: &Settings, disc: Box<Discovery>, sender: Sender<Msg>, receiver: Receiver<Msg>) {
+    let mut driver = Driver::new(settings, disc);
+    let     timer  = Timer::new();
 
     loop {
         if let Some(msg) = receiver.recv() {
             match msg {
                 Msg::Start => {
-                    let tx1  = sender.clone();
-                    let tx2  = sender.clone();
-                    let conn = Connection::new(tx1, addr);
+                    let tx1 = sender.clone();
+                    let tx2 = sender.clone();
 
                     timer.schedule_repeating(Duration::milliseconds(200), move || {
-                        tx2.send(Msg::Tick);
+                        tx1.send(Msg::Tick);
                     });
 
-                    connected = false;
-                    conn_opt  = Some(conn);
+                    driver.discover(tx2);
                 },
 
                 Msg::Shutdown => {
@@ -120,45 +260,20 @@ fn worker_thread(settings: &Settings, addr: SocketAddrV4, sender: Sender<Msg>, r
                     break;
                 },
 
+                Msg::Establish(endpoint) =>
+                    driver.on_establish(sender.clone(), endpoint),
+
                 Msg::Established(id) => {
-                    if let Some(ref conn) = conn_opt {
-                        if conn.id == id {
-                            connected = true;
-                        }
-                    }
-                },
+                    driver.on_established(id);
+                }
 
                 Msg::Arrived(pkg) => {
-                    tracker.incr_pkg_num();
-
-                    if connected {
-                        match pkg.cmd {
-                            Cmd::HeartbeatRequest => {
-                                println!("Heartbeat request received");
-
-                                let mut resp = pkg.copy_headers_only();
-
-                                resp.cmd = Cmd::HeartbeatResponse;
-                                if let Some(ref conn) = conn_opt {
-                                    conn.enqueue(resp);
-                                }
-                            },
-
-                            _ => registry.handle(pkg),
-                        }
-                    }
+                    driver.on_package_arrived(pkg);
                 },
 
                 Msg::Tick => {
-                    if connected {
-                        if let Some(ref conn) = conn_opt {
-                            if let Heartbeat::Valid = tracker.manage_heartbeat(conn) {
-                                registry.check_and_retry(conn);
-                            } else {
-                                println!("Heartbeat TIMEOUT");
-                                break;
-                            }
-                        }
+                    if let Report::Quit = driver.on_tick() {
+                        break
                     }
                 },
             }
@@ -177,9 +292,10 @@ pub struct Client {
 impl Client {
     pub fn new(settings: Settings, addr: SocketAddrV4) -> Client {
         let (sender, recv) = async();
+        let disc           = Box::new(StaticDiscovery::new(addr));
 
         let tx     = sender.clone();
-        let handle = spawn(move || worker_thread(&settings, addr, sender, recv));
+        let handle = spawn(move || worker_thread(&settings, disc, sender, recv));
 
         Client {
             worker: handle,

@@ -1,6 +1,7 @@
 pub mod command;
 pub mod connection;
 pub mod data;
+pub mod endpoint;
 pub mod messaging;
 pub mod operations;
 pub mod package;
