@@ -36,17 +36,19 @@ impl Register {
 }
 
 pub struct Registry {
-    settings: Settings,
     awaiting: Vec<Box<Operation>>,
     pending: HashMap<Uuid, Register>,
+    operation_timeout: Duration,
+    operation_retry: Retry,
 }
 
 impl Registry {
-    pub fn new(settings: Settings) -> Registry {
+    pub fn new(setts: &Settings) -> Registry {
         Registry {
-            settings: settings,
             awaiting: Vec::new(),
             pending: HashMap::new(),
+            operation_timeout: setts.operation_timeout,
+            operation_retry: setts.operation_retry,
         }
     }
 
@@ -94,8 +96,8 @@ impl Registry {
         let now = get_time();
 
         for (key, reg) in self.pending.iter() {
-            if now - reg.started >= self.settings.operation_timeout {
-                match self.settings.operation_retry {
+            if now - reg.started >= self.operation_timeout {
+                match self.operation_retry {
                     Retry::Undefinately => {
                         to_process.push(Checking::Retry(*key));
                     }
