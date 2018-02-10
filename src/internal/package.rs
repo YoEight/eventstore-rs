@@ -4,15 +4,19 @@ use std::result::Result::{ Ok };
 
 use bytes::{ Buf, BytesMut, LittleEndian };
 use bytes::buf::BufMut;
+use protobuf::Message;
 use uuid::{ Uuid, ParseError };
 
 use internal::command::Cmd;
+use internal::messages;
 
 pub struct Pkg {
     pub cmd:         Cmd,
     pub correlation: Uuid,
     pub payload:     Vec<u8>,
 }
+
+static CLIENT_VERSION: i32 = 1;
 
 impl Pkg {
     pub fn new(cmd: Cmd, correlation: Uuid) -> Pkg {
@@ -27,12 +31,28 @@ impl Pkg {
         self.payload = payload;
     }
 
-    pub fn size(&self) -> u32 {
-        18 + (self.payload.len() as u32)
+    pub fn size(&self) -> usize {
+        18 + self.payload.len()
     }
 
     pub fn heartbeat_request() -> Pkg {
         Pkg::new(Cmd::HeartbeatRequest, Uuid::new_v4())
+    }
+
+    pub fn identify_client(name_opt: &Option<String>) -> Pkg {
+        let     corr_id = Uuid::new_v4();
+        let mut pkg     = Pkg::new(Cmd::IdentifyClient, corr_id);
+        let mut msg     = messages::IdentifyClient::new();
+        let     name    = match *name_opt {
+            Some(ref name) => name.clone(),
+            None           => format!("ES-{}", Uuid::new_v4()),
+        };
+
+        msg.set_connection_name(name);
+        msg.set_version(CLIENT_VERSION);
+        msg.write_to_vec(&mut pkg.payload);
+
+        pkg
     }
 
     // Copies the Pkg except its payload.
@@ -45,10 +65,10 @@ impl Pkg {
     }
 
     pub fn to_bytes(&self) -> BytesMut {
-        // FIXME - Use with_capacity instead.
-        let mut bytes = BytesMut::new();
+        let     capacity = 4 + self.size(); // frame size + package size.
+        let mut bytes    = BytesMut::with_capacity(capacity);
 
-        bytes.put_u32::<LittleEndian>(self.size());
+        bytes.put_u32::<LittleEndian>(self.size() as u32);
         bytes.put_u8(self.cmd.to_u8());
         bytes.put_u8(0); // Package credential flag.
         bytes.put_slice(self.correlation.as_bytes());

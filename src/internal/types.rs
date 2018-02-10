@@ -17,6 +17,7 @@ pub struct Settings {
     pub operation_timeout: Duration,
     pub operation_retry: Retry,
     pub default_user: Option<Credentials>,
+    pub connection_name: Option<String>,
 }
 
 impl Settings {
@@ -27,6 +28,7 @@ impl Settings {
             operation_timeout: Duration::seconds(3),
             operation_retry: Retry::Only(3),
             default_user: None,
+            connection_name: None,
         }
     }
 }

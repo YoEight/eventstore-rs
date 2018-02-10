@@ -2,16 +2,28 @@
 pub enum Cmd {
     HeartbeatRequest,
     HeartbeatResponse,
+    IdentifyClient,
+    ClientIdentified,
     WriteEvents,
     WriteEventsCompleted,
     Unknown(u8),
 }
 
+impl PartialEq for Cmd {
+    fn eq(&self, other: &Cmd) -> bool {
+        self.to_u8() == other.to_u8()
+    }
+}
+
+impl Eq for Cmd {}
+
 impl Cmd {
-    pub fn to_u8(self) -> u8 {
-        match self {
+    pub fn to_u8(&self) -> u8 {
+        match *self {
             Cmd::HeartbeatRequest     => 0x01,
             Cmd::HeartbeatResponse    => 0x02,
+            Cmd::IdentifyClient       => 0xF5,
+            Cmd::ClientIdentified     => 0xF6,
             Cmd::WriteEvents          => 0x82,
             Cmd::WriteEventsCompleted => 0x83,
             Cmd::Unknown(cmd)         => cmd,
@@ -22,6 +34,8 @@ impl Cmd {
         match cmd {
             0x01 => Cmd::HeartbeatRequest,
             0x02 => Cmd::HeartbeatResponse,
+            0xF5 => Cmd::IdentifyClient,
+            0xF6 => Cmd::ClientIdentified,
             0x82 => Cmd::WriteEvents,
             0x83 => Cmd::WriteEventsCompleted,
             _    => Cmd::Unknown(cmd),

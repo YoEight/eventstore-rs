@@ -95,17 +95,31 @@ impl HealthTracker {
 
 enum ConnectionState {
     Init,
-    Connecting,
+    Connecting(Phase),
     Connected(Connection),
     Closed,
 }
 
-enum ConnectionPhase {
+impl ConnectionState {
+    fn can_be_identified(&self, corr_id: &Uuid) -> bool {
+        if let ConnectionState::Connecting(ref phase) = *self {
+            if let Phase::Identification{ ref correlation, .. } = *phase {
+                *correlation == *corr_id
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
+
+enum Phase {
     Reconnecting,
     EndpointDiscovery,
     Establishing,
     Authentication { correlation: Uuid, conn_id: Uuid, started: Timespec },
-    Identification { correlation: Uuid, conn_id: Uuid, started: Timespec },
+    Identification { correlation: Uuid, started: Timespec },
 }
 
 struct Attempt {
@@ -157,47 +171,54 @@ struct Driver {
     tracker: HealthTracker,
     attempt: Option<Attempt>,
     state: ConnectionState,
-    phase: ConnectionPhase,
     last_endpoint: Option<Endpoint>,
     discovery: Box<Discovery>,
+    connection_name: Option<String>,
 }
 
 impl Driver {
-    fn new(setts: &Settings, disc: Box<Discovery>) -> Driver {
+    fn new(setts: Settings, disc: Box<Discovery>) -> Driver {
         Driver {
-            registry: Registry::new(setts),
+            registry: Registry::new(&setts),
             candidate: None,
-            tracker: HealthTracker::new(setts),
+            tracker: HealthTracker::new(&setts),
             attempt: None,
             state: ConnectionState::Init,
-            phase: ConnectionPhase::Reconnecting,
             last_endpoint: None,
             discovery: disc,
+            connection_name: setts.connection_name,
         }
     }
 
     fn discover(&mut self, sender: Sender<Msg>) {
-        let endpoint = self.discovery.discover(None);
+        let endpoint = self.discovery.discover(self.last_endpoint.as_ref());
 
-        self.state = ConnectionState::Connecting;
-        self.phase = ConnectionPhase::EndpointDiscovery;
+        self.state = ConnectionState::Connecting(Phase::EndpointDiscovery);
 
         // TODO - Will be performed in a different thread.
         sender.send(Msg::Establish(endpoint));
     }
 
     fn on_establish(&mut self, sender: Sender<Msg>, endpoint: Endpoint) {
-        self.phase         = ConnectionPhase::Establishing;
+        self.state         = ConnectionState::Connecting(Phase::Establishing);
         self.candidate     = Some(Connection::new(sender, endpoint.addr));
         self.last_endpoint = Some(endpoint);
     }
 
     fn on_established(&mut self, id: Uuid) {
-        if let Some(conn) = self.candidate.take() {
+        if let Some(conn) = self.candidate.as_ref() {
             if conn.id == id {
-                self.state = ConnectionState::Connected(conn);
-            } else {
-                self.candidate = Some(conn);
+                let pkg     = Pkg::identify_client(&self.connection_name);
+                let corr_id = pkg.correlation;
+
+                conn.enqueue(pkg);
+
+                let ident = Phase::Identification {
+                    correlation: corr_id,
+                    started: get_time(),
+                };
+
+                self.state = ConnectionState::Connecting(ident);
             }
         }
     }
@@ -205,19 +226,27 @@ impl Driver {
     fn on_package_arrived(&mut self, pkg: Pkg) {
          self.tracker.incr_pkg_num();
 
-         if let ConnectionState::Connected(ref conn) = self.state {
-             match pkg.cmd {
-                 Cmd::HeartbeatRequest => {
-                     println!("Heartbeat request received");
+         if pkg.cmd == Cmd::ClientIdentified {
+             if self.state.can_be_identified(&pkg.correlation) {
+                 if let Some(conn) = self.candidate.take() {
+                     self.state = ConnectionState::Connected(conn);
+                 }
+             }
+         } else {
+             if let ConnectionState::Connected(ref conn) = self.state {
+                 match pkg.cmd {
+                     Cmd::HeartbeatRequest => {
+                         println!("Heartbeat request received");
 
-                     let mut resp = pkg.copy_headers_only();
+                         let mut resp = pkg.copy_headers_only();
 
-                     resp.cmd = Cmd::HeartbeatResponse;
+                         resp.cmd = Cmd::HeartbeatResponse;
 
-                     conn.enqueue(resp);
-                 },
+                         conn.enqueue(resp);
+                     },
 
-                 _ => self.registry.handle(pkg),
+                     _ => self.registry.handle(pkg),
+                 }
              }
          }
     }
@@ -239,7 +268,7 @@ impl Driver {
     }
 }
 
-fn worker_thread(settings: &Settings, disc: Box<Discovery>, sender: Sender<Msg>, receiver: Receiver<Msg>) {
+fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, receiver: Receiver<Msg>) {
     let mut driver = Driver::new(settings, disc);
     let     timer  = Timer::new();
 
@@ -297,7 +326,7 @@ impl Client {
         let disc           = Box::new(StaticDiscovery::new(addr));
 
         let tx     = sender.clone();
-        let handle = spawn(move || worker_thread(&settings, disc, sender, recv));
+        let handle = spawn(move || worker_thread(settings, disc, sender, recv));
 
         Client {
             worker: handle,
