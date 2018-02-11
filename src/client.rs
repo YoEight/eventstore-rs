@@ -14,7 +14,7 @@ use internal::messaging::Msg;
 use internal::messages;
 use internal::package::Pkg;
 use internal::registry::{ Registry, Outcome };
-use internal::types::Settings;
+use internal::types::{ Credentials, Settings };
 
 use protobuf;
 
@@ -118,7 +118,7 @@ enum Phase {
     Reconnecting,
     EndpointDiscovery,
     Establishing,
-    Authentication { correlation: Uuid, conn_id: Uuid, started: Timespec },
+    Authentication { correlation: Uuid, started: Timespec },
     Identification { correlation: Uuid, started: Timespec },
 }
 
@@ -174,6 +174,8 @@ struct Driver {
     last_endpoint: Option<Endpoint>,
     discovery: Box<Discovery>,
     connection_name: Option<String>,
+    default_user: Option<Credentials>,
+    operation_timeout: Duration,
 }
 
 impl Driver {
@@ -187,6 +189,8 @@ impl Driver {
             last_endpoint: None,
             discovery: disc,
             connection_name: setts.connection_name,
+            default_user: setts.default_user,
+            operation_timeout: setts.operation_timeout,
         }
     }
 
@@ -205,20 +209,51 @@ impl Driver {
         self.last_endpoint = Some(endpoint);
     }
 
-    fn on_established(&mut self, id: Uuid) {
+    fn authenticate(&mut self, creds: Credentials) {
+        let pkg     = Pkg::authenticate(creds);
+        let corr_id = pkg.correlation;
+
         if let Some(conn) = self.candidate.as_ref() {
-            if conn.id == id {
-                let pkg     = Pkg::identify_client(&self.connection_name);
-                let corr_id = pkg.correlation;
+            conn.enqueue(pkg);
+        }
 
-                conn.enqueue(pkg);
+        let auth = Phase::Authentication {
+            correlation: corr_id,
+            started: get_time(),
+        };
 
-                let ident = Phase::Identification {
-                    correlation: corr_id,
-                    started: get_time(),
-                };
+        self.state = ConnectionState::Connecting(auth);
+    }
 
-                self.state = ConnectionState::Connecting(ident);
+    fn identify_client(&mut self) {
+       let pkg     = Pkg::identify_client(&self.connection_name);
+       let corr_id = pkg.correlation;
+
+       if let Some(conn) = self.candidate.as_ref() {
+           conn.enqueue(pkg);
+       }
+
+       let ident = Phase::Identification {
+           correlation: corr_id,
+           started: get_time(),
+       };
+
+       self.state = ConnectionState::Connecting(ident);
+    }
+
+    fn can_be_established(&self, id: Uuid) -> bool {
+        if let Some(conn) = self.candidate.as_ref() {
+            conn.id == id
+        } else {
+            false
+        }
+    }
+
+    fn on_established(&mut self, id: Uuid) {
+        if self.can_be_established(id) {
+            match self.default_user.clone() {
+                Some(creds) => self.authenticate(creds),
+                None        => self.identify_client(),
             }
         }
     }
@@ -232,6 +267,12 @@ impl Driver {
                      self.state = ConnectionState::Connected(conn);
                  }
              }
+         } else if pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated {
+             if pkg.cmd == Cmd::NotAuthenticated {
+                 println!("warn: Not authenticated.");
+             }
+
+             self.identify_client();
          } else {
              if let ConnectionState::Connected(ref conn) = self.state {
                  match pkg.cmd {
@@ -251,19 +292,57 @@ impl Driver {
          }
     }
 
+    fn has_authenticate_timeout(&self, now: &Timespec) -> bool {
+        match self.state {
+            ConnectionState::Connecting(ref phase) => match *phase {
+                Phase::Authentication { ref started, .. } =>
+                    *now - *started >= self.operation_timeout,
+                _ => false,
+            },
+
+            _ => false,
+        }
+    }
+
+    fn has_identification_timeout(&self, now: &Timespec) -> bool {
+        match self.state {
+            ConnectionState::Connecting(ref phase) => match *phase {
+                Phase::Identification { ref started, .. } =>
+                    *now - *started >= self.operation_timeout,
+                _ => false,
+            },
+
+            _ => false,
+        }
+    }
+
     fn on_tick(&mut self) -> Report {
-        if let ConnectionState::Connected(ref conn) = self.state {
-            if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
-                self.registry.check_and_retry(conn);
+        let now = get_time();
 
-                Report::Continue
-            } else {
-                println!("Heartbeat TIMEOUT");
+        if self.has_authenticate_timeout(&now) {
+            println!("warn: authentication has timeout.");
 
-                Report::Quit
-            }
-        } else {
+            self.identify_client();
+
             Report::Continue
+        } else if self.has_identification_timeout(&now) {
+            println!("fatal: identification has timeout.");
+
+            Report::Quit
+        } else {
+            if let ConnectionState::Connected(ref conn) = self.state {
+                if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
+                    self.registry.check_and_retry(conn);
+
+                    Report::Continue
+                } else {
+                    println!("Heartbeat TIMEOUT");
+
+                    Report::Quit
+                }
+            } else {
+                Report::Continue
+            }
         }
     }
 }

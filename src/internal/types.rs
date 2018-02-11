@@ -6,6 +6,7 @@ pub enum Retry {
     Only(u32),
 }
 
+#[derive(Clone)]
 pub struct Credentials {
     pub login: String,
     pub password: String,
