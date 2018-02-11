@@ -93,33 +93,35 @@ impl HealthTracker {
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum ConnectionState {
     Init,
-    Connecting(Phase),
-    Connected(Connection),
+    Connecting,
+    Connected,
     Closed,
 }
 
-impl ConnectionState {
-    fn can_be_identified(&self, corr_id: &Uuid) -> bool {
-        if let ConnectionState::Connecting(ref phase) = *self {
-            if let Phase::Identification{ ref correlation, .. } = *phase {
-                *correlation == *corr_id
-            } else {
-                false
-            }
-        } else {
-            false
+struct InitReq {
+    correlation: Uuid,
+    started: Timespec,
+}
+
+impl InitReq {
+    fn new(id: Uuid) -> InitReq {
+        InitReq {
+            correlation: id,
+            started: get_time(),
         }
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum Phase {
     Reconnecting,
     EndpointDiscovery,
     Establishing,
-    Authentication { correlation: Uuid, started: Timespec },
-    Identification { correlation: Uuid, started: Timespec },
+    Authentication,
+    Identification,
 }
 
 struct Attempt {
@@ -169,13 +171,15 @@ struct Driver {
     registry: Registry,
     candidate: Option<Connection>,
     tracker: HealthTracker,
-    attempt: Option<Attempt>,
+    attempt_opt: Option<Attempt>,
     state: ConnectionState,
+    phase: Phase,
     last_endpoint: Option<Endpoint>,
     discovery: Box<Discovery>,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
+    init_req_opt: Option<InitReq>,
 }
 
 impl Driver {
@@ -184,76 +188,85 @@ impl Driver {
             registry: Registry::new(&setts),
             candidate: None,
             tracker: HealthTracker::new(&setts),
-            attempt: None,
+            attempt_opt: None,
             state: ConnectionState::Init,
+            phase: Phase::Reconnecting,
             last_endpoint: None,
             discovery: disc,
             connection_name: setts.connection_name,
             default_user: setts.default_user,
             operation_timeout: setts.operation_timeout,
+            init_req_opt: None,
         }
+    }
+
+    fn start(&mut self, sender: Sender<Msg>) {
+        self.attempt_opt = Some(Attempt::new());
+        self.state       = ConnectionState::Connecting;
+        self.phase       = Phase::Reconnecting;
+
+        self.discover(sender);
     }
 
     fn discover(&mut self, sender: Sender<Msg>) {
-        let endpoint = self.discovery.discover(self.last_endpoint.as_ref());
+        if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
+            let endpoint = self.discovery.discover(self.last_endpoint.as_ref());
 
-        self.state = ConnectionState::Connecting(Phase::EndpointDiscovery);
+            self.phase = Phase::EndpointDiscovery;
 
-        // TODO - Will be performed in a different thread.
-        sender.send(Msg::Establish(endpoint));
+            // TODO - Will be performed in a different thread.
+            sender.send(Msg::Establish(endpoint));
+        }
     }
 
     fn on_establish(&mut self, sender: Sender<Msg>, endpoint: Endpoint) {
-        self.state         = ConnectionState::Connecting(Phase::Establishing);
-        self.candidate     = Some(Connection::new(sender, endpoint.addr));
-        self.last_endpoint = Some(endpoint);
+        if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
+            self.phase         = Phase::Establishing;
+            self.candidate     = Some(Connection::new(sender, endpoint.addr));
+            self.last_endpoint = Some(endpoint);
+        }
     }
 
     fn authenticate(&mut self, creds: Credentials) {
-        let pkg     = Pkg::authenticate(creds);
-        let corr_id = pkg.correlation;
+        if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
+            let pkg = Pkg::authenticate(creds);
 
-        if let Some(conn) = self.candidate.as_ref() {
-            conn.enqueue(pkg);
+            self.init_req_opt = Some(InitReq::new(pkg.correlation));
+            self.phase        = Phase::Authentication;
+
+            if let Some(conn) = self.candidate.as_ref() {
+                conn.enqueue(pkg);
+            }
         }
-
-        let auth = Phase::Authentication {
-            correlation: corr_id,
-            started: get_time(),
-        };
-
-        self.state = ConnectionState::Connecting(auth);
     }
 
     fn identify_client(&mut self) {
-       let pkg     = Pkg::identify_client(&self.connection_name);
-       let corr_id = pkg.correlation;
+        if self.state == ConnectionState::Connecting && (self.phase == Phase::Authentication || self.phase == Phase::Establishing) {
+            let pkg = Pkg::identify_client(&self.connection_name);
 
-       if let Some(conn) = self.candidate.as_ref() {
-           conn.enqueue(pkg);
-       }
+            self.init_req_opt = Some(InitReq::new(pkg.correlation));
+            self.phase        = Phase::Identification;
 
-       let ident = Phase::Identification {
-           correlation: corr_id,
-           started: get_time(),
-       };
-
-       self.state = ConnectionState::Connecting(ident);
-    }
-
-    fn can_be_established(&self, id: Uuid) -> bool {
-        if let Some(conn) = self.candidate.as_ref() {
-            conn.id == id
-        } else {
-            false
+            if let Some(conn) = self.candidate.as_ref() {
+                conn.enqueue(pkg);
+            }
         }
     }
 
     fn on_established(&mut self, id: Uuid) {
-        if self.can_be_established(id) {
-            match self.default_user.clone() {
-                Some(creds) => self.authenticate(creds),
-                None        => self.identify_client(),
+        if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
+            let same_connection = {
+                match self.candidate {
+                    Some(ref conn) => conn.id == id,
+                    None           => false,
+                }
+            };
+
+            if same_connection {
+                match self.default_user.clone() {
+                    Some(creds) => self.authenticate(creds),
+                    None        => self.identify_client(),
+                }
             }
         }
     }
@@ -261,20 +274,18 @@ impl Driver {
     fn on_package_arrived(&mut self, pkg: Pkg) {
          self.tracker.incr_pkg_num();
 
-         if pkg.cmd == Cmd::ClientIdentified {
-             if self.state.can_be_identified(&pkg.correlation) {
-                 if let Some(conn) = self.candidate.take() {
-                     self.state = ConnectionState::Connected(conn);
-                 }
-             }
-         } else if pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated {
+         if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
+             self.init_req_opt = None;
+             self.attempt_opt  = None;
+             self.state        = ConnectionState::Connected;
+         } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
              if pkg.cmd == Cmd::NotAuthenticated {
                  println!("warn: Not authenticated.");
              }
 
              self.identify_client();
          } else {
-             if let ConnectionState::Connected(ref conn) = self.state {
+             if self.state == ConnectionState::Connected {
                  match pkg.cmd {
                      Cmd::HeartbeatRequest => {
                          println!("Heartbeat request received");
@@ -283,7 +294,9 @@ impl Driver {
 
                          resp.cmd = Cmd::HeartbeatResponse;
 
-                         conn.enqueue(resp);
+                         if let Some(ref conn) = self.candidate {
+                             conn.enqueue(resp);
+                         }
                      },
 
                      _ => self.registry.handle(pkg),
@@ -292,45 +305,45 @@ impl Driver {
          }
     }
 
-    fn has_authenticate_timeout(&self, now: &Timespec) -> bool {
-        match self.state {
-            ConnectionState::Connecting(ref phase) => match *phase {
-                Phase::Authentication { ref started, .. } =>
-                    *now - *started >= self.operation_timeout,
-                _ => false,
-            },
-
-            _ => false,
-        }
-    }
-
-    fn has_identification_timeout(&self, now: &Timespec) -> bool {
-        match self.state {
-            ConnectionState::Connecting(ref phase) => match *phase {
-                Phase::Identification { ref started, .. } =>
-                    *now - *started >= self.operation_timeout,
-                _ => false,
-            },
-
-            _ => false,
+    fn has_init_req_timeout(&self, now: &Timespec) -> bool {
+        if let Some(ref req) = self.init_req_opt {
+            *now - req.started >= self.operation_timeout
+        } else {
+            false
         }
     }
 
     fn on_tick(&mut self) -> Report {
         let now = get_time();
 
-        if self.has_authenticate_timeout(&now) {
-            println!("warn: authentication has timeout.");
-
-            self.identify_client();
+        if self.state == ConnectionState::Init || self.state == ConnectionState::Closed {
 
             Report::Continue
-        } else if self.has_identification_timeout(&now) {
-            println!("fatal: identification has timeout.");
 
-            Report::Quit
+        } else if self.state == ConnectionState::Connecting {
+
+            if self.phase == Phase::Authentication {
+                if self.has_init_req_timeout(&now) {
+                    println!("warn: authentication has timeout.");
+
+                    self.identify_client();
+                }
+
+                Report::Continue
+
+            } else if self.phase == Phase::Identification {
+                if self.has_init_req_timeout(&now) {
+                    Report::Quit
+                } else {
+                    Report::Continue
+                }
+            } else {
+                Report::Continue
+            }
+
         } else {
-            if let ConnectionState::Connected(ref conn) = self.state {
+            // Connected state
+            if let Some(ref conn) = self.candidate {
                 if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
                     self.registry.check_and_retry(conn);
 
@@ -341,6 +354,8 @@ impl Driver {
                     Report::Quit
                 }
             } else {
+                // Impossible situation, if at 'Connected' state, it means we must
+                // have a valued candidate property.
                 Report::Continue
             }
         }
@@ -362,7 +377,7 @@ fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, 
                         tx1.send(Msg::Tick);
                     });
 
-                    driver.discover(tx2);
+                    driver.start(tx2);
                 },
 
                 Msg::Shutdown => {
