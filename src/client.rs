@@ -136,6 +136,13 @@ impl Attempt {
             tries: 0,
         }
     }
+
+    fn new_try(&self) -> Attempt {
+        Attempt {
+            started: get_time(),
+            tries: self.tries + 1,
+        }
+    }
 }
 
 struct StaticDiscovery {
@@ -180,6 +187,8 @@ struct Driver {
     default_user: Option<Credentials>,
     operation_timeout: Duration,
     init_req_opt: Option<InitReq>,
+    reconnect_delay: Duration,
+    max_reconnect: u32,
 }
 
 impl Driver {
@@ -197,6 +206,8 @@ impl Driver {
             default_user: setts.default_user,
             operation_timeout: setts.operation_timeout,
             init_req_opt: None,
+            reconnect_delay: Duration::seconds(3),
+            max_reconnect: 3,
         }
     }
 
@@ -321,8 +332,29 @@ impl Driver {
             Report::Continue
 
         } else if self.state == ConnectionState::Connecting {
+            if self.phase == Phase::Reconnecting {
+                if let Some(att) = self.attempt_opt.as_mut() {
+                    if now - att.started >= self.reconnect_delay {
+                        att.tries += 1;
 
-            if self.phase == Phase::Authentication {
+                        if att.tries > self.max_reconnect {
+                            Report::Quit
+                        } else {
+                            att.started = get_time();
+
+                            // TODO - Implement automatic reconnection when the previous
+                            // connection took too many times.
+                            // self.discover(sender);
+
+                            Report::Continue
+                        }
+                    } else {
+                        Report::Quit
+                    }
+                } else {
+                    Report::Continue
+                }
+            } else if self.phase == Phase::Authentication {
                 if self.has_init_req_timeout(&now) {
                     println!("warn: authentication has timeout.");
 
