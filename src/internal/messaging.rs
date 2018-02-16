@@ -1,3 +1,5 @@
+use std::io::Error;
+
 use uuid::Uuid;
 
 use internal::endpoint::Endpoint;
@@ -10,4 +12,5 @@ pub enum Msg {
     Establish(Endpoint),
     Established(Uuid),
     Arrived(Pkg),
+    ConnectionClosed(Uuid, Error),
 }

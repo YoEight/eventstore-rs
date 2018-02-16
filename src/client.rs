@@ -1,10 +1,11 @@
 use core::option::Option;
+use std::io::Error;
 use std::net::SocketAddrV4;
 use std::thread::{ spawn, JoinHandle };
 
 use chan::{ Sender, Receiver, async };
 use time::{ Duration, Timespec, get_time };
-use timer::Timer;
+use timer::{ Timer, Guard };
 use uuid::Uuid;
 
 use internal::command::Cmd;
@@ -169,6 +170,7 @@ trait Discovery {
     fn discover(&mut self, last: Option<&Endpoint>) -> Endpoint;
 }
 
+#[derive(PartialEq, Eq)]
 enum Report {
     Continue,
     Quit,
@@ -213,18 +215,19 @@ impl Driver {
         }
     }
 
-    fn start(&mut self, timer: &Timer) {
+    fn start(&mut self, timer: &Timer) -> Guard {
         self.attempt_opt = Some(Attempt::new());
         self.state       = ConnectionState::Connecting;
         self.phase       = Phase::Reconnecting;
 
-        let tx = self.sender.clone();
-
-         timer.schedule_repeating(Duration::milliseconds(200), move || {
-             tx.send(Msg::Tick);
-         });
+        let tx    = self.sender.clone();
+        let guard = timer.schedule_repeating(Duration::milliseconds(200), move || {
+            tx.send(Msg::Tick);
+        });
 
         self.discover();
+
+        guard
     }
 
     fn discover(&mut self) {
@@ -290,6 +293,32 @@ impl Driver {
         }
     }
 
+    fn is_same_connection(&self, conn_id: &Uuid) -> bool {
+        match self.candidate {
+            Some(ref conn) => conn.id == *conn_id,
+            None           => false,
+        }
+    }
+
+    fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
+        if self.is_same_connection(&conn_id) {
+            match self.state {
+                ConnectionState::Connected => {
+                    self.attempt_opt = Some(Attempt::new());
+                    self.state       = ConnectionState::Connecting;
+                    self.phase       = Phase::Reconnecting;
+                },
+
+                ConnectionState::Connecting => {
+                    self.state = ConnectionState::Connecting;
+                    self.phase = Phase::Reconnecting;
+                },
+
+                _ => (),
+            }
+        }
+    }
+
     fn on_package_arrived(&mut self, pkg: Pkg) {
          self.tracker.incr_pkg_num();
 
@@ -317,6 +346,8 @@ impl Driver {
                              conn.enqueue(resp);
                          }
                      },
+
+                     Cmd::HeartbeatResponse => { println!("Heartbeat response"); },
 
                      _ => self.registry.handle(pkg),
                  }
@@ -351,6 +382,27 @@ impl Driver {
         }
     }
 
+    fn close_connection(&mut self) {
+        self.state = ConnectionState::Closed;
+    }
+
+    fn manage_heartbeat(&mut self) -> Report {
+        if let Some(ref conn) = self.candidate {
+            if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
+                self.registry.check_and_retry(conn);
+
+                Report::Continue
+            } else {
+                println!("Heartbeat TIMEOUT");
+
+                Report::Quit
+            }
+        } else {
+            // Impossible situation.
+            Report::Continue
+        }
+    }
+
     fn on_tick(&mut self) -> Report {
         let now = get_time();
 
@@ -364,10 +416,12 @@ impl Driver {
 
                 if self.conn_has_timeout(&now) {
                     if self.start_new_attempt(now) {
+                        println!("New connection attempt");
                         self.discover();
 
                         Report::Continue
                     } else {
+                        println!("Connection max attempt reached.");
                         Report::Quit
                     }
                 } else {
@@ -380,13 +434,13 @@ impl Driver {
                     self.identify_client();
                 }
 
-                Report::Continue
+                self.manage_heartbeat()
 
             } else if self.phase == Phase::Identification {
                 if self.has_init_req_timeout(&now) {
                     Report::Quit
                 } else {
-                    Report::Continue
+                    self.manage_heartbeat()
                 }
             } else {
                 Report::Continue
@@ -394,21 +448,15 @@ impl Driver {
 
         } else {
             // Connected state
-            if let Some(ref conn) = self.candidate {
-                if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
+            let report = self.manage_heartbeat();
+
+            if report == Report::Continue {
+                if let Some(ref conn) = self.candidate {
                     self.registry.check_and_retry(conn);
-
-                    Report::Continue
-                } else {
-                    println!("Heartbeat TIMEOUT");
-
-                    Report::Quit
                 }
-            } else {
-                // Impossible situation, if at 'Connected' state, it means we must
-                // have a valued candidate property.
-                Report::Continue
             }
+
+            report
         }
     }
 }
@@ -416,12 +464,13 @@ impl Driver {
 fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, receiver: Receiver<Msg>) {
     let mut driver = Driver::new(settings, disc, sender);
     let     timer  = Timer::new();
+    let mut ticker = None;
 
     loop {
         if let Some(msg) = receiver.recv() {
             match msg {
                 Msg::Start => {
-                    driver.start(&timer);
+                    ticker = Some(driver.start(&timer));
                 },
 
                 Msg::Shutdown => {
@@ -434,7 +483,11 @@ fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, 
 
                 Msg::Established(id) => {
                     driver.on_established(id);
-                }
+                },
+
+                Msg::ConnectionClosed(conn_id, error) => {
+                    driver.on_connection_closed(conn_id, error);
+                },
 
                 Msg::Arrived(pkg) => {
                     driver.on_package_arrived(pkg);
@@ -442,6 +495,7 @@ fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, 
 
                 Msg::Tick => {
                     if let Report::Quit = driver.on_tick() {
+                        driver.close_connection();
                         break
                     }
                 },

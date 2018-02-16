@@ -28,40 +28,47 @@ impl Connection {
     }
 
     fn create_conn(id: Uuid, rx: Receiver<Pkg>, bus: Sender<Msg>, addr: SocketAddrV4) {
-        let     stream = TcpStream::connect(addr).unwrap();
-        let mut send   = stream.try_clone().unwrap();
+        match TcpStream::connect(addr) {
+            Ok(stream) => {
+                let mut send = stream.try_clone().unwrap();
 
-        bus.send(Msg::Established(id));
+                bus.send(Msg::Established(id));
 
-        let recv_handle = spawn(move || {
-            let mut recv       = stream.try_clone().unwrap();
-            let mut keep_going = true;
+                let recv_handle = spawn(move || {
+                    let mut recv       = stream.try_clone().unwrap();
+                    let mut keep_going = true;
 
-            while keep_going {
-                let pkg_opt = Pkg::from_stream(&mut recv);
+                    while keep_going {
+                        let pkg_opt = Pkg::from_stream(&mut recv);
 
-                match pkg_opt {
-                    Result::Ok(pkg) => bus.send(Msg::Arrived(pkg)),
-                    _               => { keep_going = false; },
+                        match pkg_opt {
+                            Result::Ok(pkg) => bus.send(Msg::Arrived(pkg)),
+                            _               => { keep_going = false; },
+                        }
+                    }
+                });
+
+                let mut keep_going = true;
+
+                while keep_going {
+                    let pkg_opt = rx.recv();
+
+                    for pkg in &pkg_opt {
+                        let bytes = pkg.to_bytes();
+
+                        send.write_all(&bytes).unwrap();
+                    }
+
+                    keep_going = pkg_opt.is_some();
                 }
-            }
-        });
 
-        let mut keep_going = true;
+                recv_handle.join().unwrap();
+            },
 
-        while keep_going {
-            let pkg_opt = rx.recv();
-
-            for pkg in &pkg_opt {
-                let bytes = pkg.to_bytes();
-
-                send.write_all(&bytes).unwrap();
-            }
-
-            keep_going = pkg_opt.is_some();
+            Err(error) => {
+                bus.send(Msg::ConnectionClosed(id, error));
+            },
         }
-
-        recv_handle.join().unwrap();
     }
 
     pub fn enqueue(&self, pkg: Pkg) {
