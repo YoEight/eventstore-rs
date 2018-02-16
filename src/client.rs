@@ -189,10 +189,11 @@ struct Driver {
     init_req_opt: Option<InitReq>,
     reconnect_delay: Duration,
     max_reconnect: u32,
+    sender: Sender<Msg>,
 }
 
 impl Driver {
-    fn new(setts: Settings, disc: Box<Discovery>) -> Driver {
+    fn new(setts: Settings, disc: Box<Discovery>, sender: Sender<Msg>) -> Driver {
         Driver {
             registry: Registry::new(&setts),
             candidate: None,
@@ -208,32 +209,39 @@ impl Driver {
             init_req_opt: None,
             reconnect_delay: Duration::seconds(3),
             max_reconnect: 3,
+            sender: sender,
         }
     }
 
-    fn start(&mut self, sender: Sender<Msg>) {
+    fn start(&mut self, timer: &Timer) {
         self.attempt_opt = Some(Attempt::new());
         self.state       = ConnectionState::Connecting;
         self.phase       = Phase::Reconnecting;
 
-        self.discover(sender);
+        let tx = self.sender.clone();
+
+         timer.schedule_repeating(Duration::milliseconds(200), move || {
+             tx.send(Msg::Tick);
+         });
+
+        self.discover();
     }
 
-    fn discover(&mut self, sender: Sender<Msg>) {
+    fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
             let endpoint = self.discovery.discover(self.last_endpoint.as_ref());
 
             self.phase = Phase::EndpointDiscovery;
 
             // TODO - Will be performed in a different thread.
-            sender.send(Msg::Establish(endpoint));
+            self.sender.send(Msg::Establish(endpoint));
         }
     }
 
-    fn on_establish(&mut self, sender: Sender<Msg>, endpoint: Endpoint) {
+    fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
             self.phase         = Phase::Establishing;
-            self.candidate     = Some(Connection::new(sender, endpoint.addr));
+            self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr));
             self.last_endpoint = Some(endpoint);
         }
     }
@@ -324,6 +332,25 @@ impl Driver {
         }
     }
 
+    fn conn_has_timeout(&self, now: &Timespec) -> bool {
+        if let Some(att) = self.attempt_opt.as_ref() {
+            *now - att.started >= self.reconnect_delay
+        } else {
+            false
+        }
+    }
+
+    fn start_new_attempt(&mut self, now: Timespec) -> bool {
+        if let Some(att) = self.attempt_opt.as_mut() {
+            att.tries   += 1;
+            att.started = now;
+
+            att.tries <= self.max_reconnect
+        } else {
+            false
+        }
+    }
+
     fn on_tick(&mut self) -> Report {
         let now = get_time();
 
@@ -333,21 +360,13 @@ impl Driver {
 
         } else if self.state == ConnectionState::Connecting {
             if self.phase == Phase::Reconnecting {
-                if let Some(att) = self.attempt_opt.as_mut() {
-                    if now - att.started >= self.reconnect_delay {
-                        att.tries += 1;
+                let now = get_time();
 
-                        if att.tries > self.max_reconnect {
-                            Report::Quit
-                        } else {
-                            att.started = get_time();
+                if self.conn_has_timeout(&now) {
+                    if self.start_new_attempt(now) {
+                        self.discover();
 
-                            // TODO - Implement automatic reconnection when the previous
-                            // connection took too many times.
-                            // self.discover(sender);
-
-                            Report::Continue
-                        }
+                        Report::Continue
                     } else {
                         Report::Quit
                     }
@@ -395,21 +414,14 @@ impl Driver {
 }
 
 fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, receiver: Receiver<Msg>) {
-    let mut driver = Driver::new(settings, disc);
+    let mut driver = Driver::new(settings, disc, sender);
     let     timer  = Timer::new();
 
     loop {
         if let Some(msg) = receiver.recv() {
             match msg {
                 Msg::Start => {
-                    let tx1 = sender.clone();
-                    let tx2 = sender.clone();
-
-                    timer.schedule_repeating(Duration::milliseconds(200), move || {
-                        tx1.send(Msg::Tick);
-                    });
-
-                    driver.start(tx2);
+                    driver.start(&timer);
                 },
 
                 Msg::Shutdown => {
@@ -418,7 +430,7 @@ fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, 
                 },
 
                 Msg::Establish(endpoint) =>
-                    driver.on_establish(sender.clone(), endpoint),
+                    driver.on_establish(endpoint),
 
                 Msg::Established(id) => {
                     driver.on_established(id);
