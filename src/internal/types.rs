@@ -6,6 +6,15 @@ pub enum Retry {
     Only(u32),
 }
 
+impl Retry {
+    pub fn to_u32(&self) -> u32 {
+        match *self {
+            Retry::Undefinately => u32::max_value(),
+            Retry::Only(x)      => x,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Credentials {
     pub login: String,
@@ -17,6 +26,7 @@ pub struct Settings {
     pub heartbeat_timeout: Duration,
     pub operation_timeout: Duration,
     pub operation_retry: Retry,
+    pub connection_retry: Retry,
     pub default_user: Option<Credentials>,
     pub connection_name: Option<String>,
 }
@@ -28,6 +38,7 @@ impl Settings {
             heartbeat_timeout: Duration::seconds(1),
             operation_timeout: Duration::seconds(3),
             operation_retry: Retry::Only(3),
+            connection_retry: Retry::Undefinately, //Retry::Only(3),
             default_user: None,
             connection_name: None,
         }

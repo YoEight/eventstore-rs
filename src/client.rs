@@ -1,5 +1,5 @@
 use core::option::Option;
-use std::io::Error;
+use std::io::{ Error, ErrorKind };
 use std::net::SocketAddrV4;
 use std::thread::{ spawn, JoinHandle };
 
@@ -52,11 +52,18 @@ impl HealthTracker {
         self.pkg_num += 1;
     }
 
+    fn reset(&mut self) {
+        self.state = HeartbeatStatus::Init;
+
+        println!("HealthTracker: Resetting");
+    }
+
     fn manage_heartbeat(&mut self, conn: &Connection) -> Heartbeat {
         match self.state {
             HeartbeatStatus::Init => {
                 self.state = HeartbeatStatus::Delay(self.pkg_num, get_time());
 
+                println!("HealthTracker: Delay");
                 Heartbeat::Valid
             },
 
@@ -65,10 +72,13 @@ impl HealthTracker {
 
                 if self.pkg_num != num {
                     self.state = HeartbeatStatus::Delay(self.pkg_num, now);
+                    println!("HealthTracker: Delay");
                 } else {
+                    println!("Delay duration: {}", now - start);
                     if now - start >= self.heartbeat_delay {
                         self.state = HeartbeatStatus::Timeout(self.pkg_num, now);
                         conn.enqueue(Pkg::heartbeat_request());
+                        println!("HealthTracker: Timeout");
                     }
                 }
 
@@ -80,9 +90,11 @@ impl HealthTracker {
 
                 if self.pkg_num != num {
                     self.state = HeartbeatStatus::Delay(self.pkg_num, now);
+                    println!("HealthTracker: Delay");
 
                     Heartbeat::Valid
                 } else {
+                    println!("Timeout duration: {}", now - start);
                     if now - start >= self.heartbeat_timeout {
                         Heartbeat::Failure
                     } else {
@@ -210,7 +222,7 @@ impl Driver {
             operation_timeout: setts.operation_timeout,
             init_req_opt: None,
             reconnect_delay: Duration::seconds(3),
-            max_reconnect: 3,
+            max_reconnect: setts.connection_retry.to_u32(),
             sender: sender,
         }
     }
@@ -232,17 +244,20 @@ impl Driver {
 
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
+            println!("Driver: Discover");
             let endpoint = self.discovery.discover(self.last_endpoint.as_ref());
 
             self.phase = Phase::EndpointDiscovery;
 
             // TODO - Will be performed in a different thread.
             self.sender.send(Msg::Establish(endpoint));
+            self.tracker.reset();
         }
     }
 
     fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
+            println!("Driver: Establish");
             self.phase         = Phase::Establishing;
             self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr));
             self.last_endpoint = Some(endpoint);
@@ -251,6 +266,7 @@ impl Driver {
 
     fn authenticate(&mut self, creds: Credentials) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
+            println!("Driver: Authenticate");
             let pkg = Pkg::authenticate(creds);
 
             self.init_req_opt = Some(InitReq::new(pkg.correlation));
@@ -264,6 +280,7 @@ impl Driver {
 
     fn identify_client(&mut self) {
         if self.state == ConnectionState::Connecting && (self.phase == Phase::Authentication || self.phase == Phase::Establishing) {
+            println!("Driver: Identify");
             let pkg = Pkg::identify_client(&self.connection_name);
 
             self.init_req_opt = Some(InitReq::new(pkg.correlation));
@@ -285,6 +302,9 @@ impl Driver {
             };
 
             if same_connection {
+                println!("Driver: Established");
+                self.tracker.reset();
+
                 match self.default_user.clone() {
                     Some(creds) => self.authenticate(creds),
                     None        => self.identify_client(),
@@ -302,20 +322,24 @@ impl Driver {
 
     fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
         if self.is_same_connection(&conn_id) {
-            match self.state {
-                ConnectionState::Connected => {
-                    self.attempt_opt = Some(Attempt::new());
-                    self.state       = ConnectionState::Connecting;
-                    self.phase       = Phase::Reconnecting;
-                },
+            self.tcp_connection_close(error);
+        }
+    }
 
-                ConnectionState::Connecting => {
-                    self.state = ConnectionState::Connecting;
-                    self.phase = Phase::Reconnecting;
-                },
+    fn tcp_connection_close(&mut self, _: Error) {
+        match self.state {
+            ConnectionState::Connected => {
+                self.attempt_opt = Some(Attempt::new());
+                self.state       = ConnectionState::Connecting;
+                self.phase       = Phase::Reconnecting;
+            },
 
-                _ => (),
-            }
+            ConnectionState::Connecting => {
+                self.state = ConnectionState::Connecting;
+                self.phase = Phase::Reconnecting;
+            },
+
+            _ => (),
         }
     }
 
@@ -386,20 +410,19 @@ impl Driver {
         self.state = ConnectionState::Closed;
     }
 
-    fn manage_heartbeat(&mut self) -> Report {
-        if let Some(ref conn) = self.candidate {
-            if let Heartbeat::Valid = self.tracker.manage_heartbeat(conn) {
-                self.registry.check_and_retry(conn);
+    fn manage_heartbeat(&mut self) {
+        let has_timeout =
+                if let Some(ref conn) = self.candidate {
+                    match self.tracker.manage_heartbeat(conn) {
+                        Heartbeat::Valid   => false,
+                        Heartbeat::Failure => true,
+                    }
+                } else {
+                    false
+                };
 
-                Report::Continue
-            } else {
-                println!("Heartbeat TIMEOUT");
-
-                Report::Quit
-            }
-        } else {
-            // Impossible situation.
-            Report::Continue
+        if has_timeout {
+            self.tcp_connection_close(heartbeat_timeout_error());
         }
     }
 
@@ -434,13 +457,17 @@ impl Driver {
                     self.identify_client();
                 }
 
-                self.manage_heartbeat()
+                self.manage_heartbeat();
+
+                Report::Continue
 
             } else if self.phase == Phase::Identification {
                 if self.has_init_req_timeout(&now) {
                     Report::Quit
                 } else {
-                    self.manage_heartbeat()
+                    self.manage_heartbeat();
+
+                    Report::Continue
                 }
             } else {
                 Report::Continue
@@ -448,15 +475,13 @@ impl Driver {
 
         } else {
             // Connected state
-            let report = self.manage_heartbeat();
-
-            if report == Report::Continue {
-                if let Some(ref conn) = self.candidate {
-                    self.registry.check_and_retry(conn);
-                }
+            if let Some(ref conn) = self.candidate {
+                self.registry.check_and_retry(conn);
             }
 
-            report
+            self.manage_heartbeat();
+
+            Report::Continue
         }
     }
 }
@@ -505,6 +530,8 @@ fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, 
             break;
         }
     }
+
+    println!("Driver has terminated.");
 }
 
 pub struct Client {
@@ -537,4 +564,8 @@ impl Client {
     pub fn wait_till_closed(self) {
         self.worker.join().unwrap();
     }
+}
+
+fn heartbeat_timeout_error() -> Error {
+    Error::new(ErrorKind::Other, "Heartbeat timeout error.")
 }
