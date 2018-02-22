@@ -7,6 +7,9 @@ extern crate timer;
 extern crate time;
 extern crate protobuf;
 
+#[macro_use]
+extern crate log;
+
 mod internal;
 pub mod client;
 

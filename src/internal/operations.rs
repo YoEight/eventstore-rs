@@ -32,7 +32,7 @@ pub enum Decision {
 
 pub trait Operation {
     fn create(&self, correlation: Uuid) -> Pkg;
-    fn inspect(&mut self, pkg: Pkg) -> Decision;
+    fn inspect(&mut self, pkg: &Pkg) -> Decision;
 }
 
 pub trait Promise<A> {
@@ -88,7 +88,7 @@ impl Operation for WriteEvents {
         pkg
     }
 
-    fn inspect(&mut self, pkg: Pkg) -> Decision {
+    fn inspect(&mut self, pkg: &Pkg) -> Decision {
         match pkg.cmd {
             Cmd::WriteEventsCompleted => {
                 let response: messages::WriteEventsCompleted =

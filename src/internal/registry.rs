@@ -75,14 +75,15 @@ impl Registry {
         conn.enqueue(pkg);
     }
 
-    pub fn handle(&mut self, pkg: Pkg) {
+    pub fn handle(&mut self, pkg: &Pkg) -> bool {
         if let Some(mut reg) = self.pending.remove(&pkg.correlation) {
             if let Decision::Continue = reg.op.inspect(pkg) {
                 self.register(reg.op, None)
             }
+
+            true
         } else {
-            println!("Package [{}] not handled: command [{}].",
-                     pkg.correlation, pkg.cmd.to_u8())
+            false
         }
     }
 
