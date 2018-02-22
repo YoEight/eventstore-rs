@@ -35,7 +35,7 @@ impl Settings {
     pub fn default() -> Settings {
         Settings {
             heartbeat_delay: Duration::milliseconds(750),
-            heartbeat_timeout: Duration::seconds(1),
+            heartbeat_timeout: Duration::milliseconds(1500),
             operation_timeout: Duration::seconds(3),
             operation_retry: Retry::Only(3),
             connection_retry: Retry::Undefinately, //Retry::Only(3),
