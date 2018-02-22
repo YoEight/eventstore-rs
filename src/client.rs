@@ -204,6 +204,8 @@ struct Driver {
     reconnect_delay: Duration,
     max_reconnect: u32,
     sender: Sender<Msg>,
+    operation_check_period: Duration,
+    last_operation_check: Timespec,
 }
 
 impl Driver {
@@ -224,6 +226,8 @@ impl Driver {
             reconnect_delay: Duration::seconds(3),
             max_reconnect: setts.connection_retry.to_u32(),
             sender: sender,
+            operation_check_period: setts.operation_check_period,
+            last_operation_check: get_time(),
         }
     }
 
@@ -344,39 +348,40 @@ impl Driver {
     }
 
     fn on_package_arrived(&mut self, pkg: Pkg) {
-         self.tracker.incr_pkg_num();
+        self.tracker.incr_pkg_num();
 
-         if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
-             self.init_req_opt = None;
-             self.attempt_opt  = None;
-             self.state        = ConnectionState::Connected;
-         } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
-             if pkg.cmd == Cmd::NotAuthenticated {
-                 println!("warn: Not authenticated.");
-             }
+        if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
+            self.init_req_opt         = None;
+            self.attempt_opt          = None;
+            self.last_operation_check = get_time();
+            self.state                = ConnectionState::Connected;
+        } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
+            if pkg.cmd == Cmd::NotAuthenticated {
+                println!("warn: Not authenticated.");
+            }
 
-             self.identify_client();
-         } else {
-             if self.state == ConnectionState::Connected {
-                 match pkg.cmd {
-                     Cmd::HeartbeatRequest => {
-                         println!("Heartbeat request received");
+            self.identify_client();
+        } else {
+            if self.state == ConnectionState::Connected {
+                match pkg.cmd {
+                    Cmd::HeartbeatRequest => {
+                        println!("Heartbeat request received");
 
-                         let mut resp = pkg.copy_headers_only();
+                        let mut resp = pkg.copy_headers_only();
 
-                         resp.cmd = Cmd::HeartbeatResponse;
+                        resp.cmd = Cmd::HeartbeatResponse;
 
-                         if let Some(ref conn) = self.candidate {
-                             conn.enqueue(resp);
-                         }
-                     },
+                        if let Some(ref conn) = self.candidate {
+                            conn.enqueue(resp);
+                        }
+                    },
 
-                     Cmd::HeartbeatResponse => { println!("Heartbeat response"); },
+                    Cmd::HeartbeatResponse => { println!("Heartbeat response"); },
 
-                     _ => self.registry.handle(pkg),
-                 }
-             }
-         }
+                    _ => self.registry.handle(pkg),
+                }
+            }
+        }
     }
 
     fn has_init_req_timeout(&self, now: &Timespec) -> bool {
@@ -476,7 +481,13 @@ impl Driver {
         } else {
             // Connected state
             if let Some(ref conn) = self.candidate {
-                self.registry.check_and_retry(conn);
+                let now = get_time();
+
+                if now - self.last_operation_check >= self.operation_check_period {
+                    self.registry.check_and_retry(conn);
+
+                    self.last_operation_check = now;
+                }
             }
 
             self.manage_heartbeat();
