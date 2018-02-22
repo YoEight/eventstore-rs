@@ -37,7 +37,7 @@ impl Settings {
         Settings {
             heartbeat_delay: Duration::milliseconds(750),
             heartbeat_timeout: Duration::milliseconds(1500),
-            operation_timeout: Duration::seconds(3),
+            operation_timeout: Duration::seconds(7),
             operation_retry: Retry::Only(3),
             connection_retry: Retry::Only(3),
             default_user: None,
