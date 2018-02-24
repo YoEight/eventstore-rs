@@ -1,12 +1,5 @@
-use std::io::{ Cursor, Read, Error, ErrorKind, Result };
-use std::net::TcpStream;
-use std::result::Result::{ Ok };
-use std::string::FromUtf8Error;
-
-use bytes::{ Buf, BytesMut, LittleEndian };
-use bytes::buf::BufMut;
 use protobuf::Message;
-use uuid::{ Uuid, ParseError };
+use uuid::Uuid;
 
 use internal::command::Cmd;
 use internal::messages;
@@ -20,6 +13,7 @@ pub struct Pkg {
 }
 
 static CLIENT_VERSION: i32 = 1;
+pub static PKG_MANDATORY_SIZE: usize = 18;
 
 impl Pkg {
     pub fn new(cmd: Cmd, correlation: Uuid) -> Pkg {
@@ -47,7 +41,7 @@ impl Pkg {
             }
         };
 
-        18 + self.payload.len() + creds_size
+        PKG_MANDATORY_SIZE + self.payload.len() + creds_size
     }
 
     pub fn heartbeat_request() -> Pkg {
@@ -87,91 +81,5 @@ impl Pkg {
             payload:     Vec::new(),
             creds_opt:   None,
         }
-    }
-
-    pub fn to_bytes(&self) -> BytesMut {
-        let     size      = self.size();
-        let     capacity  = 4 + size; // frame size + package size.
-        let mut bytes     = BytesMut::with_capacity(capacity);
-        let     auth_flag = {
-            if self.creds_opt.is_some() {
-                0x01
-            } else {
-                0x00
-            }
-        };
-
-        bytes.put_u32::<LittleEndian>(size as u32);
-        bytes.put_u8(self.cmd.to_u8());
-        bytes.put_u8(auth_flag);
-        bytes.put_slice(self.correlation.as_bytes());
-
-        if let Some(creds) = self.creds_opt.as_ref() {
-            let login_len = creds.login.len();
-            let passw_len = creds.password.len();
-
-            bytes.put_u8(login_len as u8);
-            bytes.put_slice(creds.login.as_bytes());
-            bytes.put_u8(passw_len as u8);
-            bytes.put_slice(creds.password.as_bytes());
-        }
-
-        bytes.put_slice(self.payload.as_slice());
-
-        bytes
-    }
-
-    pub fn from_stream(stream: &mut TcpStream) -> Result<Pkg> {
-        let mut frame: [u8; 4] = [0; 4];
-
-        stream.read_exact(&mut frame)?;
-
-        let mut frame_cursor = Cursor::new(frame);
-        let     frame_size   = frame_cursor.get_u32::<LittleEndian>() as usize;
-        let mut pkg_buf      = vec![0; frame_size];
-
-        stream.read_exact(&mut pkg_buf)?;
-
-        fn to_error(err: ParseError) -> Error {
-            Error::new(ErrorKind::Other, format!("ParseError {}", err))
-        }
-
-        fn from_utf8_error(err: FromUtf8Error) -> Error {
-            Error::new(ErrorKind::Other, format!("Wrong UTF-8 parsing: {}", err))
-        }
-
-        let     cmd            = Cmd::from_u8(pkg_buf[0]);
-        let     auth_flag      = pkg_buf[1];
-        let     correlation    = Uuid::from_bytes(&pkg_buf[2..18]).map_err(|e| to_error(e))?;
-        let mut pkg            = Pkg::new(cmd, correlation);
-        let mut payload_offset = 18;
-
-        let creds_opt = {
-            if auth_flag == 0x01 {
-                let login_len = pkg_buf[18] as usize;
-                let login_off = 19 + login_len;
-                let login_vec = Vec::from(&pkg_buf[19..login_off]);
-                let login     = String::from_utf8(login_vec).map_err(|e| from_utf8_error(e))?;
-                let passw_len = pkg_buf[login_off] as usize;
-                let passw_off = login_off + 1 + passw_len;
-                let passw_vec = Vec::from(&pkg_buf[login_off+1..passw_off]);
-                let passw     = String::from_utf8(passw_vec).map_err(|e| from_utf8_error(e))?;
-                let cred      = Credentials { login: login, password: passw };
-
-                payload_offset = passw_off;
-
-                Some(cred)
-            } else {
-                None
-            }
-        };
-
-        if frame_size > payload_offset {
-            let payload = &pkg_buf[payload_offset..frame_size];
-
-            pkg.set_payload(payload.to_vec());
-        }
-
-        Ok(pkg)
     }
 }

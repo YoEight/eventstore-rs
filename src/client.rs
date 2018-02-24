@@ -3,9 +3,14 @@ use std::io::{ Error, ErrorKind };
 use std::net::SocketAddrV4;
 use std::thread::{ spawn, JoinHandle };
 
-use chan::{ Sender, Receiver, async };
+use futures::{ Async, Poll, Future, Stream, Sink };
+use futures::stream::poll_fn;
+use futures::sync::mpsc::{ Sender, Receiver, channel };
 use time::{ Duration, Timespec, get_time };
 use timer::{ Timer, Guard };
+use tokio::executor::current_thread;
+use tokio_core::reactor::{ Core, Handle };
+use futures::future::lazy;
 use uuid::Uuid;
 
 use internal::command::Cmd;
@@ -88,7 +93,7 @@ impl HealthTracker {
                     Heartbeat::Valid
                 } else {
                     if now - start >= self.heartbeat_timeout {
-                        info!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
+                        println!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
 
                         Heartbeat::Failure
                     } else {
@@ -176,13 +181,46 @@ trait Discovery {
     fn discover(&mut self, last: Option<&Endpoint>) -> Endpoint;
 }
 
+
 #[derive(PartialEq, Eq)]
 enum Report {
     Continue,
     Quit,
 }
 
+struct TickRate {
+    period: Duration,
+    state: Timespec,
+}
+
+impl TickRate {
+    fn new(period: Duration) -> TickRate {
+        TickRate {
+            period: period,
+            state: get_time(),
+        }
+    }
+}
+
+impl Stream for TickRate {
+    type Item  = Msg;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Msg>, ()> {
+        let now = get_time();
+
+        if now - self.state >= self.period {
+            self.state = now;
+
+            Ok(Async::Ready(Some(Msg::Tick)))
+        } else {
+            Ok(Async::NotReady)
+        }
+    }
+}
+
 struct Driver {
+    handle: Handle,
     registry: Registry,
     candidate: Option<Connection>,
     tracker: HealthTracker,
@@ -203,8 +241,9 @@ struct Driver {
 }
 
 impl Driver {
-    fn new(setts: Settings, disc: Box<Discovery>, sender: Sender<Msg>) -> Driver {
+    fn new(setts: Settings, disc: Box<Discovery>, sender: Sender<Msg>, handle: Handle) -> Driver {
         Driver {
+            handle: handle,
             registry: Registry::new(&setts),
             candidate: None,
             tracker: HealthTracker::new(&setts),
@@ -225,19 +264,23 @@ impl Driver {
         }
     }
 
-    fn start(&mut self, timer: &Timer) -> Guard {
+    fn start(&mut self, timer: &Timer) {
         self.attempt_opt = Some(Attempt::new());
         self.state       = ConnectionState::Connecting;
         self.phase       = Phase::Reconnecting;
 
-        let tx    = self.sender.clone();
-        let guard = timer.schedule_repeating(Duration::milliseconds(200), move || {
-            tx.send(Msg::Tick);
+        let tx          = self.sender.clone();
+        let tick_period = Duration::milliseconds(200);
+        let mut state   = get_time();
+        let     tick    = TickRate::new(tick_period);
+
+        let tick = tick.fold(self.sender.clone(), |sender, msg| {
+            sender.send(msg).map_err(|_| ())
         });
 
-        self.discover();
+        self.handle.spawn(tick.then(|_| Ok(())));
 
-        guard
+        self.discover();
     }
 
     fn discover(&mut self) {
@@ -246,8 +289,10 @@ impl Driver {
 
             self.phase = Phase::EndpointDiscovery;
 
-            // TODO - Will be performed in a different thread.
-            self.sender.send(Msg::Establish(endpoint));
+            // TODO - Properly handle endpoint discovery asynchronously.
+            self.handle.spawn(
+                self.sender.clone().send(Msg::Establish(endpoint)).then(|_| Ok(())));
+
             self.tracker.reset();
         }
     }
@@ -255,7 +300,7 @@ impl Driver {
     fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
             self.phase         = Phase::Establishing;
-            self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr));
+            self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr, self.handle.clone()));
             self.last_endpoint = Some(endpoint);
         }
     }
@@ -296,7 +341,7 @@ impl Driver {
             };
 
             if same_connection {
-                debug!("Connection established: {}.", id);
+                println!("Connection established: {}.", id);
                 self.tracker.reset();
 
                 match self.default_user.clone() {
@@ -316,13 +361,13 @@ impl Driver {
 
     fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
         if self.is_same_connection(&conn_id) {
-            debug!("CloseConnection: {}.", error);
+            println!("CloseConnection: {}.", error);
             self.tcp_connection_close(&conn_id, error);
         }
     }
 
     fn tcp_connection_close(&mut self, conn_id: &Uuid, err: Error) {
-        error!("Connection [{}] error. Cause: {}.", conn_id, err);
+        println!("Connection [{}] error. Cause: {}.", conn_id, err);
 
         match self.state {
             ConnectionState::Connected => {
@@ -345,7 +390,7 @@ impl Driver {
 
         if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
             if let Some(ref conn) = self.candidate {
-                debug!("Connection identified: {}.", conn.id);
+                println!("Connection identified: {}.", conn.id);
             }
 
             self.init_req_opt         = None;
@@ -354,7 +399,7 @@ impl Driver {
             self.state                = ConnectionState::Connected;
         } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
             if pkg.cmd == Cmd::NotAuthenticated {
-                warn!("Not authenticated.");
+                println!("Not authenticated.");
             }
 
             self.identify_client();
@@ -375,10 +420,10 @@ impl Driver {
 
                     _ => {
                         if self.registry.handle(&pkg) {
-                            debug!("Package [{}] received: command [{}].",
+                            println!("Package [{}] received: command [{}].",
                                 pkg.correlation, pkg.cmd.to_u8())
                         } else {
-                            debug!("Package [{}] not handled: command [{}].",
+                            println!("Package [{}] not handled: command [{}].",
                                 pkg.correlation, pkg.cmd.to_u8())
                         }
                     },
@@ -460,7 +505,7 @@ impl Driver {
                 }
             } else if self.phase == Phase::Authentication {
                 if self.has_init_req_timeout(&now) {
-                    warn!("Authentication has timeout.");
+                    println!("Authentication has timeout.");
 
                     self.identify_client();
                 }
@@ -500,53 +545,6 @@ impl Driver {
     }
 }
 
-fn worker_thread(settings: Settings, disc: Box<Discovery>, sender: Sender<Msg>, receiver: Receiver<Msg>) {
-    let mut driver = Driver::new(settings, disc, sender);
-    let     timer  = Timer::new();
-    let mut ticker = None;
-
-    loop {
-        if let Some(msg) = receiver.recv() {
-            match msg {
-                Msg::Start => {
-                    ticker = Some(driver.start(&timer));
-                },
-
-                Msg::Shutdown => {
-                    debug!("Shutting down...");
-                    break;
-                },
-
-                Msg::Establish(endpoint) =>
-                    driver.on_establish(endpoint),
-
-                Msg::Established(id) => {
-                    driver.on_established(id);
-                },
-
-                Msg::ConnectionClosed(conn_id, error) => {
-                    driver.on_connection_closed(conn_id, error);
-                },
-
-                Msg::Arrived(pkg) => {
-                    driver.on_package_arrived(pkg);
-                },
-
-                Msg::Tick => {
-                    if let Report::Quit = driver.on_tick() {
-                        driver.close_connection();
-                        break
-                    }
-                },
-            }
-        } else {
-            break;
-        }
-    }
-
-    debug!("Shutdown properly.");
-}
-
 pub struct Client {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
@@ -554,11 +552,57 @@ pub struct Client {
 
 impl Client {
     pub fn new(settings: Settings, addr: SocketAddrV4) -> Client {
-        let (sender, recv) = async();
+        let (sender, recv) = channel(500);
         let disc           = Box::new(StaticDiscovery::new(addr));
 
         let tx     = sender.clone();
-        let handle = spawn(move || worker_thread(settings, disc, sender, recv));
+        let handle = spawn(move || {
+            let mut core   = Core::new().unwrap();
+            let     handle = core.handle();
+
+            let mut driver = Driver::new(settings, disc, sender, handle.clone());
+            let     timer  = Timer::new();
+            let mut ticker = None;
+
+            let worker = recv.for_each(move |msg| {
+                match msg {
+                    Msg::Start => {
+                        ticker = Some(driver.start(&timer));
+                    },
+
+                    Msg::Shutdown => {
+                        println!("Shutting down...");
+                        return Err(());
+                    },
+
+                    Msg::Establish(endpoint) =>
+                        driver.on_establish(endpoint),
+
+                    Msg::Established(id) => {
+                        driver.on_established(id);
+                    },
+
+                    Msg::ConnectionClosed(conn_id, error) => {
+                        driver.on_connection_closed(conn_id, error);
+                    },
+
+                    Msg::Arrived(pkg) => {
+                        driver.on_package_arrived(pkg);
+                    },
+
+                    Msg::Tick => {
+                        if let Report::Quit = driver.on_tick() {
+                            driver.close_connection();
+                            return Err(())
+                        }
+                    },
+                };
+
+                Ok(())
+            });
+
+            core.run(worker).unwrap();
+        });
 
         Client {
             worker: handle,
@@ -567,11 +611,11 @@ impl Client {
     }
 
     pub fn start(&self) {
-        self.sender.send(Msg::Start);
+        self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
     pub fn shutdown(&self) {
-        self.sender.send(Msg::Shutdown);
+        self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }
 
     pub fn wait_till_closed(self) {

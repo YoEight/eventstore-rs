@@ -5,6 +5,7 @@ authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 build = "build.rs"
 
 [dependencies]
+tokio = "0.1.1"
 tokio-core = "0.1.10"
 tokio-io = "0.1.3"
 futures = "0.1.17"
@@ -15,7 +16,7 @@ chrono = "0.4.0"
 timer = "0.2.0"
 time = "0.1.38"
 protobuf = "1.4.3"
-log = "0.4.1"
+# log = "0.4.1"
 
 [build-dependencies]
 protoc-rust = "1.4"
