@@ -1,8 +1,6 @@
-extern crate chan;
 extern crate core;
 extern crate bytes;
 extern crate uuid;
-extern crate chrono;
 extern crate timer;
 extern crate time;
 extern crate futures;
@@ -10,6 +8,7 @@ extern crate protobuf;
 extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_timer;
 
 // #[macro_use]
 // extern crate log;
@@ -19,8 +18,8 @@ pub mod client;
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use std::thread;
+    use std::time::Duration;
     use client::Client;
     use internal::types::{ Credentials, Settings };
 

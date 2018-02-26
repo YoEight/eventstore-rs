@@ -1,4 +1,4 @@
-use time::Duration;
+use std::time::Duration;
 
 #[derive(Copy, Clone)]
 pub enum Retry {
@@ -35,14 +35,14 @@ pub struct Settings {
 impl Settings {
     pub fn default() -> Settings {
         Settings {
-            heartbeat_delay: Duration::milliseconds(750),
-            heartbeat_timeout: Duration::milliseconds(1500),
-            operation_timeout: Duration::seconds(7),
+            heartbeat_delay: Duration::from_millis(750),
+            heartbeat_timeout: Duration::from_millis(1500),
+            operation_timeout: Duration::from_secs(7),
             operation_retry: Retry::Only(3),
             connection_retry: Retry::Only(3),
             default_user: None,
             connection_name: None,
-            operation_check_period: Duration::seconds(1),
+            operation_check_period: Duration::from_secs(1),
         }
     }
 }

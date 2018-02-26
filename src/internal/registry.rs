@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use time::{ Duration, Timespec, get_time };
+use std::time::{ Duration, Instant };
 
 use uuid::Uuid;
 
@@ -10,7 +10,7 @@ use internal::package::Pkg;
 use internal::types::{ Settings, Retry };
 
 struct Register {
-    started: Timespec,
+    started: Instant,
     tries:   u32,
     op:      Box<Operation>,
 }
@@ -28,7 +28,7 @@ enum Checking {
 impl Register {
     fn new(op: Box<Operation>) -> Register {
         Register {
-            started: get_time(),
+            started: Instant::now(),
             tries: 0,
             op: op,
         }
@@ -67,10 +67,9 @@ impl Registry {
     fn send_register(&mut self, conn: &Connection, mut reg: Register) {
         let correlation = Uuid::new_v4();
         let pkg         = reg.op.create(correlation);
-        let now         = get_time();
 
         reg.tries  += 1;
-        reg.started =  now;
+        reg.started = Instant::now();
         self.pending.insert(correlation, reg);
         conn.enqueue(pkg);
     }
@@ -94,10 +93,8 @@ impl Registry {
             self.register(op, Some(conn));
         }
 
-        let now = get_time();
-
         for (key, reg) in self.pending.iter() {
-            if now - reg.started >= self.operation_timeout {
+            if reg.started.elapsed() >= self.operation_timeout {
                 match self.operation_retry {
                     Retry::Undefinately => {
                         to_process.push(Checking::Retry(*key));
