@@ -451,23 +451,17 @@ impl Driver {
     fn on_tick(&mut self) -> Report {
 
         if self.state == ConnectionState::Init || self.state == ConnectionState::Closed {
+            return Report::Continue;
+        }
 
-            Report::Continue
-
-        } else if self.state == ConnectionState::Connecting {
+        if self.state == ConnectionState::Connecting {
             if self.phase == Phase::Reconnecting {
                 if self.conn_has_timeout() {
                     if self.start_new_attempt() {
                         self.discover();
-
-                        println!("New Conneciton attempt!");
-
-                        Report::Continue
                     } else {
-                        Report::Quit
+                        return Report::Quit;
                     }
-                } else {
-                    Report::Continue
                 }
             } else if self.phase == Phase::Authentication {
                 if self.has_init_req_timeout() {
@@ -477,21 +471,13 @@ impl Driver {
                 }
 
                 self.manage_heartbeat();
-
-                Report::Continue
-
             } else if self.phase == Phase::Identification {
                 if self.has_init_req_timeout() {
-                    Report::Quit
+                    return Report::Quit;
                 } else {
                     self.manage_heartbeat();
-
-                    Report::Continue
                 }
-            } else {
-                Report::Continue
             }
-
         } else {
             // Connected state
             if let Some(ref conn) = self.candidate {
@@ -503,9 +489,9 @@ impl Driver {
             }
 
             self.manage_heartbeat();
-
-            Report::Continue
         }
+
+        Report::Continue
     }
 }
 
