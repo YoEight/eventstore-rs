@@ -5,10 +5,14 @@ extern crate uuid;
 extern crate chrono;
 extern crate timer;
 extern crate time;
+extern crate futures;
 extern crate protobuf;
+extern crate tokio;
+extern crate tokio_core;
+extern crate tokio_io;
 
-#[macro_use]
-extern crate log;
+// #[macro_use]
+// extern crate log;
 
 mod internal;
 pub mod client;
@@ -28,7 +32,7 @@ mod tests {
 
         settings.default_user = Some(Credentials { login: login, password: passw });
 
-        let client   = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
+        let client = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
 
         client.start();
 
