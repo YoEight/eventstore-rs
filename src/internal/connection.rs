@@ -3,7 +3,7 @@ use std::net::{ SocketAddr, SocketAddrV4 };
 use std::string::FromUtf8Error;
 use std::thread::{ JoinHandle, spawn };
 
-use bytes::{ Buf, BufMut, BytesMut, LittleEndian };
+use bytes::{ Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, Receiver, channel };
 use futures::future::{ self, lazy };
@@ -64,13 +64,7 @@ impl Decoder for PkgCodec {
                 return Ok(None)
             }
 
-            let frame_size = {
-                let mut frame_cursor = Cursor::new(&src[0..4]);
-
-                frame_cursor.get_u32::<LittleEndian>() as usize
-            };
-
-            self.frame_size = frame_size;
+            self.frame_size = LittleEndian::read_u32(&src[0..4]) as usize;
             self.state      = DecodeState::Payload;
 
             src.advance(4);
@@ -80,46 +74,53 @@ impl Decoder for PkgCodec {
             return Ok(None)
         }
 
-        let     cmd            = Cmd::from_u8(src[0]);
-        let     auth_flag      = src[1];
-        let     correlation    = Uuid::from_bytes(&src[2..18]).map_err(decode_parse_error)?;
-        let mut pkg            = Pkg::new(cmd, correlation);
-        let mut payload_offset = PKG_MANDATORY_SIZE;
+        let pkg = {
+            let mut cursor = Cursor::new(&src[0..self.frame_size]);
 
-        let creds_opt = {
-            if auth_flag == 0x01 {
-                let login_len = src[18] as usize;
-                let login_off = 19 + login_len;
-                let login_vec = Vec::from(&src[19..login_off]);
-                let login     = String::from_utf8(login_vec).map_err(|e| decode_utf8_error(e))?;
-                let passw_len = src[login_off] as usize;
-                let passw_off = login_off + 1 + passw_len;
-                let passw_vec = Vec::from(&src[login_off+1..passw_off]);
-                let passw     = String::from_utf8(passw_vec).map_err(|e| decode_utf8_error(e))?;
-                let cred      = Credentials { login: login, password: passw };
+            let     cmd               = Cmd::from_u8(cursor.get_u8());
+            let     auth_flag         = cursor.get_u8();
+            let mut correlation_bytes = [0; 16];
 
-                payload_offset = passw_off;
+            cursor.copy_to_slice(&mut correlation_bytes);
 
-                Some(cred)
-            } else {
-                None
+            let     correlation = Uuid::from_bytes(&correlation_bytes).map_err(decode_parse_error)?;
+            let mut pkg         = Pkg::new(cmd, correlation);
+
+            pkg.creds_opt = {
+                if auth_flag == 0x01 {
+                    let     login_len = cursor.get_u8() as usize;
+                    let mut login     = vec![0; login_len];
+
+                    cursor.copy_to_slice(&mut login[0..login_len]);
+                    let login = String::from_utf8_lossy(&login).into_owned();
+
+                    let     passw_len = cursor.get_u8() as usize;
+                    let mut password  = vec![0; passw_len];
+
+                    cursor.copy_to_slice(&mut password[0..passw_len]);
+                    let password = String::from_utf8_lossy(&password).into_owned();
+
+                    Some(Credentials { login, password })
+                } else {
+                    None
+                }
+            };
+
+            if self.frame_size > cursor.position() as usize {
+                let     remaining = cursor.remaining();
+                let mut payload   = vec![0; remaining];
+
+                cursor.copy_to_slice(&mut payload[0..remaining]);
+                pkg.set_payload(payload);
             }
+
+            pkg
         };
 
-        pkg.creds_opt = creds_opt;
-
-        if self.frame_size > payload_offset {
-            let payload = &src[payload_offset..self.frame_size];
-
-            pkg.set_payload(payload.to_vec());
-        }
+        src.advance(self.frame_size);
 
         self.state      = DecodeState::Frame;
         self.frame_size = 0;
-
-        // We notify Tokio we have consumed all the bytes we wanted.
-        // Otherwise, it will complain there are remaining bytes in the buffer.
-        src.clear();
 
         Ok(Some(pkg))
     }
