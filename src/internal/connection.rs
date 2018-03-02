@@ -1,4 +1,4 @@
-use std::io::{ self, Write, Cursor };
+use std::io::{ self, Write, Read, Cursor };
 use std::net::{ SocketAddr, SocketAddrV4 };
 use std::string::FromUtf8Error;
 use std::thread::{ JoinHandle, spawn };
@@ -75,8 +75,7 @@ impl Decoder for PkgCodec {
         }
 
         let pkg = {
-            let mut cursor = Cursor::new(&src[0..self.frame_size]);
-
+            let mut cursor            = Cursor::new(&src[0..self.frame_size]);
             let     cmd               = Cmd::from_u8(cursor.get_u8());
             let     auth_flag         = cursor.get_u8();
             let mut correlation_bytes = [0; 16];
@@ -89,16 +88,18 @@ impl Decoder for PkgCodec {
             pkg.creds_opt = {
                 if auth_flag == 0x01 {
                     let     login_len = cursor.get_u8() as usize;
-                    let mut login     = vec![0; login_len];
+                    let mut login     = String::with_capacity(login_len);
 
-                    cursor.copy_to_slice(&mut login[0..login_len]);
-                    let login = String::from_utf8_lossy(&login).into_owned();
+                    let mut take = Read::take(cursor, login_len as u64);
+                    take.read_to_string(&mut login)?;
+                    cursor = take.into_inner();
 
                     let     passw_len = cursor.get_u8() as usize;
-                    let mut password  = vec![0; passw_len];
+                    let mut password  = String::with_capacity(passw_len);
 
-                    cursor.copy_to_slice(&mut password[0..passw_len]);
-                    let password = String::from_utf8_lossy(&password).into_owned();
+                    let mut take = Read::take(cursor, passw_len as u64);
+                    take.read_to_string(&mut password)?;
+                    cursor = take.into_inner();
 
                     Some(Credentials { login, password })
                 } else {
@@ -108,9 +109,9 @@ impl Decoder for PkgCodec {
 
             if self.frame_size > cursor.position() as usize {
                 let     remaining = cursor.remaining();
-                let mut payload   = vec![0; remaining];
+                let mut payload   = Vec::with_capacity(remaining);
 
-                cursor.copy_to_slice(&mut payload[0..remaining]);
+                cursor.read_to_end(&mut payload)?;
                 pkg.set_payload(payload);
             }
 
