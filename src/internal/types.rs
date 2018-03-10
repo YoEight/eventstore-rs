@@ -74,11 +74,13 @@ impl ExpectedVersion {
     }
 }
 
+#[derive(Debug)]
 pub struct Position {
     pub commit:  i64,
     pub prepare: i64,
 }
 
+#[derive(Debug)]
 pub struct WriteResult {
     pub next_expected_version: i64,
     pub position: Position,

@@ -1,5 +1,7 @@
 use uuid::Uuid;
 
+use futures::{ Async, Poll };
+use futures::sync::mpsc;
 use protobuf::{ RepeatedField, Message };
 use protobuf::core::parse_from_bytes;
 
@@ -25,31 +27,98 @@ pub enum OperationError {
     WrongClientImpl(Cmd),
 }
 
-pub enum Decision {
+pub enum Outcome {
     Done,
-    Continue,
+    Continue(Option<Pkg>),
+}
+
+impl Outcome {
+    pub fn produced_pkg(self) -> Option<Pkg> {
+        match self {
+            Outcome::Done              => None,
+            Outcome::Continue(pkg_opt) => pkg_opt,
+        }
+    }
+
+    pub fn is_continuing(&self) -> bool {
+        if let Outcome::Continue(_) = *self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub type Decision = ::std::io::Result<Outcome>;
+
+pub struct Promise<A> {
+    inner: mpsc::Sender<Result<A, OperationError>>,
+}
+
+impl <A> Promise<A> {
+    pub fn new(buffer: usize) -> (mpsc::Receiver<Result<A, OperationError>>, Promise<A>) {
+        let (tx, rcv) = mpsc::channel(buffer);
+        let this      = Promise { inner: tx };
+
+        (rcv, this)
+    }
+
+    fn accept(&mut self, value: A) {
+        let _ = self.inner.try_send(Ok(value));
+    }
+
+    fn reject(&mut self, error: OperationError) {
+        let _ = self.inner.try_send(Err(error));
+    }
+}
+
+fn op_done() -> Decision {
+    Ok(Outcome::Done)
+}
+
+fn op_continue() -> Decision {
+    Ok(Outcome::Continue(None))
+}
+
+fn op_send(pkg: Pkg) -> Decision {
+    Ok(Outcome::Continue(Some(pkg)))
+}
+
+pub enum Op {
+    Write(WriteEvents),
+}
+
+impl Op {
+    // FIXME - Currently, I don't know how to encode existential types so it
+    // can be shared across several threads.
+    pub fn to_operation(self) -> Box<Operation> {
+        match self {
+            Op::Write(w) => Box::new(w)
+        }
+    }
 }
 
 pub trait Operation {
-    fn create(&self, correlation: Uuid) -> Pkg;
-    fn inspect(&mut self, pkg: &Pkg) -> Decision;
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision;
 }
 
-pub trait Promise<A> {
-    fn accept(&self, result: A);
-    fn reject(&self, error: OperationError);
+enum State {
+    CreatePkg,
+    Awainting,
 }
 
 pub struct WriteEvents {
     inner: messages::WriteEvents,
-    promise: Box<Promise<WriteResult>>,
+    promise: Promise<WriteResult>,
+    state: State,
 }
 
 impl WriteEvents {
-    pub fn new(promise: Box<Promise<WriteResult>>) -> WriteEvents {
+    pub fn new(promise: Promise<WriteResult>) -> WriteEvents {
         WriteEvents {
             inner: messages::WriteEvents::new(),
-            promise: promise,
+            promise,
+            state: State::CreatePkg,
         }
     }
 
@@ -77,82 +146,91 @@ impl WriteEvents {
 }
 
 impl Operation for WriteEvents {
-    fn create(&self, correlation: Uuid) -> Pkg {
-        let mut pkg     = Pkg::new(Cmd::WriteEvents, correlation);
-        let mut payload = Vec::new();
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let mut pkg     = Pkg::new(Cmd::WriteEvents, Uuid::new_v4());
+                let mut payload = Vec::new();
 
-        self.inner.write_to_vec(&mut payload).unwrap();
+                self.inner.write_to_vec(&mut payload)?;
 
-        pkg.set_payload(payload);
+                pkg.set_payload(payload);
 
-        pkg
-    }
-
-    fn inspect(&mut self, pkg: &Pkg) -> Decision {
-        match pkg.cmd {
-            Cmd::WriteEventsCompleted => {
-                let response: messages::WriteEventsCompleted =
-                        parse_from_bytes(&pkg.payload.as_slice()).unwrap();
-
-                match response.get_result() {
-                    OperationResult::Success => {
-                        let position = Position {
-                            commit: response.get_commit_position(),
-                            prepare: response.get_prepare_position(),
-                        };
-
-                        let result = WriteResult {
-                            next_expected_version: response.get_current_version(),
-                            position: position,
-                        };
-
-                        self.promise.accept(result);
-
-                        Decision::Done
-                    },
-
-                    OperationResult::PrepareTimeout => Decision::Continue,
-                    OperationResult::ForwardTimeout => Decision::Continue,
-                    OperationResult::CommitTimeout  => Decision::Continue,
-
-                    OperationResult::WrongExpectedVersion => {
-                        let stream_id = self.inner.get_event_stream_id().to_string();
-                        let exp_i64   = self.inner.get_expected_version();
-                        let exp       = ExpectedVersion::from_i64(exp_i64);
-
-                        self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
-
-                        Decision::Done
-                    },
-
-                    OperationResult::StreamDeleted => {
-                        let stream_id = self.inner.get_event_stream_id().to_string();
-
-                        self.promise.reject(OperationError::StreamDeleted(stream_id));
-
-                        Decision::Done
-                    },
-
-                    OperationResult::InvalidTransaction => {
-                        self.promise.reject(OperationError::InvalidTransaction);
-
-                        Decision::Done
-                    }
-
-                    OperationResult::AccessDenied => {
-                        let stream_id = self.inner.get_event_stream_id().to_string();
-
-                        self.promise.reject(OperationError::AccessDenied(stream_id));
-
-                        Decision::Done
-                    },
-                }
+                self.state = State::Awainting;
+                op_send(pkg)
             },
 
-            _ => {
-                self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+            State::Awainting => {
+                if let Some(pkg) = input {
+                    match pkg.cmd {
+                        Cmd::WriteEventsCompleted => {
+                            let response: messages::WriteEventsCompleted =
+                                    parse_from_bytes(&pkg.payload.as_slice())?;
 
-                Decision::Done
+                            match response.get_result() {
+                                OperationResult::Success => {
+                                    let position = Position {
+                                        commit: response.get_commit_position(),
+                                        prepare: response.get_prepare_position(),
+                                    };
+
+                                    let result = WriteResult {
+                                        next_expected_version: response.get_current_version(),
+                                        position: position,
+                                    };
+
+                                    self.promise.accept(result);
+
+                                    op_done()
+                                },
+
+                                OperationResult::PrepareTimeout => op_continue(),
+                                OperationResult::ForwardTimeout => op_continue(),
+                                OperationResult::CommitTimeout  => op_continue(),
+
+                                OperationResult::WrongExpectedVersion => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let exp_i64   = self.inner.get_expected_version();
+                                    let exp       = ExpectedVersion::from_i64(exp_i64);
+
+                                    self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
+
+                                    op_done()
+                                },
+
+                                OperationResult::StreamDeleted => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+
+                                    self.promise.reject(OperationError::StreamDeleted(stream_id));
+
+                                    op_done()
+                                },
+
+                                OperationResult::InvalidTransaction => {
+                                    // self.promise.reject(OperationError::InvalidTransaction);
+
+                                    op_done()
+                                }
+
+                                OperationResult::AccessDenied => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+
+                                    self.promise.reject(OperationError::AccessDenied(stream_id));
+
+                                    op_done()
+                                },
+                            }
+                        },
+
+                        _ => {
+                            self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+
+                            op_done()
+                        },
+                    }
+                } else {
+                    op_done()
+                }
             },
         }
     }

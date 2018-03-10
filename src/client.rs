@@ -15,6 +15,7 @@ use internal::connection::Connection;
 use internal::endpoint::Endpoint;
 use internal::messaging::Msg;
 use internal::messages;
+use internal::operations;
 use internal::package::Pkg;
 use internal::registry::{ Registry, Outcome };
 use internal::types::{ Credentials, Settings };
@@ -386,12 +387,15 @@ impl Driver {
                     Cmd::HeartbeatResponse => (),
 
                     _ => {
-                        if self.registry.handle(&pkg) {
-                            println!("Package [{}] received: command [{}].",
-                                pkg.correlation, pkg.cmd.to_u8())
-                        } else {
-                            println!("Package [{}] not handled: command [{}].",
-                                pkg.correlation, pkg.cmd.to_u8())
+                        // It will be always 'Some' when receiving a package.
+                        if let Some(ref conn) = self.candidate {
+                            if self.registry.handle(&pkg, conn) {
+                                println!("Package [{}] received: command [{}].",
+                                    pkg.correlation, pkg.cmd.to_u8())
+                            } else {
+                                println!("Package [{}] not handled: command [{}].",
+                                    pkg.correlation, pkg.cmd.to_u8())
+                            }
                         }
                     },
                 }
@@ -545,6 +549,10 @@ impl Client {
                             return Err(())
                         }
                     },
+
+                    Msg::NewOp(_) => {
+                        println!("New operation has been submitted!");
+                    }
                 };
 
                 Ok(())
@@ -562,6 +570,11 @@ impl Client {
 
     pub fn start(&self) {
         self.sender.clone().send(Msg::Start).wait().unwrap();
+    }
+
+    pub fn write_events(&self, stream_id: String) {
+        let (rcv, promise) = operations::Promise::new(500);
+        let op             = operations::WriteEvents::new(promise);
     }
 
     pub fn shutdown(&self) {
