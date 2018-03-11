@@ -100,6 +100,7 @@ impl Op {
 
 pub trait Operation {
     fn poll(&mut self, input: Option<&Pkg>) -> Decision;
+    fn failed(&mut self, error: OperationError);
 }
 
 enum State {
@@ -233,5 +234,9 @@ impl Operation for WriteEvents {
                 }
             },
         }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error);
     }
 }

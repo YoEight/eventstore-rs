@@ -5,22 +5,28 @@ use futures::Async;
 use uuid::Uuid;
 
 use internal::connection::Connection;
-use internal::operations::{ Operation, Decision };
+use internal::operations::{ Operation, Decision, OperationError };
 use internal::package::Pkg;
 use internal::types::{ Settings, Retry };
 
 struct Register {
+    // When the operation has started.
     started: Instant,
+
+    // How many times, that operation has been tried so far.
     tries: u32,
+
     // Lasting session are meant for special operation like subscriptions which
     // usually keep the same correlation until the end of the universe, unless
     // if the user want to unsubscribe.
-    // FIXME - Use the last connection id instead. If presents, it would mean
-    // the operation is in lasting session. Having the last connection id
-    // will help us to close the session if the connection has dropped (or the
-    // the cluster asked to connect to a different node). If, the connection
-    // has changed, it means we have to close the session.
     lasting_session: bool,
+
+    // When the operation has sent its request to server, indicates what was
+    // the connection id. If it's 'None', it means the operation didn't sent
+    // anything yet.
+    conn_id: Option<Uuid>,
+
+    // Actual operation state-machine.
     op: Box<Operation>,
 }
 
@@ -29,9 +35,25 @@ pub enum Outcome {
     NotHandled,
 }
 
-enum Checking {
-    Delete(Uuid),
-    Retry(Uuid),
+struct Checking {
+    key: Uuid,
+    is_retry: bool,
+}
+
+impl Checking {
+    fn delete(id: Uuid) -> Checking {
+        Checking {
+            key: id,
+            is_retry: false,
+        }
+    }
+
+    fn retry(id: Uuid) -> Checking {
+        Checking {
+            key: id,
+            is_retry: true,
+        }
+    }
 }
 
 impl Register {
@@ -40,6 +62,7 @@ impl Register {
             started: Instant::now(),
             tries: 0,
             lasting_session: false,
+            conn_id: None,
             op: op,
         }
     }
@@ -82,6 +105,7 @@ impl Registry {
                 if let Some(pkg) = outcome.produced_pkg() {
                     reg.tries  += 1;
                     reg.started = Instant::now();
+                    reg.conn_id = Some(conn.id);
                     self.pending.insert(pkg.correlation, reg);
                     conn.enqueue(pkg);
                 }
@@ -110,6 +134,7 @@ impl Registry {
                             // In case the operation was previously in a long
                             // term transaction.
                             reg.lasting_session = false;
+                            reg.conn_id         = Some(conn.id);
 
                             conn.enqueue(new);
                         } else {
@@ -141,17 +166,27 @@ impl Registry {
         }
 
         for (key, reg) in self.pending.iter() {
-            if reg.started.elapsed() >= self.operation_timeout && !reg.lasting_session {
+            let not_same_conn = reg.conn_id != Some(conn.id);
+            let has_timeout   = reg.started.elapsed() >= self.operation_timeout;
+
+            if (has_timeout && !reg.lasting_session) || not_same_conn {
+                // Basically, we have a subscription and the connection has
+                // changed since the subscription has been confirmed.
+                if reg.lasting_session {
+                    to_process.push(Checking::delete(*key));
+                    continue
+                }
+
                 match self.operation_retry {
                     Retry::Undefinately => {
-                        to_process.push(Checking::Retry(*key));
+                        to_process.push(Checking::retry(*key));
                     }
 
                     Retry::Only(n) => {
                         if reg.tries + 1 > n {
-                            to_process.push(Checking::Delete(*key));
+                            to_process.push(Checking::delete(*key));
                         } else {
-                            to_process.push(Checking::Retry(*key));
+                            to_process.push(Checking::retry(*key));
                         }
                     },
                 }
@@ -159,16 +194,12 @@ impl Registry {
         }
 
         for status in to_process {
-            match status {
-                Checking::Delete(key) => {
-                    self.pending.remove(&key);
-                },
-
-                Checking::Retry(key) => {
-                    if let Some(reg) = self.pending.remove(&key) {
-                        self.send_register(conn, reg);
-                    }
-                },
+            if let Some(mut reg) = self.pending.remove(&status.key) {
+                if status.is_retry {
+                    self.send_register(conn, reg);
+                } else {
+                    reg.op.failed(OperationError::Aborted);
+                }
             }
         }
     }
