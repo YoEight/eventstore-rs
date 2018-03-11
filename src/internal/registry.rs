@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::time::{ Duration, Instant };
 
-use futures::Async;
 use uuid::Uuid;
 
 use internal::connection::Connection;
-use internal::operations::{ Operation, Decision, OperationError };
+use internal::operations::{ Operation, OperationError };
 use internal::package::Pkg;
 use internal::types::{ Settings, Retry };
 
@@ -148,7 +147,9 @@ impl Registry {
                 },
 
                 Err(e) => {
-                    println!("Bad things happened: {}", e);
+                    let msg = format!("Exception raised: {}", e);
+
+                    reg.op.failed(OperationError::InvalidOperation(msg));
                 },
             }
 

@@ -68,7 +68,7 @@ impl Pkg {
 
         msg.set_connection_name(name);
         msg.set_version(CLIENT_VERSION);
-        msg.write_to_vec(&mut pkg.payload);
+        msg.write_to_vec(&mut pkg.payload).unwrap();
 
         pkg
     }

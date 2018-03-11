@@ -47,6 +47,7 @@ impl Settings {
     }
 }
 
+#[derive(Debug)]
 pub enum ExpectedVersion {
     Any,
     StreamExists,

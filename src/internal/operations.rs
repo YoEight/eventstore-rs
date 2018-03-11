@@ -1,6 +1,5 @@
 use uuid::Uuid;
 
-use futures::{ Async, Poll };
 use futures::sync::mpsc;
 use protobuf::{ RepeatedField, Message };
 use protobuf::core::parse_from_bytes;
@@ -9,10 +8,11 @@ use internal::command::Cmd;
 use internal::data::EventData;
 use internal::messages;
 use internal::package::Pkg;
-use internal::types::{ ExpectedVersion, Position, WriteResult };
+use internal::types::{ ExpectedVersion, Position, WriteResult, Credentials };
 
 use self::messages::OperationResult;
 
+#[derive(Debug)]
 pub enum OperationError {
     WrongExpectedVersion(String, ExpectedVersion),
     StreamDeleted(String),
@@ -101,24 +101,27 @@ impl Op {
 pub trait Operation {
     fn poll(&mut self, input: Option<&Pkg>) -> Decision;
     fn failed(&mut self, error: OperationError);
+    fn retry(&mut self);
 }
 
 enum State {
     CreatePkg,
-    Awainting,
+    Awaiting,
 }
 
 pub struct WriteEvents {
     inner: messages::WriteEvents,
     promise: Promise<WriteResult>,
+    creds: Option<Credentials>,
     state: State,
 }
 
 impl WriteEvents {
-    pub fn new(promise: Promise<WriteResult>) -> WriteEvents {
+    pub fn new(promise: Promise<WriteResult>, creds: Option<Credentials>) -> WriteEvents {
         WriteEvents {
             inner: messages::WriteEvents::new(),
             promise,
+            creds,
             state: State::CreatePkg,
         }
     }
@@ -156,12 +159,13 @@ impl Operation for WriteEvents {
                 self.inner.write_to_vec(&mut payload)?;
 
                 pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
 
-                self.state = State::Awainting;
+                self.state = State::Awaiting;
                 op_send(pkg)
             },
 
-            State::Awainting => {
+            State::Awaiting => {
                 if let Some(pkg) = input {
                     match pkg.cmd {
                         Cmd::WriteEventsCompleted => {
@@ -176,7 +180,7 @@ impl Operation for WriteEvents {
                                     };
 
                                     let result = WriteResult {
-                                        next_expected_version: response.get_current_version(),
+                                        next_expected_version: response.get_last_event_number(),
                                         position: position,
                                     };
 
@@ -238,5 +242,9 @@ impl Operation for WriteEvents {
 
     fn failed(&mut self, error: OperationError) {
         self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::Awaiting;
     }
 }

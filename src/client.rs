@@ -4,23 +4,21 @@ use std::net::SocketAddrV4;
 use std::thread::{ spawn, JoinHandle };
 use std::time::{ Duration, Instant };
 
-use futures::{ Async, Poll, Future, Stream, Sink };
-use futures::sync::mpsc::{ Sender, Receiver, channel };
+use futures::{ Future, Stream, Sink };
+use futures::sync::mpsc::{ Sender, channel };
 use tokio_core::reactor::{ Core, Handle };
 use tokio_timer::Timer;
 use uuid::Uuid;
 
 use internal::command::Cmd;
 use internal::connection::Connection;
+use internal::data::EventData;
 use internal::endpoint::Endpoint;
 use internal::messaging::Msg;
-use internal::messages;
-use internal::operations;
+use internal::operations::{ self, Op, OperationError };
 use internal::package::Pkg;
-use internal::registry::{ Registry, Outcome };
-use internal::types::{ Credentials, Settings };
-
-use protobuf;
+use internal::registry::Registry;
+use internal::types::{ Credentials, Settings, ExpectedVersion, WriteResult };
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
@@ -114,6 +112,12 @@ enum ConnectionState {
     Closed,
 }
 
+impl ConnectionState {
+    fn is_connected(&self) -> bool {
+        *self == ConnectionState::Connected
+    }
+}
+
 struct InitReq {
     correlation: Uuid,
     started: Instant,
@@ -147,13 +151,6 @@ impl Attempt {
         Attempt {
             started: Instant::now(),
             tries: 0,
-        }
-    }
-
-    fn new_try(&self) -> Attempt {
-        Attempt {
-            started: Instant::now(),
-            tries: self.tries + 1,
         }
     }
 }
@@ -239,7 +236,6 @@ impl Driver {
         self.state       = ConnectionState::Connecting;
         self.phase       = Phase::Reconnecting;
 
-        let tx          = self.sender.clone();
         let tick_period = Duration::from_millis(200);
         let tick        = Timer::default().interval(tick_period).map_err(|_| ());
 
@@ -357,20 +353,27 @@ impl Driver {
         self.tracker.incr_pkg_num();
 
         if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
-            if let Some(ref conn) = self.candidate {
-                println!("Connection identified: {}.", conn.id);
-            }
+            if let Some(req) = self.init_req_opt.take() {
+                if req.correlation == pkg.correlation {
+                    if let Some(ref conn) = self.candidate {
+                        println!("Connection identified: {}.", conn.id);
+                    }
 
-            self.init_req_opt         = None;
-            self.attempt_opt          = None;
-            self.last_operation_check = Instant::now();
-            self.state                = ConnectionState::Connected;
+                    self.attempt_opt          = None;
+                    self.last_operation_check = Instant::now();
+                    self.state                = ConnectionState::Connected;
+                }
+            }
         } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
-            if pkg.cmd == Cmd::NotAuthenticated {
-                println!("Not authenticated.");
-            }
+            if let Some(req) = self.init_req_opt.take(){
+                if req.correlation == pkg.correlation {
+                    if pkg.cmd == Cmd::NotAuthenticated {
+                        println!("Not authenticated.");
+                    }
 
-            self.identify_client();
+                    self.identify_client();
+                }
+            }
         } else {
             if self.state == ConnectionState::Connected {
                 match pkg.cmd {
@@ -401,6 +404,21 @@ impl Driver {
                 }
             }
         }
+    }
+
+    fn on_new_op(&mut self, op: Op) {
+        let operation = op.to_operation();
+
+        let conn_opt = {
+            if self.state.is_connected() {
+                // Will be always 'Some' when connected.
+                self.candidate.as_ref()
+            } else {
+                None
+            }
+        };
+
+        self.registry.register(operation, conn_opt);
     }
 
     fn has_init_req_timeout(&self) -> bool {
@@ -499,6 +517,8 @@ impl Driver {
     }
 }
 
+type Task<A> = Box<Future<Item=A, Error=OperationError>>;
+
 pub struct Client {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
@@ -550,8 +570,8 @@ impl Client {
                         }
                     },
 
-                    Msg::NewOp(_) => {
-                        println!("New operation has been submitted!");
+                    Msg::NewOp(op) => {
+                        driver.on_new_op(op);
                     }
                 };
 
@@ -572,9 +592,44 @@ impl Client {
         self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
-    pub fn write_events(&self, stream_id: String) {
+    pub fn write_events(
+        &self,
+        stream_id: String,
+        events: Vec<EventData>,
+        require_master: bool,
+        version: ExpectedVersion,
+        creds: Option<Credentials>) -> Task<WriteResult> {
+
         let (rcv, promise) = operations::Promise::new(500);
-        let op             = operations::WriteEvents::new(promise);
+        let mut op         = operations::WriteEvents::new(promise, creds);
+
+
+        op.set_event_stream_id(stream_id);
+        op.set_expected_version(version);
+        op.set_events(events);
+        op.set_require_master(require_master);
+
+        self.sender.clone().send(Msg::NewOp(Op::Write(op))).wait().unwrap();
+
+        let fut = rcv.take(1).collect().then(|res| {
+            match res {
+                Ok(mut xs) => xs.remove(0),
+                _          => unreachable!(),
+            }
+        });
+
+        Box::new(fut)
+    }
+
+    pub fn write_event(
+        &self,
+        stream_id: String,
+        event: EventData,
+        require_master: bool,
+        version: ExpectedVersion,
+        creds: Option<Credentials>) -> Task<WriteResult> {
+
+        self.write_events(stream_id, vec![event], require_master, version, creds)
     }
 
     pub fn shutdown(&self) {

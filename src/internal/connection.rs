@@ -1,12 +1,9 @@
-use std::io::{ self, Write, Read, Cursor };
+use std::io::{ self, Read, Cursor };
 use std::net::{ SocketAddr, SocketAddrV4 };
-use std::string::FromUtf8Error;
-use std::thread::{ JoinHandle, spawn };
 
 use bytes::{ Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Sender, Receiver, channel };
-use futures::future::{ self, lazy };
+use futures::sync::mpsc::{ Sender, channel };
 use tokio_io::AsyncRead;
 use tokio_io::codec::{ Decoder, Encoder };
 use tokio_core::net::TcpStream;
@@ -15,7 +12,7 @@ use uuid::{ Uuid, ParseError };
 
 use internal::command::Cmd;
 use internal::messaging::Msg;
-use internal::package::{ Pkg, PKG_MANDATORY_SIZE };
+use internal::package::Pkg;
 use internal::types::Credentials;
 
 pub struct Connection {
@@ -46,11 +43,6 @@ enum DecodeState {
 
 fn decode_parse_error(err: ParseError) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("ParseError {}", err))
-}
-
-fn decode_utf8_error(err: FromUtf8Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other,
-        format!("Wrong UTF-8 parsing: {}", err))
 }
 
 impl Decoder for PkgCodec {

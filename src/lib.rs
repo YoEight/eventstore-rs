@@ -10,18 +10,33 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_timer;
 
+#[macro_use]
+extern crate serde_json;
+
 // #[macro_use]
 // extern crate log;
 
-mod internal;
+pub mod internal;
 pub mod client;
+// pub mod internal {
+//     mod command;
+//     mod messages;
+//     mod messaging;
+//     mod operations;
+//     mod package;
+//     pub mod types;
+//     mod registry;
+// }
 
 #[cfg(test)]
 mod tests {
     use std::thread;
     use std::time::Duration;
+    use futures::Future;
     use client::Client;
-    use internal::types::{ Credentials, Settings };
+    use internal::types::{ Credentials, Settings, ExpectedVersion };
+    use internal::data::EventData;
+    use serde_json;
 
     #[test]
     fn it_works() {
@@ -35,8 +50,21 @@ mod tests {
 
         client.start();
 
-        loop {
-            thread::sleep(Duration::from_millis(1000));
-        }
+        let foo = json!({
+            "is_rust_a_nice_language": true,
+            "is_haskell_still_better": true,
+        });
+
+        let payload = EventData::new_json(None, "foo-type".to_owned(), foo);
+
+        let fut = client.write_event("languages".to_owned(), payload, true,ExpectedVersion::Any, None);
+
+        let result = fut.wait().unwrap();
+
+        println!("Write response: {:?}", result);
+
+        // loop {
+        //     thread::sleep(Duration::from_millis(1000));
+        // }
     }
 }
