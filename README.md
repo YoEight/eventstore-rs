@@ -8,7 +8,7 @@ Rust GetEventStore TCP Client.
 - [x] Can connect to GetEventStore 4.* servers.
 - [x] Connection health tracking.
 - [x] Operation timeout detection and retry.
-- [ ] Write events.
+- [x] Write events.
 - [ ] Read events.
 - [ ] Read/Write stream metadata.
 - [ ] Transactions.
