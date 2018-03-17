@@ -611,14 +611,7 @@ impl Client {
 
         self.sender.clone().send(Msg::NewOp(Op::Write(op))).wait().unwrap();
 
-        let fut = rcv.take(1).collect().then(|res| {
-            match res {
-                Ok(mut xs) => xs.remove(0),
-                _          => unreachable!(),
-            }
-        });
-
-        Box::new(fut)
+        single_value_future(rcv)
     }
 
     pub fn write_event(
@@ -643,4 +636,17 @@ impl Client {
 
 fn heartbeat_timeout_error() -> Error {
     Error::new(ErrorKind::Other, "Heartbeat timeout error.")
+}
+
+fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
+    where S: Stream<Item = Result<A, OperationError>, Error = ()>
+{
+    let fut = stream.take(1).collect().then(|res| {
+        match res {
+            Ok(mut xs) => xs.remove(0),
+            _          => unreachable!(),
+        }
+    });
+
+    Box::new(fut)
 }
