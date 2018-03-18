@@ -34,7 +34,7 @@ mod tests {
     use std::time::Duration;
     use futures::Future;
     use client::Client;
-    use internal::types::{ Credentials, Settings, ExpectedVersion };
+    use internal::types::{ self, Credentials, Settings, ExpectedVersion };
     use internal::data::EventData;
     use serde_json;
 
@@ -62,6 +62,22 @@ mod tests {
         let result = fut.wait().unwrap();
 
         println!("Write response: {:?}", result);
+
+        let fut    = client.read_event("languages".to_owned(), 0, true, true, None);
+        let result = fut.wait().unwrap();
+
+        println!("Read response: {:?}", result);
+
+        match result {
+            types::ReadEventStatus::Success(ref res) => {
+                let event = res.event.get_original_event().unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&event.data).unwrap();
+
+                println!("Payload as JSON {:?}", value);
+            },
+
+            _ => unreachable!(),
+        }
 
         // loop {
         //     thread::sleep(Duration::from_millis(1000));

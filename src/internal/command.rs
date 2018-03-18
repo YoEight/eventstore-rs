@@ -9,6 +9,8 @@ pub enum Cmd {
     NotAuthenticated,
     WriteEvents,
     WriteEventsCompleted,
+    ReadEvent,
+    ReadEventCompleted,
     Unknown(u8),
 }
 
@@ -32,6 +34,8 @@ impl Cmd {
             Cmd::NotAuthenticated     => 0xF4,
             Cmd::WriteEvents          => 0x82,
             Cmd::WriteEventsCompleted => 0x83,
+            Cmd::ReadEvent            => 0xB0,
+            Cmd::ReadEventCompleted   => 0xB1,
             Cmd::Unknown(cmd)         => cmd,
         }
     }
@@ -47,6 +51,8 @@ impl Cmd {
             0xF4 => Cmd::NotAuthenticated,
             0x82 => Cmd::WriteEvents,
             0x83 => Cmd::WriteEventsCompleted,
+            0xB0 => Cmd::ReadEvent,
+            0xB1 => Cmd::ReadEventCompleted,
             _    => Cmd::Unknown(cmd),
         }
     }

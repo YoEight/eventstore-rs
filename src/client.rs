@@ -18,7 +18,7 @@ use internal::messaging::Msg;
 use internal::operations::{ self, Op, OperationError };
 use internal::package::Pkg;
 use internal::registry::Registry;
-use internal::types::{ Credentials, Settings, ExpectedVersion, WriteResult };
+use internal::types::{ self, Credentials, Settings, ExpectedVersion, WriteResult };
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
@@ -623,6 +623,27 @@ impl Client {
         creds: Option<Credentials>) -> Task<WriteResult> {
 
         self.write_events(stream_id, vec![event], require_master, version, creds)
+    }
+
+    pub fn read_event(
+        &self,
+        stream_id: String,
+        event_number: i64,
+        resolve_link_tos: bool,
+        require_master: bool,
+        creds: Option<Credentials>) -> Task<types::ReadEventStatus<types::ReadEventResult>>
+    {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op         = operations::ReadEvent::new(promise, creds);
+
+        op.set_event_stream_id(stream_id);
+        op.set_event_number(event_number);
+        op.set_resolve_link_tos(resolve_link_tos);
+        op.set_require_master(require_master);
+
+        self.sender.clone().send(Msg::NewOp(Op::Read(op))).wait().unwrap();
+
+        single_value_future(rcv)
     }
 
     pub fn shutdown(&self) {
