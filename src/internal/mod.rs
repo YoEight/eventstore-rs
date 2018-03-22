@@ -8,3 +8,4 @@ pub mod package;
 pub mod messages;
 pub mod registry;
 pub mod types;
+pub mod timespan;
