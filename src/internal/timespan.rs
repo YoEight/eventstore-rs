@@ -2,6 +2,65 @@ pub struct Timespan {
     pub ticks: i64
 }
 
+pub struct Builder {
+    days: i64,
+    hours: i64,
+    minutes: i64,
+    seconds: i64,
+    milliseconds: i64,
+}
+
+impl Builder {
+    fn new() -> Builder {
+        Builder {
+            days: 0,
+            hours: 0,
+            minutes: 0,
+            seconds: 0,
+            milliseconds: 0,
+        }
+    }
+
+    pub fn days(&mut self, days: i64) -> &mut Builder {
+        self.days = days;
+
+        self
+    }
+
+    pub fn hours(&mut self, hours: i64) -> &mut Builder {
+        self.hours = hours;
+
+        self
+    }
+
+    pub fn minutes(&mut self, minutes: i64) -> &mut Builder {
+        self.minutes = minutes;
+
+        self
+    }
+
+    pub fn seconds(&mut self, seconds: i64) -> &mut Builder {
+        self.seconds = seconds;
+
+        self
+    }
+
+    pub fn milliseconds(&mut self, milliseconds: i64) -> &mut Builder {
+        self.milliseconds = milliseconds;
+
+        self
+    }
+
+    pub fn build(&self) -> Timespan {
+        let total_millis = self.days * 24 * 3600 + self.hours * 3600 + self.minutes * 60 + self.seconds;
+        let total_millis = total_millis * 1000;
+        let total_millis = total_millis + self.milliseconds;
+        let ticks        = total_millis * TICKS_PER_MILLIS;
+
+        Timespan::from_ticks(ticks)
+    }
+}
+
 impl Timespan {
     pub fn from_ticks(ticks: i64) -> Timespan {
         Timespan {
@@ -9,24 +68,8 @@ impl Timespan {
         }
     }
 
-    pub fn from_hours_mins_secs(hours: i64,  minutes: i64, seconds: i64) -> Timespan {
-        let total_secs = hours * 3600 + minutes * 60 + seconds;
-        let ticks      = total_secs * TICKS_PER_SECONDS;
-
-        Timespan::from_ticks(ticks)
-    }
-
-    pub fn from_days_hours_mins_secs(days: i64, hours: i64, minutes: i64, seconds: i64) -> Timespan {
-        Timespan::from_days_hours_mins_secs_millis(days, hours, minutes, seconds, 0)
-    }
-
-    pub fn from_days_hours_mins_secs_millis(days: i64, hours: i64, minutes: i64, seconds: i64, milliseconds: i64) -> Timespan {
-        let total_millis = days * 24 * 3600 + hours * 3600 + minutes * 60 + seconds;
-        let total_millis = total_millis * 1000;
-        let total_millis = total_millis + milliseconds;
-        let ticks        = total_millis * TICKS_PER_MILLIS;
-
-        Timespan::from_ticks(ticks)
+    pub fn new_builder() -> Builder {
+        Builder::new()
     }
 
     pub fn days(&self) -> i64 {
