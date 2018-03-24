@@ -10,6 +10,7 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_timer;
 
+extern crate serde;
 #[macro_use]
 extern crate serde_json;
 
