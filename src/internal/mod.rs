@@ -4,6 +4,7 @@ pub mod connection;
 pub mod data;
 pub mod endpoint;
 pub mod messaging;
+pub mod metadata;
 pub mod operations;
 pub mod package;
 pub mod messages;
