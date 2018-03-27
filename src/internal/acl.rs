@@ -1,4 +1,4 @@
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct StreamAcl {
     #[serde(rename = "$r")]
     pub read_roles: Vec<String>,

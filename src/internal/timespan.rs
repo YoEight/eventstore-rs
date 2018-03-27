@@ -1,3 +1,5 @@
+/// This module will probably be deleted. There is no reason
+/// to bring .NET madness into Rust.
 use std::borrow::Borrow;
 use time::Duration;
 use serde::de::{ self, Visitor, Deserializer, Deserialize };
