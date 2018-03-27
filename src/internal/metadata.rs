@@ -126,6 +126,12 @@ pub struct StreamMetadata {
     pub custom_properties: HashMap<String, Value>,
 }
 
+impl StreamMetadata {
+    pub fn new_builder() -> Builder {
+        Builder::new()
+    }
+}
+
 fn duration_str_repr(duration: &Duration) -> String {
     let mut builder      = String::new();
     let     days         = duration.num_days();
