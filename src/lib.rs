@@ -39,6 +39,7 @@ mod tests {
     use internal::types::{ self, Credentials, Settings, ExpectedVersion };
     use internal::data::EventData;
     use internal::metadata::StreamMetadata;
+    use internal::timespan::Timespan;
     use serde_json;
     use time::Duration;
 
@@ -61,7 +62,7 @@ mod tests {
 
         let payload = EventData::new_json(None, "foo-type".to_owned(), foo);
 
-        let fut = client.write_event("languages".to_owned(), payload, true,ExpectedVersion::Any, None);
+        let fut = client.write_event("languages".to_owned(), payload, true, ExpectedVersion::Any, None);
 
         let result = fut.wait().unwrap();
 
@@ -83,13 +84,25 @@ mod tests {
             _ => unreachable!(),
         }
 
-        let mut builder = StreamMetadata::new_builder();
+        let mut builder = StreamMetadata::builder();
+        let mut timespan =
+            Timespan::builder()
+                .hours(2)
+                .milliseconds(300)
+                .build();
+
         builder
-            .max_age(Duration::hours(2))
+            .max_age(timespan)
             .max_count(1000);
 
         let metadata = builder.build();
-        // loop {
+
+        let result = client.write_stream_metadata(
+                "languages".to_owned(), metadata, true, ExpectedVersion::Any, None);
+
+        let result = result.wait().unwrap();
+
+        println!("Write stream metadata {:?}", result);
         //     thread::sleep(Duration::from_millis(1000));
         // }
     }

@@ -1,5 +1,3 @@
-/// This module will probably be deleted. There is no reason
-/// to bring .NET madness into Rust.
 use std::borrow::Borrow;
 use time::Duration;
 use serde::de::{ self, Visitor, Deserializer, Deserialize };
@@ -76,38 +74,50 @@ impl Timespan {
     }
 
     pub fn from_duration(duration: Duration) -> Timespan {
-        let mut builder = Timespan::new_builder();
+        let mut builder = Timespan::builder();
 
-        builder.days(duration.num_days() as u64)
-               .hours(duration.num_hours() as u64)
-               .minutes(duration.num_minutes() as u64)
-               .seconds(duration.num_seconds() as u64)
-               .milliseconds(duration.num_milliseconds() as u64)
+        builder.milliseconds(duration.num_milliseconds() as u64)
                .build()
     }
 
-    pub fn new_builder() -> Builder {
+    pub fn builder() -> Builder {
         Builder::new()
     }
 
     pub fn days(&self) -> u64 {
-        ((self.ticks as f64) / DAYS_PER_TICK) as u64
+        self.ticks / TICKS_PER_DAY
     }
 
     pub fn hours(&self) -> u64 {
-        (((self.ticks as f64) / HOURS_PER_TICK) as u64) % 24
+        (self.ticks / TICKS_PER_HOUR) % 24
     }
 
     pub fn minutes(&self) -> u64 {
-        (((self.ticks as f64) / MINUTES_PER_TICK) as u64) % 60
+        (self.ticks / TICKS_PER_MINUTE) % 60
     }
 
     pub fn seconds(&self) -> u64 {
-        (((self.ticks as f64) / SECONDS_PER_TICK) as u64) % 60
+        (self.ticks / TICKS_PER_SECONDS) % 60
     }
 
     pub fn milliseconds(&self) -> u64 {
-        (((self.ticks as f64) / MILLIS_PER_TICK) as u64) % 1000
+        (self.ticks / TICKS_PER_MILLIS) % 1000
+    }
+
+    pub fn total_milliseconds(&self) -> u64 {
+        let millis = ((self.ticks as f64) * MILLIS_PER_TICK) as u64;
+
+        if millis > MAX_MILLIS {
+            MAX_MILLIS
+        } else {
+            millis
+        }
+    }
+
+    /// Potential precision lost. Unfortunately, nothing can be done here. .NET Timespon uses
+    /// `u64`. We expose a `Duration` to easily integrate with current Rust ecosystem.
+    pub fn to_duration(&self) -> Duration {
+        Duration::milliseconds(self.total_milliseconds() as i64)
     }
 
     fn str_repr(&self) -> String {
@@ -116,7 +126,7 @@ impl Timespan {
         let     hours     = self.hours();
         let     minutes   = self.minutes();
         let     seconds   = self.seconds();
-        let     fractions = self.ticks % TICKS_PER_DAY;
+        let     fractions = self.ticks % TICKS_PER_SECONDS;
 
         if days > 0 {
             builder.push_str(format!("{}.", days).borrow());
@@ -181,7 +191,7 @@ impl <'de> Visitor<'de> for ForTimespan {
 
         let mut state   = Parse::Days;
         let mut buffer  = Vec::new();
-        let mut builder = Timespan::new_builder();
+        let mut builder = Timespan::builder();
 
         for c in value.chars() {
             match state {
@@ -239,17 +249,21 @@ impl <'de> Visitor<'de> for ForTimespan {
             }
         }
 
-        let num = to_u32(&buffer);
+        let     num            = to_u32(&buffer);
+        let mut residual_ticks = 0;
 
         // In case the Timespan string representation didn't contain fractions.
         if let Parse::Seconds = state {
             builder.seconds(num as u64);
         } else {
-            // Implement fraction conversion.
-            unimplemented!()
+            residual_ticks = num as u64;
         }
 
-        Ok(builder.build())
+        let mut timespan = builder.build();
+
+        timespan.ticks += residual_ticks;
+
+        Ok(timespan)
     }
 }
 
@@ -274,3 +288,5 @@ const HOURS_PER_TICK: f64 = 1.0 / (TICKS_PER_HOUR as f64);
 const MINUTES_PER_TICK: f64 = 1.0 / (TICKS_PER_MINUTE as f64);
 const SECONDS_PER_TICK: f64 = 1.0 / (TICKS_PER_SECONDS as f64);
 const MILLIS_PER_TICK: f64 = 1.0 / (TICKS_PER_MILLIS as f64);
+
+const MAX_MILLIS: u64 = ::std::u64::MAX / TICKS_PER_MILLIS;
