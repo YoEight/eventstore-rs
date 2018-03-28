@@ -34,12 +34,13 @@ pub mod client;
 #[cfg(test)]
 mod tests {
     use std::thread;
-    use std::time::Duration;
     use futures::Future;
     use client::Client;
     use internal::types::{ self, Credentials, Settings, ExpectedVersion };
     use internal::data::EventData;
+    use internal::metadata::StreamMetadata;
     use serde_json;
+    use time::Duration;
 
     #[test]
     fn it_works() {
@@ -82,6 +83,12 @@ mod tests {
             _ => unreachable!(),
         }
 
+        let mut builder = StreamMetadata::new_builder();
+        builder
+            .max_age(Duration::hours(2))
+            .max_count(1000);
+
+        let metadata = builder.build();
         // loop {
         //     thread::sleep(Duration::from_millis(1000));
         // }

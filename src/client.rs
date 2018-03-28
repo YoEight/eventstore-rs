@@ -19,6 +19,7 @@ use internal::operations::{ self, Op, OperationError };
 use internal::package::Pkg;
 use internal::registry::Registry;
 use internal::types::{ self, Credentials, Settings, ExpectedVersion, WriteResult };
+use internal::metadata::StreamMetadata;
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
@@ -623,6 +624,20 @@ impl Client {
         creds: Option<Credentials>) -> Task<WriteResult> {
 
         self.write_events(stream_id, vec![event], require_master, version, creds)
+    }
+
+    pub fn write_stream_metadata(
+        &self,
+        stream_id: String,
+        metadata: StreamMetadata,
+        require_master: bool,
+        version: ExpectedVersion,
+        creds: Option<Credentials>) -> Task<WriteResult>
+    {
+        let meta_stream = format!("$${}", stream_id);
+        let event       = EventData::new_json(None, "$metadata".to_owned(), metadata);
+
+        self.write_event(meta_stream, event, require_master, version, creds)
     }
 
     pub fn read_event(

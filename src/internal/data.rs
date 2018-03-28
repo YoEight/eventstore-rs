@@ -1,6 +1,7 @@
 use uuid::Uuid;
 
-use serde_json::{ to_vec, Value };
+use serde::ser::Serialize;
+use serde_json::{ to_vec, Value, to_value };
 
 use internal::messages;
 
@@ -9,7 +10,9 @@ pub struct EventData {
 }
 
 impl EventData {
-    pub fn new_json(id_opt: Option<Uuid>, event_type: String, payload: Value) -> EventData {
+    pub fn new_json<V>(id_opt: Option<Uuid>, event_type: String, payload: V) -> EventData
+        where V: Serialize
+    {
         let mut this =
             EventData {
                 inner: messages::NewEvent::new(),
@@ -22,7 +25,7 @@ impl EventData {
 
         this.set_id(id);
         this.set_type(event_type);
-        this.set_json(payload);
+        this.set_json(to_value(payload).unwrap());
         this.inner.set_metadata_content_type(0);
 
         this
