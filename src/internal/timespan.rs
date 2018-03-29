@@ -3,6 +3,7 @@ use time::Duration;
 use serde::de::{ self, Visitor, Deserializer, Deserialize };
 use serde::ser::{ Serialize, Serializer };
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Timespan {
     pub ticks: u64
 }
@@ -178,12 +179,12 @@ impl <'de> Visitor<'de> for ForTimespan {
                 return 0;
             }
 
-            let mut exp    = (vec.len() as u32) - 1;
+            let mut exp    = vec.len() as u32;
             let mut result = 0;
 
             for value in vec {
-                result += value * 10_u32.pow(exp);
                 exp    -= 1;
+                result += value * 10_u32.pow(exp);
             }
 
             result
@@ -202,6 +203,12 @@ impl <'de> Visitor<'de> for ForTimespan {
                         builder.days(num as u64);
                         buffer.clear();
                         state = Parse::Hours;
+                    } else if c == ':' {
+                        let num = to_u32(&buffer);
+
+                        builder.hours(num as u64);
+                        buffer.clear();
+                        state = Parse::Minutes;
                     } else {
                         buffer.push(c.to_digit(BASE_10_RDX).unwrap());
                     }

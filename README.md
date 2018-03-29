@@ -10,7 +10,7 @@ Rust GetEventStore TCP Client.
 - [x] Operation timeout detection and retry.
 - [x] Write events.
 - [x] Read events.
-- [ ] Read/Write stream metadata.
+- [x] Read/Write stream metadata.
 - [ ] Transactions.
 - [ ] Volatile Subscriptions.
 - [ ] Catchup Subscriptions.

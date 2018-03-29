@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use serde::de::Deserialize;
+use serde_json;
 use uuid::{ Uuid, ParseError };
 
 use internal::messages;
@@ -163,6 +165,12 @@ impl RecordedEvent {
         };
 
         Ok(record)
+    }
+
+    pub fn as_json<'a, T>(&'a self) -> serde_json::Result<T>
+        where T: Deserialize<'a>
+    {
+        serde_json::from_slice(self.data.as_slice())
     }
 }
 

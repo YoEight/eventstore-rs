@@ -65,13 +65,13 @@ impl Builder {
             max_age: self.max_age,
             truncate_before: self.truncate_before,
             cache_control: self.cache_control,
-            acl: self.acl.unwrap_or_else(|| Default::default()),
+            acl: self.acl.unwrap_or_default(),
             custom_properties: self.properties,
         }
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct StreamMetadata {
     #[serde(rename = "$maxCount")]
     pub max_count: Option<u64>,

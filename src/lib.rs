@@ -102,7 +102,28 @@ mod tests {
         let result = result.wait().unwrap();
 
         println!("Write stream metadata {:?}", result);
-        //     thread::sleep(Duration::from_millis(1000));
-        // }
+
+        let result = client.read_stream_metadata("languages".to_owned(), None);
+
+        let result = result.wait().unwrap();
+
+        println!("Read stream metadata {:?}", result);
+
+        match result {
+            types::ReadEventStatus::Success(res) => {
+                let read_metadata: StreamMetadata =
+                    res.event
+                        .get_original_event()
+                        .unwrap()
+                        .as_json()
+                        .unwrap();
+
+                let read_max_age = read_metadata.max_age.unwrap();
+
+                assert_eq!(read_max_age, timespan);
+            },
+
+            _ => unreachable!(),
+        }
     }
 }

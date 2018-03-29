@@ -661,6 +661,16 @@ impl Client {
         single_value_future(rcv)
     }
 
+    pub fn read_stream_metadata(
+        &self,
+        stream_id: String,
+        creds: Option<Credentials>) -> Task<types::ReadEventStatus<types::ReadEventResult>>
+    {
+        let meta_stream = format!("$${}", stream_id);
+
+        self.read_event(meta_stream, -1, false, false, creds)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }
