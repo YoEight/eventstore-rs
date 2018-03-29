@@ -84,18 +84,17 @@ mod tests {
             _ => unreachable!(),
         }
 
-        let mut builder = StreamMetadata::builder();
-        let mut timespan =
+        let timespan =
             Timespan::builder()
                 .hours(2)
                 .milliseconds(300)
                 .build();
 
-        builder
+        let metadata = StreamMetadata::builder()
             .max_age(timespan)
-            .max_count(1000);
-
-        let metadata = builder.build();
+            .max_count(1000)
+            .insert_custom_property("foo".to_owned(), "Bar!")
+            .build();
 
         let result = client.write_stream_metadata(
                 "languages".to_owned(), metadata, true, ExpectedVersion::Any, None);

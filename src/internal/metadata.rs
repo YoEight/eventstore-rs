@@ -20,37 +20,37 @@ impl Builder {
         Default::default()
     }
 
-    pub fn max_count(&mut self, value: u64) -> &mut Builder {
+    pub fn max_count(mut self, value: u64) -> Builder {
         self.max_count = Some(value);
 
         self
     }
 
-    pub fn max_age(&mut self, value: Timespan) -> &mut Builder {
+    pub fn max_age(mut self, value: Timespan) -> Builder {
         self.max_age = Some(value);
 
         self
     }
 
-    pub fn truncate_before(&mut self, value: u64) -> &mut Builder {
+    pub fn truncate_before(mut self, value: u64) -> Builder {
         self.truncate_before = Some(value);
 
         self
     }
 
-    pub fn cache_control(&mut self, value: Timespan) -> &mut Builder {
+    pub fn cache_control(mut self, value: Timespan) -> Builder {
         self.cache_control = Some(value);
 
         self
     }
 
-    pub fn acl(&mut self, value: StreamAcl) -> &mut Builder {
+    pub fn acl(mut self, value: StreamAcl) -> Builder {
         self.acl = Some(value);
 
         self
     }
 
-    pub fn insert_custom_property<V>(&mut self, key: String, value: V) -> &mut Builder
+    pub fn insert_custom_property<V>(mut self, key: String, value: V) -> Builder
         where V: Serialize
     {
         let serialized = to_value(value).unwrap();
