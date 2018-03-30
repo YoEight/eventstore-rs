@@ -20,6 +20,7 @@ use internal::package::Pkg;
 use internal::registry::Registry;
 use internal::types::{ self, Credentials, Settings, ExpectedVersion, WriteResult };
 use internal::metadata::StreamMetadata;
+use command;
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
@@ -593,37 +594,8 @@ impl Client {
         self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
-    pub fn write_events(
-        &self,
-        stream_id: String,
-        events: Vec<EventData>,
-        require_master: bool,
-        version: ExpectedVersion,
-        creds: Option<Credentials>) -> Task<WriteResult> {
-
-        let (rcv, promise) = operations::Promise::new(500);
-        let mut op         = operations::WriteEvents::new(promise, creds);
-
-
-        op.set_event_stream_id(stream_id);
-        op.set_expected_version(version);
-        op.set_events(events);
-        op.set_require_master(require_master);
-
-        self.sender.clone().send(Msg::NewOp(Op::Write(op))).wait().unwrap();
-
-        single_value_future(rcv)
-    }
-
-    pub fn write_event(
-        &self,
-        stream_id: String,
-        event: EventData,
-        require_master: bool,
-        version: ExpectedVersion,
-        creds: Option<Credentials>) -> Task<WriteResult> {
-
-        self.write_events(stream_id, vec![event], require_master, version, creds)
+    pub fn write_events(&self, stream: String) -> command::WriteEvents {
+        command::WriteEvents::new(self.sender.clone(), stream)
     }
 
     pub fn write_stream_metadata(
@@ -637,7 +609,9 @@ impl Client {
         let meta_stream = format!("$${}", stream_id);
         let event       = EventData::new_json(None, "$metadata".to_owned(), metadata);
 
-        self.write_event(meta_stream, event, require_master, version, creds)
+        self.write_events(meta_stream)
+            .push_event(event)
+            .execute()
     }
 
     pub fn read_event(

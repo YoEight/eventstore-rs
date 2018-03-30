@@ -55,8 +55,10 @@ pub struct Promise<A> {
     inner: mpsc::Sender<Result<A, OperationError>>,
 }
 
+pub type Receiver<A> = mpsc::Receiver<Result<A, OperationError>>;
+
 impl <A> Promise<A> {
-    pub fn new(buffer: usize) -> (mpsc::Receiver<Result<A, OperationError>>, Promise<A>) {
+    pub fn new(buffer: usize) -> (Receiver<A>, Promise<A>) {
         let (tx, rcv) = mpsc::channel(buffer);
         let this      = Promise { inner: tx };
 

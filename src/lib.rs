@@ -21,6 +21,7 @@ extern crate serde_json;
 
 pub mod internal;
 pub mod client;
+pub mod command;
 // pub mod internal {
 //     mod command;
 //     mod messages;
@@ -60,9 +61,10 @@ mod tests {
             "is_haskell_still_better": true,
         });
 
-        let payload = EventData::new_json(None, "foo-type".to_owned(), foo);
-
-        let fut = client.write_event("languages".to_owned(), payload, true, ExpectedVersion::Any, None);
+        let fut =
+            client.write_events("languages".to_owned())
+                  .push_event(EventData::new_json(None, "foo-type".to_owned(), foo))
+                  .execute();
 
         let result = fut.wait().unwrap();
 
