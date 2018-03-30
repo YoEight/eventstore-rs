@@ -21,12 +21,12 @@ fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
 }
 
 pub struct WriteEvents {
-    pub stream: String,
-    pub events: Vec<EventData>,
-    pub require_master: bool,
-    pub version: types::ExpectedVersion,
-    pub creds: Option<types::Credentials>,
-    pub sender: Sender<Msg>,
+    stream: String,
+    events: Vec<EventData>,
+    require_master: bool,
+    version: types::ExpectedVersion,
+    creds: Option<types::Credentials>,
+    sender: Sender<Msg>,
 }
 
 impl WriteEvents {
@@ -71,8 +71,8 @@ impl WriteEvents {
         self
     }
 
-    pub fn credentials(mut self, creds: Option<types::Credentials>) -> WriteEvents {
-        self.creds = creds;
+    pub fn credentials(mut self, creds: types::Credentials) -> WriteEvents {
+        self.creds = Some(creds);
 
         self
     }
@@ -87,6 +87,60 @@ impl WriteEvents {
         op.set_require_master(self.require_master);
 
         self.sender.send(Msg::NewOp(operations::Op::Write(op))).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+}
+
+pub struct ReadEvent {
+    stream: String,
+    event_number: i64,
+    resolve_link_tos: bool,
+    require_master: bool,
+    creds: Option<types::Credentials>,
+    sender: Sender<Msg>,
+}
+
+impl ReadEvent {
+    pub fn new(sender: Sender<Msg>, stream: String, event_number: i64) -> ReadEvent {
+        ReadEvent {
+            stream,
+            event_number,
+            sender,
+            resolve_link_tos: false,
+            require_master: false,
+            creds: None,
+        }
+    }
+
+    pub fn resolve_link_tos(mut self, value: bool) -> ReadEvent {
+        self.resolve_link_tos = value;
+
+        self
+    }
+
+    pub fn require_master(mut self, value: bool) -> ReadEvent {
+        self.require_master = value;
+
+        self
+    }
+
+    pub fn credentials(mut self, value: types::Credentials) -> ReadEvent {
+        self.creds = Some(value);
+
+        self
+    }
+
+    pub fn execute(self) -> Task<types::ReadEventStatus<types::ReadEventResult>> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op         = operations::ReadEvent::new(promise, self.creds);
+
+        op.set_event_stream_id(self.stream);
+        op.set_event_number(self.event_number);
+        op.set_resolve_link_tos(self.resolve_link_tos);
+        op.set_require_master(self.require_master);
+
+        self.sender.send(Msg::NewOp(operations::Op::Read(op))).wait().unwrap();
 
         single_value_future(rcv)
     }

@@ -70,8 +70,12 @@ mod tests {
 
         println!("Write response: {:?}", result);
 
-        let fut    = client.read_event("languages".to_owned(), 0, true, true, None);
-        let result = fut.wait().unwrap();
+        let result = client.read_event("languages".to_owned(), 0)
+                           .require_master(true)
+                           .resolve_link_tos(true)
+                           .execute()
+                           .wait()
+                           .unwrap();
 
         println!("Read response: {:?}", result);
 

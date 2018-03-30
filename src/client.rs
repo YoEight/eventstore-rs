@@ -614,25 +614,8 @@ impl Client {
             .execute()
     }
 
-    pub fn read_event(
-        &self,
-        stream_id: String,
-        event_number: i64,
-        resolve_link_tos: bool,
-        require_master: bool,
-        creds: Option<Credentials>) -> Task<types::ReadEventStatus<types::ReadEventResult>>
-    {
-        let (rcv, promise) = operations::Promise::new(1);
-        let mut op         = operations::ReadEvent::new(promise, creds);
-
-        op.set_event_stream_id(stream_id);
-        op.set_event_number(event_number);
-        op.set_resolve_link_tos(resolve_link_tos);
-        op.set_require_master(require_master);
-
-        self.sender.clone().send(Msg::NewOp(Op::Read(op))).wait().unwrap();
-
-        single_value_future(rcv)
+    pub fn read_event(&self, stream: String, event_number: i64) -> command::ReadEvent {
+        command::ReadEvent::new(self.sender.clone(), stream, event_number)
     }
 
     pub fn read_stream_metadata(
@@ -641,7 +624,7 @@ impl Client {
         creds: Option<Credentials>) -> Task<types::StreamMetadataResult>
     {
         let meta_stream = format!("$${}", stream_id);
-        let fut = self.read_event(meta_stream, -1, false, false, creds).map(|res| {
+        let fut = self.read_event(meta_stream, -1).execute().map(|res| {
             match res {
                 types::ReadEventStatus::Success(result) => {
                     let metadata =
@@ -682,17 +665,4 @@ impl Client {
 
 fn heartbeat_timeout_error() -> Error {
     Error::new(ErrorKind::Other, "Heartbeat timeout error.")
-}
-
-fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
-    where S: Stream<Item = Result<A, OperationError>, Error = ()>
-{
-    let fut = stream.take(1).collect().then(|res| {
-        match res {
-            Ok(mut xs) => xs.remove(0),
-            _          => unreachable!(),
-        }
-    });
-
-    Box::new(fut)
 }
