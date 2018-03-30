@@ -598,20 +598,8 @@ impl Client {
         command::WriteEvents::new(self.sender.clone(), stream)
     }
 
-    pub fn write_stream_metadata(
-        &self,
-        stream_id: String,
-        metadata: StreamMetadata,
-        require_master: bool,
-        version: ExpectedVersion,
-        creds: Option<Credentials>) -> Task<WriteResult>
-    {
-        let meta_stream = format!("$${}", stream_id);
-        let event       = EventData::new_json(None, "$metadata".to_owned(), metadata);
-
-        self.write_events(meta_stream)
-            .push_event(event)
-            .execute()
+    pub fn write_stream_metadata(&self, stream: String, metadata: StreamMetadata) -> command::WriteStreamData {
+        command::WriteStreamData::new(self.sender.clone(), stream, metadata)
     }
 
     pub fn read_event(&self, stream: String, event_number: i64) -> command::ReadEvent {

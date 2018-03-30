@@ -2,6 +2,7 @@ use futures::sync::mpsc::Sender;
 use futures::{ Future, Sink, Stream };
 use internal::data::EventData;
 use internal::messaging::Msg;
+use internal::metadata::StreamMetadata;
 use internal::operations;
 use internal::types;
 
@@ -143,5 +144,44 @@ impl ReadEvent {
         self.sender.send(Msg::NewOp(operations::Op::Read(op))).wait().unwrap();
 
         single_value_future(rcv)
+    }
+}
+
+pub struct WriteStreamData {
+    metadata: StreamMetadata,
+    inner: WriteEvents,
+}
+
+impl WriteStreamData {
+    pub fn new(sender: Sender<Msg>, stream: String, metadata: StreamMetadata) -> WriteStreamData {
+        WriteStreamData {
+            metadata,
+            inner: WriteEvents::new(sender, format!("$${}", stream)),
+        }
+    }
+
+    pub fn require_master(mut self, value: bool) -> WriteStreamData {
+        self.inner = self.inner.require_master(value);
+
+        self
+    }
+
+    pub fn expected_version(mut self, value: types::ExpectedVersion) -> WriteStreamData {
+        self.inner = self.inner.expected_version(value);
+
+        self
+    }
+
+    pub fn credentials(mut self, value: types::Credentials) -> WriteStreamData {
+        self.inner = self.inner.credentials(value);
+
+        self
+    }
+
+    pub fn execute(self) -> Task<types::WriteResult> {
+        let event = EventData::new_json(None, "$metadata".to_owned(), self.metadata);
+
+        self.inner.push_event(event)
+                  .execute()
     }
 }

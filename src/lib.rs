@@ -102,10 +102,12 @@ mod tests {
             .insert_custom_property("foo".to_owned(), "Bar!")
             .build();
 
-        let result = client.write_stream_metadata(
-                "languages".to_owned(), metadata, true, ExpectedVersion::Any, None);
-
-        let result = result.wait().unwrap();
+        let result =
+            client.write_stream_metadata("languages".to_owned(), metadata)
+                  .require_master(true)
+                  .execute()
+                  .wait()
+                  .unwrap();
 
         println!("Write stream metadata {:?}", result);
 
