@@ -5,6 +5,7 @@ use serde_json;
 use uuid::{ Uuid, ParseError };
 
 use internal::messages;
+use internal::metadata::StreamMetadata;
 
 #[derive(Copy, Clone)]
 pub enum Retry {
@@ -258,4 +259,11 @@ impl ResolvedEvent {
     pub fn get_original_stream_id(&self) -> Option<&String> {
         self.get_original_event().map(|event| &event.event_stream_id)
     }
+}
+
+#[derive(Debug)]
+pub enum StreamMetadataResult {
+    Deleted { stream: String },
+    NotFound { stream: String },
+    Success { stream: String, version: i64, metadata: StreamMetadata },
 }

@@ -110,17 +110,11 @@ mod tests {
         println!("Read stream metadata {:?}", result);
 
         match result {
-            types::ReadEventStatus::Success(res) => {
-                let read_metadata: StreamMetadata =
-                    res.event
-                        .get_original_event()
-                        .unwrap()
-                        .as_json()
-                        .unwrap();
-
-                let read_max_age = read_metadata.max_age.unwrap();
+            types::StreamMetadataResult::Success { metadata,.. } => {
+                let read_max_age = metadata.max_age.unwrap();
 
                 assert_eq!(read_max_age, timespan);
+                println!("Deserialized metadata {:?}", metadata);
             },
 
             _ => unreachable!(),

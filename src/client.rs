@@ -664,11 +664,37 @@ impl Client {
     pub fn read_stream_metadata(
         &self,
         stream_id: String,
-        creds: Option<Credentials>) -> Task<types::ReadEventStatus<types::ReadEventResult>>
+        creds: Option<Credentials>) -> Task<types::StreamMetadataResult>
     {
         let meta_stream = format!("$${}", stream_id);
+        let fut = self.read_event(meta_stream, -1, false, false, creds).map(|res| {
+            match res {
+                types::ReadEventStatus::Success(result) => {
+                    let metadata =
+                        result.event
+                              .get_original_event()
+                              .unwrap()
+                              .as_json()
+                              .unwrap();
 
-        self.read_event(meta_stream, -1, false, false, creds)
+                    types::StreamMetadataResult::Success {
+                        stream: stream_id,
+                        version: result.event_number,
+                        metadata,
+                    }
+                },
+
+                types::ReadEventStatus::NotFound | types::ReadEventStatus::NoStream => {
+                    types::StreamMetadataResult::NotFound { stream: stream_id }
+                },
+
+                types::ReadEventStatus::Deleted => {
+                    types::StreamMetadataResult::Deleted { stream: stream_id }
+                },
+            }
+        });
+
+        Box::new(fut)
     }
 
     pub fn shutdown(&self) {
