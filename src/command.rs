@@ -185,3 +185,61 @@ impl WriteStreamData {
                   .execute()
     }
 }
+
+pub struct ReadStreamData {
+    stream: String,
+    inner: ReadEvent,
+}
+
+impl ReadStreamData {
+    pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamData {
+        ReadStreamData {
+            stream: stream.clone(),
+            inner: ReadEvent::new(sender, format!("$${}", stream), -1),
+        }
+    }
+
+    pub fn require_master(mut self, value: bool) -> ReadStreamData {
+        self.inner = self.inner.require_master(value);
+
+        self
+    }
+
+    pub fn credentials(mut self, value: types::Credentials) -> ReadStreamData {
+        self.inner = self.inner.credentials(value);
+
+        self
+    }
+
+    pub fn execute(self) -> Task<types::StreamMetadataResult> {
+        let stream = self.stream;
+        let fut    = self.inner.execute().map(|res| {
+            match res {
+                types::ReadEventStatus::Success(result) => {
+                    let metadata =
+                        result.event
+                              .get_original_event()
+                              .unwrap()
+                              .as_json()
+                              .unwrap();
+
+                    types::StreamMetadataResult::Success {
+                        stream: stream,
+                        version: result.event_number,
+                        metadata,
+                    }
+                },
+
+                types::ReadEventStatus::NotFound | types::ReadEventStatus::NoStream => {
+                    types::StreamMetadataResult::NotFound { stream: stream }
+                },
+
+                types::ReadEventStatus::Deleted => {
+                    types::StreamMetadataResult::Deleted { stream: stream }
+                },
+            }
+        });
+
+        Box::new(fut)
+    }
+}

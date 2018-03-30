@@ -111,9 +111,11 @@ mod tests {
 
         println!("Write stream metadata {:?}", result);
 
-        let result = client.read_stream_metadata("languages".to_owned(), None);
-
-        let result = result.wait().unwrap();
+        let result =
+            client.read_stream_metadata("languages".to_owned())
+                  .execute()
+                  .wait()
+                  .unwrap();
 
         println!("Read stream metadata {:?}", result);
 
