@@ -60,11 +60,9 @@ impl EventData {
 
     pub fn build(self) -> messages::NewEvent {
         let mut new_event = messages::NewEvent::new();
+        let     id        = self.id_opt.unwrap_or_else(|| Uuid::new_v4());
 
-        match self.id_opt {
-            Some(id) => new_event.set_event_id(id.as_bytes().to_vec()),
-            None     => new_event.set_event_id(Uuid::new_v4().as_bytes().to_vec()),
-        }
+        new_event.set_event_id(id.as_bytes().to_vec());
 
         match self.payload {
             Payload::Json(bin) => {
@@ -78,20 +76,18 @@ impl EventData {
             },
         }
 
-        if let Some(payload) = self.metadata_payload_opt {
-            match payload {
-                Payload::Json(bin) => {
-                    new_event.set_metadata_content_type(1);
-                    new_event.set_metadata(bin);
-                },
+        match self.metadata_payload_opt {
+            Some(Payload::Json(bin)) => {
+                new_event.set_metadata_content_type(1);
+                new_event.set_metadata(bin);
+            },
 
-                Payload::Binary(bin) => {
-                    new_event.set_metadata_content_type(0);
-                    new_event.set_metadata(bin);
-                },
-            }
-        } else {
-            new_event.set_metadata_content_type(0);
+            Some(Payload::Binary(bin)) => {
+                new_event.set_metadata_content_type(0);
+                new_event.set_metadata(bin);
+            },
+
+            None => new_event.set_metadata_content_type(0),
         }
 
         new_event.set_event_type(self.event_type);
