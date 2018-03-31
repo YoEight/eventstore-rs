@@ -181,7 +181,7 @@ impl WriteStreamData {
     }
 
     pub fn execute(self) -> Task<types::WriteResult> {
-        let event = EventData::new_json(None, "$metadata".to_owned(), self.metadata);
+        let event = EventData::json("$metadata".to_owned(), self.metadata);
 
         self.inner.push_event(event)
                   .execute()

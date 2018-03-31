@@ -63,7 +63,7 @@ mod tests {
 
         let fut =
             client.write_events("languages".to_owned())
-                  .push_event(EventData::new_json(None, "foo-type".to_owned(), foo))
+                  .push_event(EventData::json("foo-type".to_owned(), foo))
                   .execute();
 
         let result = fut.wait().unwrap();
