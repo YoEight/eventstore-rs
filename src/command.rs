@@ -54,8 +54,10 @@ impl WriteEvents {
         self
     }
 
-    pub fn append_events(mut self, events: &mut Vec<EventData>) -> WriteEvents {
-        self.events.append(events);
+    pub fn append_events<T>(mut self, events: T) -> WriteEvents
+        where T: IntoIterator<Item=EventData>
+    {
+        self.events.extend(events);
 
         self
     }
@@ -193,9 +195,11 @@ pub struct ReadStreamData {
 
 impl ReadStreamData {
     pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamData {
+        let name = format!("$${}", stream);
+
         ReadStreamData {
-            stream: stream.clone(),
-            inner: ReadEvent::new(sender, format!("$${}", stream), -1),
+            stream,
+            inner: ReadEvent::new(sender, name, -1),
         }
     }
 
