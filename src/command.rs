@@ -247,3 +247,126 @@ impl ReadStreamData {
         Box::new(fut)
     }
 }
+
+pub struct TransactionStart {
+    stream: String,
+    version: types::ExpectedVersion,
+    require_master: bool,
+    creds_opt: Option<types::Credentials>,
+    sender: Sender<Msg>,
+}
+
+impl TransactionStart {
+    pub fn new(sender: Sender<Msg>, stream: String) -> TransactionStart {
+        TransactionStart {
+            stream,
+            require_master: false,
+            version: types::ExpectedVersion::Any,
+            creds_opt: None,
+            sender,
+        }
+    }
+
+    pub fn require_master(mut self, value: bool) -> TransactionStart {
+        self.require_master = value;
+
+        self
+    }
+
+    pub fn version(mut self, value: types::ExpectedVersion) -> TransactionStart {
+        self.version = value;
+
+        self
+    }
+
+    pub fn credentials(mut self, value: types::Credentials) -> TransactionStart {
+        self.creds_opt = Some(value);
+
+        self
+    }
+
+    pub fn execute(self) -> Task<Transaction> {
+        let cloned_creds   = self.creds_opt.clone();
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op         = operations::TransactionStart::new(promise, self.creds_opt);
+        let     stream     = self.stream.clone();
+
+        op.set_event_stream_id(self.stream);
+        op.set_require_master(self.require_master);
+        op.set_expected_version(self.version);
+
+        let require_master = self.require_master;
+        let version        = self.version;
+        let sender         = self.sender.clone();
+
+        self.sender.send(Msg::NewOp(operations::Op::TransactionStart(op))).wait().unwrap();
+
+        let fut = single_value_future(rcv).map(move |id| {
+            Transaction {
+                stream,
+                id,
+                sender,
+                require_master,
+                creds: cloned_creds,
+                version,
+            }
+        });
+
+        Box::new(fut)
+    }
+}
+
+pub struct Transaction {
+    stream: String,
+    id: types::TransactionId,
+    version: types::ExpectedVersion,
+    require_master: bool,
+    sender: Sender<Msg>,
+    creds: Option<types::Credentials>,
+}
+
+impl Transaction {
+    pub fn get_it(&self) -> types::TransactionId {
+        self.id
+    }
+
+    pub fn write_single(&self, event: EventData) -> Task<()> {
+        self.write(vec![event])
+    }
+
+    pub fn write<I>(&self, events: I) -> Task<()>
+        where I: IntoIterator<Item=EventData>
+    {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::TransactionWrite::new(
+            promise, self.stream.clone(), self.creds.clone());
+
+        op.set_transaction_id(self.id);
+        op.set_events(events);
+        op.set_require_master(self.require_master);
+
+        self.sender.clone().send(Msg::NewOp(operations::Op::TransactionWrite(op))).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+
+    pub fn commit(self) -> Task<types::WriteResult> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op =
+            operations::TransactionCommit::new(
+                promise, self.stream.clone(), self.version, self.creds.clone());
+
+        op.set_transaction_id(self.id);
+        op.set_require_master(self.require_master);
+
+        self.sender.clone().send(Msg::NewOp(operations::Op::TransactionCommit(op))).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+
+    pub fn rollback(self) {
+        // On purpose, this function does nothing. GetEventStore doesn't have a rollback operation.
+        // This function is there mainly because of how transactions are perceived, meaning a
+        // transaction comes with a commit and a rollback functions.
+    }
+}

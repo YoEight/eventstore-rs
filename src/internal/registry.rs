@@ -143,6 +143,11 @@ impl Registry {
                             self.pending.insert(pkg.correlation, reg);
                             reg.lasting_session = true;
                         }
+                    } else if outcome.is_retrying() {
+                        // The operation figured out it's better to retry. We decide to not
+                        // increment `Register.tries` property in this specific case.
+                        reg.op.retry();
+                        self.send_register(conn, reg);
                     }
                 },
 

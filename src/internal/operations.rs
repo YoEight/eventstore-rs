@@ -30,6 +30,7 @@ pub enum OperationError {
 pub enum Outcome {
     Done,
     Continue(Option<Pkg>),
+    Retry,
 }
 
 impl Outcome {
@@ -37,11 +38,20 @@ impl Outcome {
         match self {
             Outcome::Done              => None,
             Outcome::Continue(pkg_opt) => pkg_opt,
+            Outcome::Retry             => None,
         }
     }
 
     pub fn is_continuing(&self) -> bool {
         if let Outcome::Continue(_) = *self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_retrying(&self) -> bool {
+        if let Outcome::Retry = *self {
             true
         } else {
             false
@@ -86,9 +96,16 @@ fn op_send(pkg: Pkg) -> Decision {
     Ok(Outcome::Continue(Some(pkg)))
 }
 
+fn op_retry() -> Decision {
+    Ok(Outcome::Retry)
+}
+
 pub enum Op {
     Write(WriteEvents),
     Read(ReadEvent),
+    TransactionStart(TransactionStart),
+    TransactionWrite(TransactionWrite),
+    TransactionCommit(TransactionCommit),
 }
 
 impl Op {
@@ -96,8 +113,11 @@ impl Op {
     // can be shared across several threads.
     pub fn to_operation(self) -> Box<Operation> {
         match self {
-            Op::Write(w) => Box::new(w),
-            Op::Read(r)  => Box::new(r),
+            Op::Write(w)             => Box::new(w),
+            Op::Read(r)              => Box::new(r),
+            Op::TransactionStart(t)  => Box::new(t),
+            Op::TransactionWrite(t)  => Box::new(t),
+            Op::TransactionCommit(t) => Box::new(t),
         }
     }
 }
@@ -194,9 +214,9 @@ impl Operation for WriteEvents {
                                     op_done()
                                 },
 
-                                OperationResult::PrepareTimeout => op_continue(),
-                                OperationResult::ForwardTimeout => op_continue(),
-                                OperationResult::CommitTimeout  => op_continue(),
+                                OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
+                                    op_retry()
+                                }
 
                                 OperationResult::WrongExpectedVersion => {
                                     let stream_id = self.inner.get_event_stream_id().to_string();
@@ -359,6 +379,385 @@ impl Operation for ReadEvent {
                                     let error     = OperationError::AccessDenied(stream_id);
 
                                     self.promise.reject(error);
+                                    op_done()
+                                },
+                            }
+                        },
+
+                        _ => {
+                            self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+
+                            op_done()
+                        },
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct TransactionStart {
+    inner: messages::TransactionStart,
+    promise: Promise<types::TransactionId>,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl TransactionStart {
+    pub fn new(promise: Promise<types::TransactionId>, creds: Option<types::Credentials>) -> TransactionStart {
+        TransactionStart {
+            inner: messages::TransactionStart::new(),
+            promise,
+            creds,
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_event_stream_id(&mut self, value: String) {
+        self.inner.set_event_stream_id(value);
+    }
+
+    pub fn set_expected_version(&mut self, value: types::ExpectedVersion) {
+        self.inner.set_expected_version(value.to_i64());
+    }
+
+    pub fn set_require_master(&mut self, value: bool) {
+        self.inner.set_require_master(value);
+    }
+}
+
+impl Operation for TransactionStart {
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let    size     = self.inner.compute_size() as usize;
+                let mut pkg     = Pkg::new(Cmd::TransactionStart, Uuid::new_v4());
+                let mut payload = Vec::with_capacity(size);
+
+                self.inner.write_to_vec(&mut payload)?;
+
+                pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    match pkg.cmd {
+                        Cmd::TransactionStartCompleted => {
+                            let response: messages::TransactionStartCompleted =
+                                    parse_from_bytes(&pkg.payload.as_slice())?;
+
+                            match response.get_result() {
+                                OperationResult::Success => {
+                                    let id = response.get_transaction_id();
+                                    self.promise.accept(types::TransactionId::new(id));
+
+                                    op_done()
+                                },
+
+                                OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
+                                    op_retry()
+                                },
+
+                                OperationResult::WrongExpectedVersion => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let exp_i64   = self.inner.get_expected_version();
+                                    let exp       = types::ExpectedVersion::from_i64(exp_i64);
+
+                                    self.failed(OperationError::WrongExpectedVersion(stream_id, exp));
+
+                                    op_done()
+                                },
+
+                                OperationResult::StreamDeleted => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+
+                                    self.failed(OperationError::StreamDeleted(stream_id));
+
+                                    op_done()
+                                },
+
+                                OperationResult::InvalidTransaction => {
+                                    self.failed(OperationError::InvalidTransaction);
+
+                                    op_done()
+                                }
+
+                                OperationResult::AccessDenied => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+
+                                    self.failed(OperationError::AccessDenied(stream_id));
+
+                                    op_done()
+                                },
+                            }
+                        },
+
+                        _ => {
+                            self.failed(OperationError::WrongClientImpl(pkg.cmd));
+                            op_done()
+                        },
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error)
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct TransactionWrite {
+    stream: String,
+    promise: Promise<()>,
+    inner: messages::TransactionWrite,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl TransactionWrite {
+    pub fn new(promise: Promise<()>, stream: String, creds: Option<types::Credentials>) -> TransactionWrite {
+        TransactionWrite {
+            stream,
+            promise,
+            creds,
+            inner: messages::TransactionWrite::new(),
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_transaction_id(&mut self, value: types::TransactionId) {
+        self.inner.set_transaction_id(value.0)
+    }
+
+    pub fn set_events<I>(&mut self, events: I)
+        where I: IntoIterator<Item=EventData>
+    {
+        let mut repeated = RepeatedField::new();
+
+        for event in events {
+            repeated.push(event.build());
+        }
+
+        self.inner.set_events(repeated);
+    }
+
+    pub fn set_require_master(&mut self, value: bool) {
+        self.inner.set_require_master(value);
+    }
+}
+
+impl Operation for TransactionWrite {
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let     size    = self.inner.compute_size() as usize;
+                let mut pkg     = Pkg::new(Cmd::TransactionWrite, Uuid::new_v4());
+                let mut payload = Vec::with_capacity(size);
+
+                self.inner.write_to_vec(&mut payload)?;
+
+                pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    match pkg.cmd {
+                        Cmd::TransactionWriteCompleted => {
+                            let response: messages::TransactionWriteCompleted =
+                                    parse_from_bytes(&pkg.payload.as_slice())?;
+
+                            match response.get_result() {
+                                OperationResult::Success => {
+                                    self.promise.accept(());
+
+                                    op_done()
+                                },
+
+                                OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
+                                    op_retry()
+                                },
+
+                                OperationResult::WrongExpectedVersion => {
+                                    // You can't have a wrong expected version on a transaction
+                                    // because, the write hasn't been committed yet.
+                                    unreachable!()
+                                },
+
+                                OperationResult::StreamDeleted => {
+                                    let stream = self.stream.clone();
+                                    self.failed(OperationError::StreamDeleted(stream));
+
+                                    op_done()
+                                },
+
+                                OperationResult::InvalidTransaction => {
+                                    self.failed(OperationError::InvalidTransaction);
+
+                                    op_done()
+                                }
+
+                                OperationResult::AccessDenied => {
+                                    let stream = self.stream.clone();
+                                    self.failed(OperationError::AccessDenied(stream));
+
+                                    op_done()
+                                },
+                            }
+                        },
+
+                        _ => {
+                            self.failed(OperationError::WrongClientImpl(pkg.cmd));
+                            op_done()
+                        },
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct TransactionCommit {
+    stream: String,
+    version: types::ExpectedVersion,
+    promise: Promise<types::WriteResult>,
+    inner: messages::TransactionCommit,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl TransactionCommit {
+    pub fn new(
+        promise: Promise<types::WriteResult>,
+        stream: String,
+        version: types::ExpectedVersion,
+        creds: Option<types::Credentials>) -> TransactionCommit
+    {
+        TransactionCommit {
+            stream,
+            promise,
+            version,
+            inner: messages::TransactionCommit::new(),
+            creds,
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_transaction_id(&mut self, value: types::TransactionId) {
+        self.inner.set_transaction_id(value.0);
+    }
+
+    pub fn set_require_master(&mut self, value: bool) {
+        self.inner.set_require_master(value);
+    }
+}
+
+impl Operation for TransactionCommit {
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let     size    = self.inner.compute_size() as usize;
+                let mut pkg     = Pkg::new(Cmd::TransactionCommit, Uuid::new_v4());
+                let mut payload = Vec::with_capacity(size);
+
+                self.inner.write_to_vec(&mut payload)?;
+
+                pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    match pkg.cmd {
+                        Cmd::TransactionCommitCompleted => {
+                            let response: messages::TransactionCommitCompleted =
+                                    parse_from_bytes(&pkg.payload.as_slice())?;
+
+                            match response.get_result() {
+                                OperationResult::Success => {
+                                    let position = types::Position {
+                                        commit: response.get_commit_position(),
+                                        prepare: response.get_prepare_position(),
+                                    };
+
+                                    let result = types::WriteResult {
+                                        next_expected_version: response.get_last_event_number(),
+                                        position: position,
+                                    };
+
+                                    self.promise.accept(result);
+
+                                    op_done()
+                                },
+
+                                OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
+                                    op_retry()
+                                }
+
+                                OperationResult::WrongExpectedVersion => {
+                                    let stream = self.stream.clone();
+
+                                    self.promise.reject(OperationError::WrongExpectedVersion(stream, self.version));
+
+                                    op_done()
+                                },
+
+                                OperationResult::StreamDeleted => {
+                                    let stream = self.stream.clone();
+
+                                    self.promise.reject(OperationError::StreamDeleted(stream));
+
+                                    op_done()
+                                },
+
+                                OperationResult::InvalidTransaction => {
+                                    self.promise.reject(OperationError::InvalidTransaction);
+
+                                    op_done()
+                                }
+
+                                OperationResult::AccessDenied => {
+                                    let stream = self.stream.clone();
+
+                                    self.promise.reject(OperationError::AccessDenied(stream));
+
                                     op_done()
                                 },
                             }

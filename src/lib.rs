@@ -129,5 +129,26 @@ mod tests {
 
             _ => unreachable!(),
         }
+
+        let transaction =
+            client.start_transaction("languages-transaction".to_owned())
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+        let data = json!({
+            "transactions_are_working_nicely": true,
+        });
+
+        transaction.write_single(EventData::json("foo-type-transaction".to_owned(), data))
+                   .wait()
+                   .unwrap();
+
+        let result =
+            transaction.commit()
+                       .wait()
+                       .unwrap();
+
+        println!("Transaction commit result {:?}", result);
     }
 }

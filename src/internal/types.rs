@@ -54,7 +54,7 @@ impl Settings {
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum ExpectedVersion {
     Any,
     StreamExists,
@@ -266,4 +266,13 @@ pub enum StreamMetadataResult {
     Deleted { stream: String },
     NotFound { stream: String },
     Success { stream: String, version: i64, metadata: StreamMetadata },
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+pub struct TransactionId(pub i64);
+
+impl TransactionId {
+    pub fn new(id: i64) -> TransactionId {
+        TransactionId(id)
+    }
 }

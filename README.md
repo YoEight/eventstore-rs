@@ -11,7 +11,7 @@ Rust GetEventStore TCP Client.
 - [x] Write events.
 - [x] Read events.
 - [x] Read/Write stream metadata.
-- [ ] Transactions.
+- [x] Transactions.
 - [ ] Volatile Subscriptions.
 - [ ] Catchup Subscriptions.
 - [ ] Persistent Subscriptions.

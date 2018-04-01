@@ -519,8 +519,6 @@ impl Driver {
     }
 }
 
-type Task<A> = Box<Future<Item=A, Error=OperationError>>;
-
 pub struct Client {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
@@ -608,6 +606,10 @@ impl Client {
 
     pub fn read_stream_metadata(&self, stream: String) -> command::ReadStreamData {
         command::ReadStreamData::new(self.sender.clone(), stream)
+    }
+
+    pub fn start_transaction(&self, stream: String) -> command::TransactionStart {
+        command::TransactionStart::new(self.sender.clone(), stream)
     }
 
     pub fn shutdown(&self) {
