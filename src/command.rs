@@ -330,7 +330,7 @@ impl Transaction {
     }
 
     pub fn write_single(&self, event: EventData) -> Task<()> {
-        self.write(vec![event])
+        self.write(::std::iter::once(event))
     }
 
     pub fn write<I>(&self, events: I) -> Task<()>
