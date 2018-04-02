@@ -276,3 +276,87 @@ impl TransactionId {
         TransactionId(id)
     }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub enum ReadDirection {
+    Forward,
+    Backward,
+}
+
+#[derive(Debug)]
+pub enum LocatedEvents<A> {
+    EndOfStream,
+    Events { events: Vec<ResolvedEvent>, next: Option<A> },
+}
+
+pub trait Slice {
+    type Location;
+
+    fn from(&self) -> Self::Location;
+    fn direction(&self) -> ReadDirection;
+    fn events(self) -> LocatedEvents<Self::Location>;
+}
+
+#[derive(Debug)]
+pub enum ReadStreamStatus<A> {
+    Success(A),
+    NoStream(String),
+    StreamDeleled(String),
+    NotModified(String),
+    Error(String),
+    AccessDenied(String),
+}
+
+#[derive(Debug)]
+pub struct StreamSlice {
+    _from: i64,
+    _direction: ReadDirection,
+    _events: Vec<ResolvedEvent>,
+    _next_num_opt: Option<i64>,
+}
+
+impl StreamSlice {
+    pub fn new(
+        direction: ReadDirection,
+        from: i64,
+        events: Vec<ResolvedEvent>,
+        next_num_opt: Option<i64>) -> StreamSlice
+    {
+        StreamSlice {
+            _from: from,
+            _direction: direction,
+            _events: events,
+            _next_num_opt: next_num_opt,
+        }
+    }
+}
+
+impl Slice for StreamSlice {
+    type Location = i64;
+
+    fn from(&self) -> i64 {
+        self._from
+    }
+
+    fn direction(&self) -> ReadDirection {
+        self._direction
+    }
+
+    fn events(self) -> LocatedEvents<i64> {
+        if self._events.is_empty() {
+            LocatedEvents::EndOfStream
+        } else {
+            match self._next_num_opt {
+                None => LocatedEvents::Events {
+                    events: self._events,
+                    next: None,
+                },
+
+                Some(next_num) => LocatedEvents::Events {
+                    events: self._events,
+                    next: Some(next_num),
+                }
+            }
+        }
+    }
+}

@@ -612,6 +612,10 @@ impl Client {
         command::TransactionStart::new(self.sender.clone(), stream)
     }
 
+    pub fn read_streams(&self, stream: String) -> command::ReadStreamEvents {
+        command::ReadStreamEvents::new(self.sender.clone(), stream)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }
