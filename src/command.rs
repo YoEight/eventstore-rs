@@ -11,13 +11,12 @@ type Task<A> = Box<Future<Item=A, Error=operations::OperationError>>;
 fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
     where S: Stream<Item = Result<A, operations::OperationError>, Error = ()>
 {
-    let fut = stream.take(1).collect().then(|res| {
+    let fut = stream.into_future().then(|res| {
         match res {
-            Ok(mut xs) => xs.remove(0),
-            _          => unreachable!(),
+            Ok((Some(x), _)) => x,
+            _                => unreachable!(),
         }
     });
-
     Box::new(fut)
 }
 
