@@ -150,5 +150,13 @@ mod tests {
                        .unwrap();
 
         println!("Transaction commit result {:?}", result);
+
+        let result =
+            client.read_streams("languages".to_owned())
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+        println!("Read stream events result {:?}", result);
     }
 }

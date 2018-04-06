@@ -369,3 +369,86 @@ impl Transaction {
         // transaction comes with a commit and a rollback functions.
     }
 }
+
+pub struct ReadStreamEvents {
+    stream: String,
+    max_count: i32,
+    start: i64,
+    require_master: bool,
+    resolve_link_tos: bool,
+    direction: types::ReadDirection,
+    sender: Sender<Msg>,
+    creds: Option<types::Credentials>,
+}
+
+impl ReadStreamEvents {
+    pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamEvents {
+        ReadStreamEvents {
+            stream,
+            max_count: 500,
+            start: 0,
+            require_master: false,
+            resolve_link_tos: false,
+            direction: types::ReadDirection::Forward,
+            sender,
+            creds: None,
+        }
+    }
+
+    pub fn forward(mut self) -> ReadStreamEvents {
+        self.direction = types::ReadDirection::Forward;
+
+        self
+    }
+
+    pub fn backward(mut self) -> ReadStreamEvents {
+        self.direction = types::ReadDirection::Backward;
+
+        self
+    }
+
+    pub fn credentials(mut self, value: types::Credentials) -> ReadStreamEvents {
+        self.creds = Some(value);
+
+        self
+    }
+
+    pub fn max_count(mut self, value: i32) -> ReadStreamEvents {
+        self.max_count = value;
+
+        self
+    }
+
+    pub fn start_from(mut self, value: i64) -> ReadStreamEvents {
+        self.start = value;
+
+        self
+    }
+
+    pub fn require_master(mut self, value: bool) -> ReadStreamEvents {
+        self.require_master = value;
+
+        self
+    }
+
+    pub fn resolve_link_tos(mut self, value: bool) -> ReadStreamEvents {
+        self.resolve_link_tos = value;
+
+        self
+    }
+
+    pub fn execute(self) -> Task<types::ReadStreamStatus<types::StreamSlice>> {
+        let     (rcv, promise) = operations::Promise::new(1);
+        let mut op             = operations::ReadStreamEvents::new(promise, self.direction, self.creds);
+
+        op.set_event_stream_id(self.stream);
+        op.set_from_event_number(self.start);
+        op.set_max_count(self.max_count);
+        op.set_require_master(self.require_master);
+        op.set_resolve_link_tos(self.resolve_link_tos);
+
+        self.sender.send(Msg::NewOp(operations::Op::ReadStreams(op))).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+}

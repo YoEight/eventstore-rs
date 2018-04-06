@@ -10,7 +10,7 @@ use internal::messages;
 use internal::package::Pkg;
 use internal::types;
 
-use self::messages::OperationResult;
+use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult };
 
 #[derive(Debug)]
 pub enum OperationError {
@@ -106,6 +106,7 @@ pub enum Op {
     TransactionStart(TransactionStart),
     TransactionWrite(TransactionWrite),
     TransactionCommit(TransactionCommit),
+    ReadStreams(ReadStreamEvents),
 }
 
 impl Op {
@@ -118,6 +119,7 @@ impl Op {
             Op::TransactionStart(t)  => Box::new(t),
             Op::TransactionWrite(t)  => Box::new(t),
             Op::TransactionCommit(t) => Box::new(t),
+            Op::ReadStreams(r)       => Box::new(r),
         }
     }
 }
@@ -768,6 +770,178 @@ impl Operation for TransactionCommit {
 
                             op_done()
                         },
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct ReadStreamEvents {
+    promise: Promise<types::ReadStreamStatus<types::StreamSlice>>,
+    direction: types::ReadDirection,
+    request_cmd: Cmd,
+    response_cmd: Cmd,
+    inner: messages::ReadStreamEvents,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl ReadStreamEvents {
+    pub fn new(
+        promise: Promise<types::ReadStreamStatus<types::StreamSlice>>,
+        direction: types::ReadDirection,
+        creds: Option<types::Credentials>) -> ReadStreamEvents
+    {
+        let request_cmd = match direction {
+            types::ReadDirection::Forward  => Cmd::ReadStreamEventsForward,
+            types::ReadDirection::Backward => Cmd::ReadStreamEventsBackward,
+        };
+
+        let response_cmd = match direction {
+            types::ReadDirection::Forward => Cmd::ReadStreamEventsForwardCompleted,
+            types::ReadDirection::Backward => Cmd::ReadStreamEventsBackwardCompleted,
+        };
+
+        ReadStreamEvents {
+            promise,
+            direction,
+            request_cmd,
+            response_cmd,
+            inner: messages::ReadStreamEvents::new(),
+            creds,
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_event_stream_id(&mut self, value: String) {
+        self.inner.set_event_stream_id(value);
+    }
+
+    pub fn set_from_event_number(&mut self, value: i64) {
+        self.inner.set_from_event_number(value);
+    }
+
+    pub fn set_max_count(&mut self, value: i32) {
+        self.inner.set_max_count(value);
+    }
+
+    pub fn set_resolve_link_tos(&mut self, value: bool) {
+        self.inner.set_resolve_link_tos(value);
+    }
+
+    pub fn set_require_master(&mut self, value: bool) {
+        self.inner.set_require_master(value);
+    }
+}
+
+impl Operation for ReadStreamEvents {
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let     size    = self.inner.compute_size() as usize;
+                let mut pkg     = Pkg::new(self.request_cmd, Uuid::new_v4());
+                let mut payload = Vec::with_capacity(size);
+
+                self.inner.write_to_vec(&mut payload)?;
+
+                pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    if pkg.cmd == self.response_cmd {
+                        let mut response: messages::ReadStreamEventsCompleted =
+                                parse_from_bytes(&pkg.payload.as_slice())?;
+
+                        match response.get_result() {
+                            ReadStreamEventsCompleted_ReadStreamResult::Success => {
+                                let     is_eof    = response.get_is_end_of_stream();
+                                let     events    = response.take_events().into_vec();
+                                let mut resolveds = Vec::with_capacity(events.len());
+
+                                for event in events {
+                                    let resolved = types::ResolvedEvent::new_from_indexed(event)?;
+
+                                    resolveds.push(resolved);
+                                }
+
+                                let next_num_opt = {
+                                    if is_eof {
+                                        Some(response.get_next_event_number())
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                let from  = self.inner.get_from_event_number();
+                                let slice = types::StreamSlice::new(
+                                    self.direction, from, resolveds, next_num_opt);
+                                let result = types::ReadStreamStatus::Success(slice);
+
+                                self.promise.accept(result);
+
+                                op_done()
+                            },
+
+                            ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
+                                let stream = self.inner.get_event_stream_id().to_string();
+
+                                self.promise.accept(types::ReadStreamStatus::NoStream(stream));
+
+                                op_done()
+                            },
+
+                            ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
+                                let stream = self.inner.get_event_stream_id().to_string();
+
+                                self.promise.accept(types::ReadStreamStatus::StreamDeleled(stream));
+
+                                op_done()
+                            },
+
+                            ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
+                                let stream = self.inner.get_event_stream_id().to_string();
+
+                                self.promise.accept(types::ReadStreamStatus::AccessDenied(stream));
+
+                                op_done()
+                            },
+
+                            ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
+                                let stream = self.inner.get_event_stream_id().to_string();
+
+                                self.promise.accept(types::ReadStreamStatus::NotModified(stream));
+
+                                op_done()
+                            },
+
+                            ReadStreamEventsCompleted_ReadStreamResult::Error => {
+                                let error_msg = response.get_error().to_string();
+
+                                self.promise.accept(types::ReadStreamStatus::Error(error_msg));
+
+                                op_done()
+                            },
+                        }
+                    } else {
+                        self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+
+                        op_done()
                     }
                 } else {
                     op_done()
