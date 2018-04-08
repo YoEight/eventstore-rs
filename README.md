@@ -9,7 +9,7 @@ Rust GetEventStore TCP Client.
 - [x] Connection health tracking.
 - [x] Operation timeout detection and retry.
 - [x] Write events.
-- [x] Read events.
+- [x] Read events (including `$all` stream).
 - [x] Read/Write stream metadata.
 - [x] Transactions.
 - [ ] Volatile Subscriptions.

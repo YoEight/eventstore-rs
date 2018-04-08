@@ -10,7 +10,7 @@ use internal::messages;
 use internal::package::Pkg;
 use internal::types;
 
-use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult };
+use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
 
 #[derive(Debug)]
 pub enum OperationError {
@@ -107,6 +107,7 @@ pub enum Op {
     TransactionWrite(TransactionWrite),
     TransactionCommit(TransactionCommit),
     ReadStreams(ReadStreamEvents),
+    ReadAll(ReadAllEvents),
 }
 
 impl Op {
@@ -120,6 +121,7 @@ impl Op {
             Op::TransactionWrite(t)  => Box::new(t),
             Op::TransactionCommit(t) => Box::new(t),
             Op::ReadStreams(r)       => Box::new(r),
+            Op::ReadAll(r)           => Box::new(r),
         }
     }
 }
@@ -931,6 +933,159 @@ impl Operation for ReadStreamEvents {
                             },
 
                             ReadStreamEventsCompleted_ReadStreamResult::Error => {
+                                let error_msg = response.get_error().to_string();
+
+                                self.promise.accept(types::ReadStreamStatus::Error(error_msg));
+
+                                op_done()
+                            },
+                        }
+                    } else {
+                        self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+
+                        op_done()
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct ReadAllEvents {
+    promise: Promise<types::ReadStreamStatus<types::AllSlice>>,
+    direction: types::ReadDirection,
+    request_cmd: Cmd,
+    response_cmd: Cmd,
+    inner: messages::ReadAllEvents,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl ReadAllEvents {
+    pub fn new(
+        promise: Promise<types::ReadStreamStatus<types::AllSlice>>,
+        direction: types::ReadDirection,
+        creds: Option<types::Credentials>) -> ReadAllEvents
+    {
+        let request_cmd = match direction {
+            types::ReadDirection::Forward  => Cmd::ReadAllEventsForward,
+            types::ReadDirection::Backward => Cmd::ReadAllEventsBackward,
+        };
+
+        let response_cmd = match direction {
+            types::ReadDirection::Forward => Cmd::ReadAllEventsForwardCompleted,
+            types::ReadDirection::Backward => Cmd::ReadAllEventsBackwardCompleted,
+        };
+
+        ReadAllEvents {
+            promise,
+            direction,
+            request_cmd,
+            response_cmd,
+            inner: messages::ReadAllEvents::new(),
+            creds,
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_from_position(&mut self, value: types::Position) {
+        self.inner.set_commit_position(value.commit);
+        self.inner.set_prepare_position(value.prepare);
+    }
+
+    pub fn set_max_count(&mut self, value: i32) {
+        self.inner.set_max_count(value);
+    }
+
+    pub fn set_resolve_link_tos(&mut self, value: bool) {
+        self.inner.set_resolve_link_tos(value);
+    }
+
+    pub fn set_require_master(&mut self, value: bool) {
+        self.inner.set_require_master(value);
+    }
+}
+
+impl Operation for ReadAllEvents {
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let     size    = self.inner.compute_size() as usize;
+                let mut pkg     = Pkg::new(self.request_cmd, Uuid::new_v4());
+                let mut payload = Vec::with_capacity(size);
+
+                self.inner.write_to_vec(&mut payload)?;
+
+                pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    if pkg.cmd == self.response_cmd {
+                        let mut response: messages::ReadAllEventsCompleted =
+                                parse_from_bytes(&pkg.payload.as_slice())?;
+
+                        match response.get_result() {
+                            ReadAllEventsCompleted_ReadAllResult::Success => {
+                                let     commit      = response.get_commit_position();
+                                let     prepare     = response.get_prepare_position();
+                                let     nxt_commit  = response.get_next_commit_position();
+                                let     nxt_prepare = response.get_next_prepare_position();
+                                let     events      = response.take_events().into_vec();
+                                let mut resolveds   = Vec::with_capacity(events.len());
+
+                                for event in events {
+                                    let resolved = types::ResolvedEvent::new(event)?;
+
+                                    resolveds.push(resolved);
+                                }
+
+                                let from = types::Position {
+                                    commit,
+                                    prepare,
+                                };
+
+                                let next = types::Position {
+                                    commit: nxt_commit,
+                                    prepare: nxt_prepare,
+                                };
+
+                                let slice = types::AllSlice::new(
+                                    self.direction, from, resolveds, next);
+                                let result = types::ReadStreamStatus::Success(slice);
+
+                                self.promise.accept(result);
+
+                                op_done()
+                            },
+
+                            ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
+                                self.promise.accept(types::ReadStreamStatus::AccessDenied("$all".to_owned()));
+
+                                op_done()
+                            },
+
+                            ReadAllEventsCompleted_ReadAllResult::NotModified => {
+                                self.promise.accept(types::ReadStreamStatus::NotModified("$all".to_owned()));
+
+                                op_done()
+                            },
+
+                            ReadAllEventsCompleted_ReadAllResult::Error => {
                                 let error_msg = response.get_error().to_string();
 
                                 self.promise.accept(types::ReadStreamStatus::Error(error_msg));

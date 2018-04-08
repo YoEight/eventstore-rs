@@ -82,10 +82,26 @@ impl ExpectedVersion {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Position {
     pub commit:  i64,
     pub prepare: i64,
+}
+
+impl Position {
+    pub fn start() -> Position {
+        Position {
+            commit: 0,
+            prepare: 0,
+        }
+    }
+
+    pub fn end() -> Position {
+        Position {
+            commit: -1,
+            prepare: -1,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -356,6 +372,53 @@ impl Slice for StreamSlice {
                     events: self._events,
                     next: Some(next_num),
                 }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AllSlice {
+    from: Position,
+    direction: ReadDirection,
+    events: Vec<ResolvedEvent>,
+    next: Position,
+}
+
+impl AllSlice {
+    pub fn new(
+        direction: ReadDirection,
+        from: Position,
+        events: Vec<ResolvedEvent>,
+        next: Position) -> AllSlice
+    {
+        AllSlice {
+            from,
+            direction,
+            events,
+            next,
+        }
+    }
+}
+
+impl Slice for AllSlice {
+    type Location = Position;
+
+    fn from(&self) -> Position {
+        self.from
+    }
+
+    fn direction(&self) -> ReadDirection {
+        self.direction
+    }
+
+    fn events(self) -> LocatedEvents<Position> {
+        if self.events.is_empty() {
+            LocatedEvents::EndOfStream
+        } else {
+            LocatedEvents::Events {
+                events: self.events,
+                next: Some(self.next),
             }
         }
     }

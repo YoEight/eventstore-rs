@@ -452,3 +452,83 @@ impl ReadStreamEvents {
         single_value_future(rcv)
     }
 }
+
+pub struct ReadAllEvents {
+    max_count: i32,
+    start: types::Position,
+    require_master: bool,
+    resolve_link_tos: bool,
+    direction: types::ReadDirection,
+    sender: Sender<Msg>,
+    creds: Option<types::Credentials>,
+}
+
+impl ReadAllEvents {
+    pub fn new(sender: Sender<Msg>) -> ReadAllEvents {
+        ReadAllEvents {
+            max_count: 500,
+            start: types::Position::start(),
+            require_master: false,
+            resolve_link_tos: false,
+            direction: types::ReadDirection::Forward,
+            sender,
+            creds: None,
+        }
+    }
+
+    pub fn forward(mut self) -> ReadAllEvents {
+        self.direction = types::ReadDirection::Forward;
+
+        self
+    }
+
+    pub fn backward(mut self) -> ReadAllEvents {
+        self.direction = types::ReadDirection::Backward;
+
+        self
+    }
+
+    pub fn credentials(mut self, value: types::Credentials) -> ReadAllEvents {
+        self.creds = Some(value);
+
+        self
+    }
+
+    pub fn max_count(mut self, value: i32) -> ReadAllEvents {
+        self.max_count = value;
+
+        self
+    }
+
+    pub fn start_from(mut self, value: types::Position) -> ReadAllEvents {
+        self.start = value;
+
+        self
+    }
+
+    pub fn require_master(mut self, value: bool) -> ReadAllEvents {
+        self.require_master = value;
+
+        self
+    }
+
+    pub fn resolve_link_tos(mut self, value: bool) -> ReadAllEvents {
+        self.resolve_link_tos = value;
+
+        self
+    }
+
+    pub fn execute(self) -> Task<types::ReadStreamStatus<types::AllSlice>> {
+        let     (rcv, promise) = operations::Promise::new(1);
+        let mut op             = operations::ReadAllEvents::new(promise, self.direction, self.creds);
+
+        op.set_from_position(self.start);
+        op.set_max_count(self.max_count);
+        op.set_require_master(self.require_master);
+        op.set_resolve_link_tos(self.resolve_link_tos);
+
+        self.sender.send(Msg::NewOp(operations::Op::ReadAll(op))).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+}

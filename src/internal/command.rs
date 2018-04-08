@@ -21,6 +21,10 @@ pub enum Cmd {
     ReadStreamEventsForwardCompleted,
     ReadStreamEventsBackward,
     ReadStreamEventsBackwardCompleted,
+    ReadAllEventsForward,
+    ReadAllEventsForwardCompleted,
+    ReadAllEventsBackward,
+    ReadAllEventsBackwardCompleted,
     Unknown(u8),
 }
 
@@ -56,6 +60,10 @@ impl Cmd {
             Cmd::ReadStreamEventsForwardCompleted  => 0xB3,
             Cmd::ReadStreamEventsBackward          => 0xB4,
             Cmd::ReadStreamEventsBackwardCompleted => 0xB5,
+            Cmd::ReadAllEventsForward              => 0xB6,
+            Cmd::ReadAllEventsForwardCompleted     => 0xB7,
+            Cmd::ReadAllEventsBackward             => 0xB8,
+            Cmd::ReadAllEventsBackwardCompleted    => 0xB9,
             Cmd::Unknown(cmd)                      => cmd,
         }
     }
@@ -83,6 +91,10 @@ impl Cmd {
             0xB3 => Cmd::ReadStreamEventsForwardCompleted,
             0xB4 => Cmd::ReadStreamEventsBackward,
             0xB5 => Cmd::ReadStreamEventsBackwardCompleted,
+            0xB6 => Cmd::ReadAllEventsForward,
+            0xB7 => Cmd::ReadAllEventsForwardCompleted,
+            0xB8 => Cmd::ReadAllEventsBackward,
+            0xB9 => Cmd::ReadAllEventsBackwardCompleted,
             _    => Cmd::Unknown(cmd),
         }
     }

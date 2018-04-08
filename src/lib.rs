@@ -152,11 +152,20 @@ mod tests {
         println!("Transaction commit result {:?}", result);
 
         let result =
-            client.read_streams("languages".to_owned())
+            client.read_stream("languages".to_owned())
                   .execute()
                   .wait()
                   .unwrap();
 
         println!("Read stream events result {:?}", result);
+
+        let result =
+            client.read_all()
+                  .max_count(10)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+        println!(" Read $all events result {:?}", result);
     }
 }

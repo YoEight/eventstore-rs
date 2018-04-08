@@ -612,8 +612,12 @@ impl Client {
         command::TransactionStart::new(self.sender.clone(), stream)
     }
 
-    pub fn read_streams(&self, stream: String) -> command::ReadStreamEvents {
+    pub fn read_stream(&self, stream: String) -> command::ReadStreamEvents {
         command::ReadStreamEvents::new(self.sender.clone(), stream)
+    }
+
+    pub fn read_all(&self) -> command::ReadAllEvents {
+        command::ReadAllEvents::new(self.sender.clone())
     }
 
     pub fn shutdown(&self) {
