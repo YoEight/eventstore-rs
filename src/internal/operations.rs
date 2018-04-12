@@ -108,6 +108,7 @@ pub enum Op {
     TransactionCommit(TransactionCommit),
     ReadStreams(ReadStreamEvents),
     ReadAll(ReadAllEvents),
+    Delete(DeleteStream),
 }
 
 impl Op {
@@ -122,6 +123,7 @@ impl Op {
             Op::TransactionCommit(t) => Box::new(t),
             Op::ReadStreams(r)       => Box::new(r),
             Op::ReadAll(r)           => Box::new(r),
+            Op::Delete(d)            => Box::new(d),
         }
     }
 }
@@ -1097,6 +1099,136 @@ impl Operation for ReadAllEvents {
                         self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
 
                         op_done()
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct DeleteStream {
+    inner: messages::DeleteStream,
+    promise: Promise<types::Position>,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl DeleteStream {
+    pub fn new(promise: Promise<types::Position>, creds: Option<types::Credentials>) -> DeleteStream {
+        DeleteStream {
+            inner: messages::DeleteStream::new(),
+            promise,
+            creds,
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: String) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub fn set_expected_version(&mut self, exp_ver: types::ExpectedVersion) {
+        self.inner.set_expected_version(exp_ver.to_i64());
+    }
+
+    pub fn set_require_master(&mut self, require_master: bool) {
+        self.inner.set_require_master(require_master);
+    }
+
+    pub fn set_hard_delete(&mut self, value: bool) {
+        self.inner.set_hard_delete(value);
+    }
+}
+
+impl Operation for DeleteStream {
+    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let     size    = self.inner.compute_size() as usize;
+                let mut pkg     = Pkg::new(Cmd::DeleteStream, Uuid::new_v4());
+                let mut payload = Vec::with_capacity(size);
+
+                self.inner.write_to_vec(&mut payload)?;
+
+                pkg.set_payload(payload);
+                pkg.creds_opt = self.creds.clone();
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    match pkg.cmd {
+                        Cmd::DeleteStreamCompleted => {
+                            let response: messages::DeleteStreamCompleted =
+                                    parse_from_bytes(&pkg.payload.as_slice())?;
+
+                            match response.get_result() {
+                                OperationResult::Success => {
+                                    let position = types::Position {
+                                        commit: response.get_commit_position(),
+                                        prepare: response.get_prepare_position(),
+                                    };
+
+                                    self.promise.accept(position);
+
+                                    op_done()
+                                },
+
+                                OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
+                                    op_retry()
+                                }
+
+                                OperationResult::WrongExpectedVersion => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let exp_i64   = self.inner.get_expected_version();
+                                    let exp       = types::ExpectedVersion::from_i64(exp_i64);
+
+                                    self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
+
+                                    op_done()
+                                },
+
+                                OperationResult::StreamDeleted => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+
+                                    self.promise.reject(OperationError::StreamDeleted(stream_id));
+
+                                    op_done()
+                                },
+
+                                OperationResult::InvalidTransaction => {
+                                    self.promise.reject(OperationError::InvalidTransaction);
+
+                                    op_done()
+                                }
+
+                                OperationResult::AccessDenied => {
+                                    let stream_id = self.inner.get_event_stream_id().to_string();
+
+                                    self.promise.reject(OperationError::AccessDenied(stream_id));
+
+                                    op_done()
+                                },
+                            }
+                        },
+
+                        _ => {
+                            self.promise.reject(OperationError::WrongClientImpl(pkg.cmd));
+
+                            op_done()
+                        },
                     }
                 } else {
                     op_done()

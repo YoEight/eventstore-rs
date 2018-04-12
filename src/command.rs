@@ -532,3 +532,63 @@ impl ReadAllEvents {
         single_value_future(rcv)
     }
 }
+
+pub struct DeleteStream {
+    stream: String,
+    require_master: bool,
+    version: types::ExpectedVersion,
+    creds: Option<types::Credentials>,
+    hard_delete: bool,
+    sender: Sender<Msg>,
+}
+
+impl DeleteStream {
+    pub fn new(sender: Sender<Msg>, stream: String) -> DeleteStream {
+        DeleteStream {
+            stream,
+            require_master: false,
+            hard_delete: false,
+            version: types::ExpectedVersion::Any,
+            creds: None,
+            sender,
+        }
+    }
+
+    pub fn require_master(mut self, value: bool) -> DeleteStream {
+        self.require_master = value;
+
+        self
+    }
+
+    pub fn expected_version(mut self, version: types::ExpectedVersion) -> DeleteStream {
+        self.version = version;
+
+        self
+    }
+
+    pub fn credentials(mut self, creds: types::Credentials) -> DeleteStream {
+        self.creds = Some(creds);
+
+        self
+    }
+
+    pub fn hard_delete(mut self, value: bool) -> DeleteStream {
+        self.hard_delete = value;
+
+        self
+    }
+
+    pub fn execute(self) -> Task<types::Position> {
+        let     (rcv, promise) = operations::Promise::new(1);
+        let mut op             = operations::DeleteStream::new(promise, self.creds);
+
+        op.set_event_stream_id(self.stream);
+        op.set_expected_version(self.version);
+        op.set_require_master(self.require_master);
+        op.set_hard_delete(self.hard_delete);
+
+        self.sender.send(Msg::NewOp(operations::Op::Delete(op))).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+}

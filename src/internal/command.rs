@@ -25,6 +25,8 @@ pub enum Cmd {
     ReadAllEventsForwardCompleted,
     ReadAllEventsBackward,
     ReadAllEventsBackwardCompleted,
+    DeleteStream,
+    DeleteStreamCompleted,
     Unknown(u8),
 }
 
@@ -64,6 +66,8 @@ impl Cmd {
             Cmd::ReadAllEventsForwardCompleted     => 0xB7,
             Cmd::ReadAllEventsBackward             => 0xB8,
             Cmd::ReadAllEventsBackwardCompleted    => 0xB9,
+            Cmd::DeleteStream                      => 0x8A,
+            Cmd::DeleteStreamCompleted             => 0x8B,
             Cmd::Unknown(cmd)                      => cmd,
         }
     }
@@ -95,6 +99,8 @@ impl Cmd {
             0xB7 => Cmd::ReadAllEventsForwardCompleted,
             0xB8 => Cmd::ReadAllEventsBackward,
             0xB9 => Cmd::ReadAllEventsBackwardCompleted,
+            0x8A => Cmd::DeleteStream,
+            0x8B => Cmd::DeleteStreamCompleted,
             _    => Cmd::Unknown(cmd),
         }
     }

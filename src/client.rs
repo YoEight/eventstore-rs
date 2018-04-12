@@ -620,6 +620,10 @@ impl Client {
         command::ReadAllEvents::new(self.sender.clone())
     }
 
+    pub fn delete_stream(&self, stream: String) -> command::DeleteStream {
+        command::DeleteStream::new(self.sender.clone(), stream)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }

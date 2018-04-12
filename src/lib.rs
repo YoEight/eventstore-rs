@@ -43,6 +43,7 @@ mod tests {
     use internal::timespan::Timespan;
     use serde_json;
     use time::Duration;
+    use uuid::Uuid;
 
     #[test]
     fn it_works() {
@@ -167,5 +168,26 @@ mod tests {
                   .unwrap();
 
         println!(" Read $all events result {:?}", result);
+
+        let uuid      = Uuid::new_v4();
+        let stream_id = format!("foo:{}", uuid);
+        let foo = json!({
+            "is_rust_a_nice_language": true,
+            "is_haskell_still_better": true,
+        });
+
+        let _ = client.write_events(stream_id.clone())
+                      .push_event(EventData::json("foo-type".to_owned(), foo))
+                      .execute()
+                      .wait()
+                      .unwrap();
+
+        let result = client.delete_stream(stream_id.clone())
+                           .hard_delete(true)
+                           .execute()
+                           .wait()
+                           .unwrap();
+
+        println!("Delete stream [{}] result: {:?}", stream_id, result);
     }
 }
