@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use internal::command::Cmd;
 use internal::messages;
-use internal::types::Credentials;
+use types::Credentials;
 
 pub struct Pkg {
     pub cmd:         Cmd,

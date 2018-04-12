@@ -22,6 +22,7 @@ pub mod internal;
 pub mod discovery;
 pub mod client;
 pub mod command;
+pub mod types;
 // pub mod internal {
 //     mod command;
 //     mod messages;

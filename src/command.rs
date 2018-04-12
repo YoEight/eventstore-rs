@@ -4,7 +4,7 @@ use internal::data::EventData;
 use internal::messaging::Msg;
 use internal::metadata::StreamMetadata;
 use internal::operations;
-use internal::types;
+use types;
 
 type Task<A> = Box<Future<Item=A, Error=operations::OperationError>>;
 

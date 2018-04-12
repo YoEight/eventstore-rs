@@ -13,7 +13,7 @@ use uuid::{ Uuid, ParseError };
 use internal::command::Cmd;
 use internal::messaging::Msg;
 use internal::package::Pkg;
-use internal::types::Credentials;
+use types::Credentials;
 
 pub struct Connection {
     pub id:     Uuid,

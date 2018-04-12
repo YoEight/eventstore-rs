@@ -8,7 +8,7 @@ use internal::command::Cmd;
 use internal::data::EventData;
 use internal::messages;
 use internal::package::Pkg;
-use internal::types;
+use types;
 
 use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
 

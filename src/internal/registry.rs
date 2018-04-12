@@ -6,7 +6,7 @@ use uuid::Uuid;
 use internal::connection::Connection;
 use internal::operations::{ Operation, OperationError };
 use internal::package::Pkg;
-use internal::types::{ Settings, Retry };
+use types::{ Settings, Retry };
 
 struct Register {
     // When the operation has started.
