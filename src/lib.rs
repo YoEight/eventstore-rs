@@ -13,13 +13,13 @@ extern crate tokio_timer;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use]
 extern crate serde_json;
 
 // #[macro_use]
 // extern crate log;
 
 pub mod internal;
+pub mod discovery;
 pub mod client;
 pub mod command;
 // pub mod internal {

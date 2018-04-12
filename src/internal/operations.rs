@@ -88,7 +88,8 @@ fn op_done() -> Decision {
     Ok(Outcome::Done)
 }
 
-fn op_continue() -> Decision {
+
+fn _op_continue() -> Decision {
     Ok(Outcome::Continue(None))
 }
 
