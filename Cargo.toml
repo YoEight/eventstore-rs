@@ -22,3 +22,6 @@ serde_derive = "1.0"
 
 [build-dependencies]
 protoc-rust = "1.4"
+
+[[test]]
+name = "integration"
