@@ -1,6 +1,5 @@
 use futures::sync::mpsc::Sender;
 use futures::{ Future, Sink, Stream };
-use internal::data::EventData;
 use internal::messaging::Msg;
 use internal::metadata::StreamMetadata;
 use internal::operations;
@@ -22,7 +21,7 @@ fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
 
 pub struct WriteEvents {
     stream: String,
-    events: Vec<EventData>,
+    events: Vec<types::EventData>,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
@@ -41,18 +40,18 @@ impl WriteEvents {
         }
     }
 
-    pub fn set_events(self, events: Vec<EventData>) -> WriteEvents {
+    pub fn set_events(self, events: Vec<types::EventData>) -> WriteEvents {
         WriteEvents { events, ..self}
     }
 
-    pub fn push_event(mut self, event: EventData) -> WriteEvents {
+    pub fn push_event(mut self, event: types::EventData) -> WriteEvents {
         self.events.push(event);
 
         self
     }
 
     pub fn append_events<T>(mut self, events: T) -> WriteEvents
-        where T: IntoIterator<Item=EventData>
+        where T: IntoIterator<Item=types::EventData>
     {
         self.events.extend(events);
 
@@ -166,7 +165,7 @@ impl WriteStreamData {
     }
 
     pub fn execute(self) -> Task<types::WriteResult> {
-        let event = EventData::json("$metadata".to_owned(), self.metadata);
+        let event = types::EventData::json("$metadata".to_owned(), self.metadata);
 
         self.inner.push_event(event)
                   .execute()
@@ -309,12 +308,12 @@ impl Transaction {
         self.id
     }
 
-    pub fn write_single(&self, event: EventData) -> Task<()> {
+    pub fn write_single(&self, event: types::EventData) -> Task<()> {
         self.write(::std::iter::once(event))
     }
 
     pub fn write<I>(&self, events: I) -> Task<()>
-        where I: IntoIterator<Item=EventData>
+        where I: IntoIterator<Item=types::EventData>
     {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op = operations::TransactionWrite::new(

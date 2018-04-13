@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use serde::de::Deserialize;
+use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, ParseError };
 
@@ -421,5 +422,95 @@ impl Slice for AllSlice {
                 next: Some(self.next),
             }
         }
+    }
+}
+
+enum Payload {
+    Json(Vec<u8>),
+    Binary(Vec<u8>),
+}
+
+pub struct EventData {
+    event_type: String,
+    payload: Payload,
+    id_opt: Option<Uuid>,
+    metadata_payload_opt: Option<Payload>,
+}
+
+impl EventData {
+    pub fn json<P>(event_type: String, payload: P) -> EventData
+        where P: Serialize
+    {
+        EventData {
+            event_type,
+            payload: Payload::Json(serde_json::to_vec(&payload).unwrap()),
+            id_opt: None,
+            metadata_payload_opt: None,
+        }
+    }
+
+    pub fn binary(event_type: String, payload: Vec<u8>) -> EventData {
+        EventData {
+            event_type,
+            payload: Payload::Binary(payload),
+            id_opt: None,
+            metadata_payload_opt: None,
+        }
+    }
+
+    pub fn id(self, value: Uuid) -> EventData {
+        EventData { id_opt: Some(value), ..self }
+    }
+
+    pub fn metadata_as_json<P>(self, payload: P) -> EventData
+        where P: Serialize
+    {
+        let json_bin = serde_json::to_vec(&payload).unwrap();
+        let json_bin = Some(Payload::Json(json_bin));
+
+        EventData { metadata_payload_opt: json_bin, ..self }
+    }
+
+    pub fn metadata_as_binary(self, payload: Vec<u8>) -> EventData {
+        let content_bin = Some(Payload::Binary(payload));
+
+        EventData { metadata_payload_opt: content_bin, ..self }
+    }
+
+    pub fn build(self) -> messages::NewEvent {
+        let mut new_event = messages::NewEvent::new();
+        let     id        = self.id_opt.unwrap_or_else(|| Uuid::new_v4());
+
+        new_event.set_event_id(id.as_bytes().to_vec());
+
+        match self.payload {
+            Payload::Json(bin) => {
+                new_event.set_data_content_type(1);
+                new_event.set_data(bin);
+            },
+
+            Payload::Binary(bin) => {
+                new_event.set_data_content_type(0);
+                new_event.set_data(bin);
+            },
+        }
+
+        match self.metadata_payload_opt {
+            Some(Payload::Json(bin)) => {
+                new_event.set_metadata_content_type(1);
+                new_event.set_metadata(bin);
+            },
+
+            Some(Payload::Binary(bin)) => {
+                new_event.set_metadata_content_type(0);
+                new_event.set_metadata(bin);
+            },
+
+            None => new_event.set_metadata_content_type(0),
+        }
+
+        new_event.set_event_type(self.event_type);
+
+        new_event
     }
 }

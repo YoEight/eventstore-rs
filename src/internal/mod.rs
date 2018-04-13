@@ -1,7 +1,6 @@
 pub mod acl;
 pub mod command;
 pub mod connection;
-pub mod data;
 pub mod driver;
 pub mod endpoint;
 pub mod messaging;

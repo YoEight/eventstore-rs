@@ -5,7 +5,6 @@ use protobuf::{ RepeatedField, Message };
 use protobuf::core::parse_from_bytes;
 
 use internal::command::Cmd;
-use internal::data::EventData;
 use internal::messages;
 use internal::package::Pkg;
 use types;
@@ -165,7 +164,7 @@ impl WriteEvents {
         self.inner.set_expected_version(exp_ver.to_i64());
     }
 
-    pub fn set_events(&mut self, events: Vec<EventData>) {
+    pub fn set_events(&mut self, events: Vec<types::EventData>) {
         let mut repeated = RepeatedField::new();
 
         for event in events {
@@ -558,7 +557,7 @@ impl TransactionWrite {
     }
 
     pub fn set_events<I>(&mut self, events: I)
-        where I: IntoIterator<Item=EventData>
+        where I: IntoIterator<Item=types::EventData>
     {
         let mut repeated = RepeatedField::new();
 
