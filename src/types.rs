@@ -6,7 +6,6 @@ use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, ParseError };
 
-use internal::acl::StreamAcl;
 use internal::messages;
 use internal::timespan::Timespan;
 
@@ -598,4 +597,22 @@ impl StreamMetadata {
     pub fn builder() -> StreamMetadataBuilder {
         StreamMetadataBuilder::new()
     }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct StreamAcl {
+    #[serde(rename = "$r")]
+    pub read_roles: Vec<String>,
+
+    #[serde(rename = "$w")]
+    pub write_roles: Vec<String>,
+
+    #[serde(rename = "$d")]
+    pub delete_roles: Vec<String>,
+
+    #[serde(rename = "$mr")]
+    pub meta_read_roles: Vec<String>,
+
+    #[serde(rename = "$mw")]
+    pub meta_write_roles: Vec<String>,
 }
