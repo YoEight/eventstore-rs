@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::de::Deserialize;
@@ -5,8 +6,9 @@ use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, ParseError };
 
+use internal::acl::StreamAcl;
 use internal::messages;
-use internal::metadata::StreamMetadata;
+use internal::timespan::Timespan;
 
 #[derive(Copy, Clone)]
 pub enum Retry {
@@ -512,5 +514,88 @@ impl EventData {
         new_event.set_event_type(self.event_type);
 
         new_event
+    }
+}
+
+#[derive(Default)]
+pub struct StreamMetadataBuilder {
+    max_count: Option<u64>,
+    max_age: Option<Timespan>,
+    truncate_before: Option<u64>,
+    cache_control: Option<Timespan>,
+    acl: Option<StreamAcl>,
+    properties: HashMap<String, serde_json::Value>,
+}
+
+impl StreamMetadataBuilder {
+    pub fn new() -> StreamMetadataBuilder {
+        Default::default()
+    }
+
+    pub fn max_count(self, value: u64) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { max_count: Some(value), ..self }
+    }
+
+    pub fn max_age(self, value: Timespan) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { max_age: Some(value), ..self }
+    }
+
+    pub fn truncate_before(self, value: u64) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { truncate_before: Some(value), ..self }
+    }
+
+    pub fn cache_control(self, value: Timespan) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { cache_control: Some(value), ..self }
+    }
+
+    pub fn acl(self, value: StreamAcl) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { acl: Some(value), ..self }
+    }
+
+    pub fn insert_custom_property<V>(mut self, key: String, value: V) -> StreamMetadataBuilder
+        where V: Serialize
+    {
+        let serialized = serde_json::to_value(value).unwrap();
+        let _          = self.properties.insert(key, serialized);
+
+        self
+    }
+
+    pub fn build(self) -> StreamMetadata {
+        StreamMetadata {
+            max_count: self.max_count,
+            max_age: self.max_age,
+            truncate_before: self.truncate_before,
+            cache_control: self.cache_control,
+            acl: self.acl.unwrap_or_default(),
+            custom_properties: self.properties,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StreamMetadata {
+    #[serde(rename = "$maxCount")]
+    pub max_count: Option<u64>,
+
+    #[serde(rename = "$maxAge")]
+    pub max_age: Option<Timespan>,
+
+    #[serde(rename = "$tb")]
+    pub truncate_before: Option<u64>,
+
+    #[serde(rename = "$cacheControl")]
+    pub cache_control: Option<Timespan>,
+
+    #[serde(rename = "$acl")]
+    pub acl: StreamAcl,
+
+    #[serde(flatten)]
+    pub custom_properties: HashMap<String, serde_json::Value>,
+}
+
+impl StreamMetadata {
+    pub fn builder() -> StreamMetadataBuilder {
+        StreamMetadataBuilder::new()
     }
 }

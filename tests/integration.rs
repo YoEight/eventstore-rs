@@ -6,9 +6,8 @@ extern crate uuid;
 
 use futures::Future;
 use eventstore::client::Client;
-use eventstore::internal::metadata::StreamMetadata;
 use eventstore::internal::timespan::Timespan;
-use eventstore::types::{ self, Credentials, Settings, EventData };
+use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata };
 use uuid::Uuid;
 
 #[test]

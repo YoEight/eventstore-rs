@@ -1,7 +1,6 @@
 use futures::sync::mpsc::Sender;
 use futures::{ Future, Sink, Stream };
 use internal::messaging::Msg;
-use internal::metadata::StreamMetadata;
 use internal::operations;
 use types;
 
@@ -134,12 +133,12 @@ impl ReadEvent {
 }
 
 pub struct WriteStreamData {
-    metadata: StreamMetadata,
+    metadata: types::StreamMetadata,
     inner: WriteEvents,
 }
 
 impl WriteStreamData {
-    pub fn new(sender: Sender<Msg>, stream: String, metadata: StreamMetadata) -> WriteStreamData {
+    pub fn new(sender: Sender<Msg>, stream: String, metadata: types::StreamMetadata) -> WriteStreamData {
         WriteStreamData {
             metadata,
             inner: WriteEvents::new(sender, format!("$${}", stream)),

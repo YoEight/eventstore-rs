@@ -7,10 +7,9 @@ use tokio_core::reactor::Core;
 
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
-use internal::metadata::StreamMetadata;
 use command;
 use discovery::StaticDiscovery;
-use types::Settings;
+use types::{ StreamMetadata, Settings };
 
 pub struct Client {
     worker: JoinHandle<()>,
