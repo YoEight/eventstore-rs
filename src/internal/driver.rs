@@ -8,10 +8,9 @@ use tokio_core::reactor::Handle;
 use tokio_timer::Timer;
 use uuid::Uuid;
 
-use discovery::Discovery;
+use discovery::{ Endpoint, Discovery };
 use internal::command::Cmd;
 use internal::connection::Connection;
-use internal::endpoint::Endpoint;
 use internal::messaging::Msg;
 use internal::operations::Op;
 use internal::package::Pkg;
