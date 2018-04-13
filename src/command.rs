@@ -41,10 +41,8 @@ impl WriteEvents {
         }
     }
 
-    pub fn set_events(mut self, events: Vec<EventData>) -> WriteEvents {
-        self.events = events;
-
-        self
+    pub fn set_events(self, events: Vec<EventData>) -> WriteEvents {
+        WriteEvents { events, ..self}
     }
 
     pub fn push_event(mut self, event: EventData) -> WriteEvents {
@@ -61,22 +59,16 @@ impl WriteEvents {
         self
     }
 
-    pub fn require_master(mut self, value: bool) -> WriteEvents {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> WriteEvents {
+        WriteEvents { require_master, ..self }
     }
 
-    pub fn expected_version(mut self, version: types::ExpectedVersion) -> WriteEvents {
-        self.version = version;
-
-        self
+    pub fn expected_version(self, version: types::ExpectedVersion) -> WriteEvents {
+        WriteEvents { version, ..self }
     }
 
-    pub fn credentials(mut self, creds: types::Credentials) -> WriteEvents {
-        self.creds = Some(creds);
-
-        self
+    pub fn credentials(self, creds: types::Credentials) -> WriteEvents {
+        WriteEvents { creds: Some(creds), ..self }
     }
 
     pub fn execute(self) -> Task<types::WriteResult> {
@@ -115,22 +107,16 @@ impl ReadEvent {
         }
     }
 
-    pub fn resolve_link_tos(mut self, value: bool) -> ReadEvent {
-        self.resolve_link_tos = value;
-
-        self
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadEvent {
+        ReadEvent { resolve_link_tos, ..self }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadEvent {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> ReadEvent {
+        ReadEvent { require_master, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadEvent {
-        self.creds = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> ReadEvent {
+        ReadEvent { creds: Some(value), ..self }
     }
 
     pub fn execute(self) -> Task<types::ReadEventStatus<types::ReadEventResult>> {
@@ -266,22 +252,16 @@ impl TransactionStart {
         }
     }
 
-    pub fn require_master(mut self, value: bool) -> TransactionStart {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> TransactionStart {
+        TransactionStart { require_master, ..self }
     }
 
-    pub fn version(mut self, value: types::ExpectedVersion) -> TransactionStart {
-        self.version = value;
-
-        self
+    pub fn version(self, version: types::ExpectedVersion) -> TransactionStart {
+        TransactionStart { version, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> TransactionStart {
-        self.creds_opt = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> TransactionStart {
+        TransactionStart { creds_opt: Some(value), ..self }
     }
 
     pub fn execute(self) -> Task<Transaction> {
@@ -325,7 +305,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn get_it(&self) -> types::TransactionId {
+    pub fn get_id(&self) -> types::TransactionId {
         self.id
     }
 
@@ -395,46 +375,32 @@ impl ReadStreamEvents {
         }
     }
 
-    pub fn forward(mut self) -> ReadStreamEvents {
-        self.direction = types::ReadDirection::Forward;
-
-        self
+    pub fn forward(self) -> ReadStreamEvents {
+        ReadStreamEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
-    pub fn backward(mut self) -> ReadStreamEvents {
-        self.direction = types::ReadDirection::Backward;
-
-        self
+    pub fn backward(self) -> ReadStreamEvents {
+        ReadStreamEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadStreamEvents {
-        self.creds = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> ReadStreamEvents {
+        ReadStreamEvents { creds: Some(value), ..self }
     }
 
-    pub fn max_count(mut self, value: i32) -> ReadStreamEvents {
-        self.max_count = value;
-
-        self
+    pub fn max_count(self, max_count: i32) -> ReadStreamEvents {
+        ReadStreamEvents { max_count, ..self }
     }
 
-    pub fn start_from(mut self, value: i64) -> ReadStreamEvents {
-        self.start = value;
-
-        self
+    pub fn start_from(self, start: i64) -> ReadStreamEvents {
+        ReadStreamEvents { start, ..self }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadStreamEvents {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> ReadStreamEvents {
+        ReadStreamEvents { require_master, ..self }
     }
 
-    pub fn resolve_link_tos(mut self, value: bool) -> ReadStreamEvents {
-        self.resolve_link_tos = value;
-
-        self
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadStreamEvents {
+        ReadStreamEvents { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> Task<types::ReadStreamStatus<types::StreamSlice>> {
@@ -476,46 +442,32 @@ impl ReadAllEvents {
         }
     }
 
-    pub fn forward(mut self) -> ReadAllEvents {
-        self.direction = types::ReadDirection::Forward;
-
-        self
+    pub fn forward(self) -> ReadAllEvents {
+        ReadAllEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
-    pub fn backward(mut self) -> ReadAllEvents {
-        self.direction = types::ReadDirection::Backward;
-
-        self
+    pub fn backward(self) -> ReadAllEvents {
+        ReadAllEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadAllEvents {
-        self.creds = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> ReadAllEvents {
+        ReadAllEvents { creds: Some(value), ..self }
     }
 
-    pub fn max_count(mut self, value: i32) -> ReadAllEvents {
-        self.max_count = value;
-
-        self
+    pub fn max_count(self, max_count: i32) -> ReadAllEvents {
+        ReadAllEvents { max_count, ..self }
     }
 
-    pub fn start_from(mut self, value: types::Position) -> ReadAllEvents {
-        self.start = value;
-
-        self
+    pub fn start_from(self, start: types::Position) -> ReadAllEvents {
+        ReadAllEvents { start, ..self }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadAllEvents {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> ReadAllEvents {
+        ReadAllEvents { require_master, ..self }
     }
 
-    pub fn resolve_link_tos(mut self, value: bool) -> ReadAllEvents {
-        self.resolve_link_tos = value;
-
-        self
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadAllEvents {
+        ReadAllEvents { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> Task<types::ReadStreamStatus<types::AllSlice>> {
@@ -554,28 +506,20 @@ impl DeleteStream {
         }
     }
 
-    pub fn require_master(mut self, value: bool) -> DeleteStream {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> DeleteStream {
+        DeleteStream { require_master, ..self }
     }
 
-    pub fn expected_version(mut self, version: types::ExpectedVersion) -> DeleteStream {
-        self.version = version;
-
-        self
+    pub fn expected_version(self, version: types::ExpectedVersion) -> DeleteStream {
+        DeleteStream { version, ..self }
     }
 
-    pub fn credentials(mut self, creds: types::Credentials) -> DeleteStream {
-        self.creds = Some(creds);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> DeleteStream {
+        DeleteStream { creds: Some(value), ..self }
     }
 
-    pub fn hard_delete(mut self, value: bool) -> DeleteStream {
-        self.hard_delete = value;
-
-        self
+    pub fn hard_delete(self, hard_delete: bool) -> DeleteStream {
+        DeleteStream { hard_delete, ..self }
     }
 
     pub fn execute(self) -> Task<types::Position> {
