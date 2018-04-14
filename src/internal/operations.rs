@@ -130,7 +130,7 @@ impl Op {
 }
 
 pub trait Operation {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision;
+    fn poll(&mut self, input: Option<Pkg>) -> Decision;
     fn failed(&mut self, error: OperationError);
     fn retry(&mut self);
 }
@@ -181,17 +181,11 @@ impl WriteEvents {
 }
 
 impl Operation for WriteEvents {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::WriteEvents, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::WriteEvents, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -202,7 +196,7 @@ impl Operation for WriteEvents {
                     match pkg.cmd {
                         Cmd::WriteEventsCompleted => {
                             let response: messages::WriteEventsCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -316,17 +310,11 @@ impl ReadEvent {
 }
 
 impl Operation for ReadEvent {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::ReadEvent, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::ReadEvent, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -337,7 +325,7 @@ impl Operation for ReadEvent {
                     match pkg.cmd {
                         Cmd::ReadEventCompleted => {
                             let mut response: messages::ReadEventCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 messages::ReadEventCompleted_ReadEventResult::Success => {
@@ -444,17 +432,11 @@ impl TransactionStart {
 }
 
 impl Operation for TransactionStart {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let    size     = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::TransactionStart, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::TransactionStart, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -465,7 +447,7 @@ impl Operation for TransactionStart {
                     match pkg.cmd {
                         Cmd::TransactionStartCompleted => {
                             let response: messages::TransactionStartCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -575,17 +557,11 @@ impl TransactionWrite {
 }
 
 impl Operation for TransactionWrite {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::TransactionWrite, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::TransactionWrite, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -596,7 +572,7 @@ impl Operation for TransactionWrite {
                     match pkg.cmd {
                         Cmd::TransactionWriteCompleted => {
                             let response: messages::TransactionWriteCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -694,17 +670,11 @@ impl TransactionCommit {
 }
 
 impl Operation for TransactionCommit {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::TransactionCommit, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::TransactionCommit, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -715,7 +685,7 @@ impl Operation for TransactionCommit {
                     match pkg.cmd {
                         Cmd::TransactionCommitCompleted => {
                             let response: messages::TransactionCommitCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -851,17 +821,11 @@ impl ReadStreamEvents {
 }
 
 impl Operation for ReadStreamEvents {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(self.request_cmd, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    self.request_cmd, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -871,7 +835,7 @@ impl Operation for ReadStreamEvents {
                 if let Some(pkg) = input {
                     if pkg.cmd == self.response_cmd {
                         let mut response: messages::ReadStreamEventsCompleted =
-                                parse_from_bytes(&pkg.payload.as_slice())?;
+                                pkg.to_message()?;
 
                         match response.get_result() {
                             ReadStreamEventsCompleted_ReadStreamResult::Success => {
@@ -1020,17 +984,11 @@ impl ReadAllEvents {
 }
 
 impl Operation for ReadAllEvents {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(self.request_cmd, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    self.request_cmd, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -1040,7 +998,7 @@ impl Operation for ReadAllEvents {
                 if let Some(pkg) = input {
                     if pkg.cmd == self.response_cmd {
                         let mut response: messages::ReadAllEventsCompleted =
-                                parse_from_bytes(&pkg.payload.as_slice())?;
+                                pkg.to_message()?;
 
                         match response.get_result() {
                             ReadAllEventsCompleted_ReadAllResult::Success => {
@@ -1154,17 +1112,11 @@ impl DeleteStream {
 }
 
 impl Operation for DeleteStream {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::DeleteStream, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::DeleteStream, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -1175,7 +1127,7 @@ impl Operation for DeleteStream {
                     match pkg.cmd {
                         Cmd::DeleteStreamCompleted => {
                             let response: messages::DeleteStreamCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {

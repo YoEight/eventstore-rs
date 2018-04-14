@@ -111,8 +111,13 @@ impl Registry {
         }
     }
 
-    pub fn handle(&mut self, pkg: &Pkg, conn: &Connection) -> bool {
-        if let Some(mut reg) = self.pending.remove(&pkg.correlation) {
+    pub fn handle(&mut self, pkg: Pkg, conn: &Connection) {
+        let pkg_id  = pkg.correlation;
+        let pkg_cmd = pkg.cmd;
+
+        if let Some(mut reg) = self.pending.remove(&pkg_id) {
+            println!("Package [{}] received: command [{}].",
+                                    pkg_id, pkg_cmd.to_u8());
 
             // We notified the operation we receive some 'Pkg' from the server
             // that might interest it.
@@ -135,7 +140,7 @@ impl Registry {
                             // This operation wants to keep its old correlation
                             // id, so we insert it back with its previous
                             // value.
-                            self.pending.insert(pkg.correlation, reg);
+                            self.pending.insert(pkg_id, reg);
                             reg.lasting_session = true;
                         }
                     } else if outcome.is_retrying() {
@@ -152,10 +157,9 @@ impl Registry {
                     reg.op.failed(OperationError::InvalidOperation(msg));
                 },
             }
-
-            true
         } else {
-            false
+            println!("Package [{}] not handled: command [{}].",
+                                    pkg_id, pkg_cmd.to_u8());
         }
     }
 

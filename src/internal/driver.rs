@@ -364,13 +364,7 @@ impl Driver {
                     _ => {
                         // It will be always 'Some' when receiving a package.
                         if let Some(ref conn) = self.candidate {
-                            if self.registry.handle(&pkg, conn) {
-                                println!("Package [{}] received: command [{}].",
-                                    pkg.correlation, pkg.cmd.to_u8())
-                            } else {
-                                println!("Package [{}] not handled: command [{}].",
-                                    pkg.correlation, pkg.cmd.to_u8())
-                            }
+                            self.registry.handle(pkg, conn);
                         }
                     },
                 }

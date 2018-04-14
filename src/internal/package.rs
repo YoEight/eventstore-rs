@@ -1,4 +1,5 @@
-use protobuf::Message;
+use bytes::Bytes;
+use protobuf::{ Message, MessageStatic, parse_from_bytes };
 use uuid::Uuid;
 
 use internal::command::Cmd;
@@ -23,6 +24,25 @@ impl Pkg {
             correlation: correlation,
             payload:     Vec::new(),
         }
+    }
+
+    pub fn from_message<M>(cmd: Cmd, creds_opt: Option<Credentials>, msg: &M)
+        -> ::std::io::Result<Pkg>
+        where M: Message
+    {
+        let     size  = msg.compute_size() as usize;
+        let mut bytes = Vec::with_capacity(size);
+
+        msg.write_to_vec(&mut bytes)?;
+
+        let pkg = Pkg {
+            cmd,
+            creds_opt,
+            correlation: Uuid::new_v4(),
+            payload: bytes,
+        };
+
+        Ok(pkg)
     }
 
     pub fn set_payload(&mut self, payload: Vec<u8>) {
@@ -81,5 +101,11 @@ impl Pkg {
             payload:     Vec::new(),
             creds_opt:   None,
         }
+    }
+
+    pub fn to_message<M>(&self) -> ::std::io::Result<M>
+        where M: MessageStatic
+    {
+        parse_from_bytes(self.payload.as_slice()).map_err(|e| e.into())
     }
 }
