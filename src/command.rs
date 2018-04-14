@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::ops::Deref;
+
 use futures::sync::mpsc::Sender;
 use futures::{ Future, Sink, Stream };
+use protobuf::Chars;
 use serde_json;
 
 use internal::messaging::Msg;
@@ -23,7 +26,7 @@ fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
 }
 
 pub struct WriteEvents {
-    stream: String,
+    stream: Chars,
     events: Vec<types::EventData>,
     require_master: bool,
     version: types::ExpectedVersion,
@@ -32,9 +35,11 @@ pub struct WriteEvents {
 }
 
 impl WriteEvents {
-    pub fn new(sender: Sender<Msg>, stream: String) -> WriteEvents {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> WriteEvents
+        where S: Into<Chars>
+    {
         WriteEvents {
-            stream,
+            stream: stream.into(),
             events: Vec::new(),
             require_master: false,
             version: types::ExpectedVersion::Any,
@@ -89,7 +94,7 @@ impl WriteEvents {
 }
 
 pub struct ReadEvent {
-    stream: String,
+    stream: Chars,
     event_number: i64,
     resolve_link_tos: bool,
     require_master: bool,
@@ -98,9 +103,11 @@ pub struct ReadEvent {
 }
 
 impl ReadEvent {
-    pub fn new(sender: Sender<Msg>, stream: String, event_number: i64) -> ReadEvent {
+    pub fn new<S>(sender: Sender<Msg>, stream: S, event_number: i64) -> ReadEvent
+        where S: Into<Chars>
+    {
         ReadEvent {
-            stream,
+            stream: stream.into(),
             event_number,
             sender,
             resolve_link_tos: false,
@@ -227,10 +234,12 @@ pub struct WriteStreamData {
 }
 
 impl WriteStreamData {
-    pub fn new(sender: Sender<Msg>, stream: String, metadata: types::StreamMetadata) -> WriteStreamData {
+    pub fn new<S>(sender: Sender<Msg>, stream: S, metadata: types::StreamMetadata) -> WriteStreamData
+        where S: Into<Chars>
+    {
         WriteStreamData {
             metadata,
-            inner: WriteEvents::new(sender, format!("$${}", stream)),
+            inner: WriteEvents::new(sender, format!("$${}", stream.into().deref())),
         }
     }
 
@@ -254,7 +263,7 @@ impl WriteStreamData {
 
     pub fn execute(self) -> Task<types::WriteResult> {
         let metadata = StreamMetadataInternal::from_metadata(self.metadata);
-        let event    = types::EventData::json("$metadata".to_owned(), metadata);
+        let event    = types::EventData::json("$metadata", metadata);
 
         self.inner.push_event(event)
                   .execute()
@@ -262,16 +271,19 @@ impl WriteStreamData {
 }
 
 pub struct ReadStreamData {
-    stream: String,
+    stream: Chars,
     inner: ReadEvent,
 }
 
 impl ReadStreamData {
-    pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamData {
-        let name = format!("$${}", stream);
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> ReadStreamData
+        where S: Into<Chars>
+    {
+        let stream_chars = stream.into();
+        let name         = format!("$${}", stream_chars.deref());
 
         ReadStreamData {
-            stream,
+            stream: stream_chars,
             inner: ReadEvent::new(sender, name, -1),
         }
     }
@@ -322,7 +334,7 @@ impl ReadStreamData {
 }
 
 pub struct TransactionStart {
-    stream: String,
+    stream: Chars,
     version: types::ExpectedVersion,
     require_master: bool,
     creds_opt: Option<types::Credentials>,
@@ -330,9 +342,11 @@ pub struct TransactionStart {
 }
 
 impl TransactionStart {
-    pub fn new(sender: Sender<Msg>, stream: String) -> TransactionStart {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> TransactionStart
+        where S: Into<Chars>
+    {
         TransactionStart {
-            stream,
+            stream: stream.into(),
             require_master: false,
             version: types::ExpectedVersion::Any,
             creds_opt: None,
@@ -384,7 +398,7 @@ impl TransactionStart {
 }
 
 pub struct Transaction {
-    stream: String,
+    stream: Chars,
     id: types::TransactionId,
     version: types::ExpectedVersion,
     require_master: bool,
@@ -439,7 +453,7 @@ impl Transaction {
 }
 
 pub struct ReadStreamEvents {
-    stream: String,
+    stream: Chars,
     max_count: i32,
     start: i64,
     require_master: bool,
@@ -450,9 +464,11 @@ pub struct ReadStreamEvents {
 }
 
 impl ReadStreamEvents {
-    pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamEvents {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> ReadStreamEvents
+        where S: Into<Chars>
+    {
         ReadStreamEvents {
-            stream,
+            stream: stream.into(),
             max_count: 500,
             start: 0,
             require_master: false,
@@ -574,7 +590,7 @@ impl ReadAllEvents {
 }
 
 pub struct DeleteStream {
-    stream: String,
+    stream: Chars,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
@@ -583,9 +599,11 @@ pub struct DeleteStream {
 }
 
 impl DeleteStream {
-    pub fn new(sender: Sender<Msg>, stream: String) -> DeleteStream {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> DeleteStream
+        where S: Into<Chars>
+    {
         DeleteStream {
-            stream,
+            stream: stream.into(),
             require_master: false,
             hard_delete: false,
             version: types::ExpectedVersion::Any,

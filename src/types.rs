@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use bytes::Bytes;
+use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
@@ -128,12 +130,12 @@ pub struct ReadEventResult {
 
 #[derive(Debug)]
 pub struct RecordedEvent {
-    pub event_stream_id: String,
+    pub event_stream_id: Chars,
     pub event_id: Uuid,
     pub event_number: i64,
-    pub event_type: String,
-    pub data: Vec<u8>,
-    pub metadata: Vec<u8>,
+    pub event_type: Chars,
+    pub data: Bytes,
+    pub metadata: Bytes,
     pub is_json: bool,
     pub created: Option<i64>,
     pub created_epoch: Option<i64>,
@@ -188,7 +190,7 @@ impl RecordedEvent {
     pub fn as_json<'a, T>(&'a self) -> serde_json::Result<T>
         where T: Deserialize<'a>
     {
-        serde_json::from_slice(self.data.as_slice())
+        serde_json::from_slice(&self.data[..])
     }
 }
 
@@ -273,16 +275,16 @@ impl ResolvedEvent {
         self.link.as_ref().or(self.event.as_ref())
     }
 
-    pub fn get_original_stream_id(&self) -> Option<&String> {
+    pub fn get_original_stream_id(&self) -> Option<&Chars> {
         self.get_original_event().map(|event| &event.event_stream_id)
     }
 }
 
 #[derive(Debug)]
 pub enum StreamMetadataResult {
-    Deleted { stream: String },
-    NotFound { stream: String },
-    Success { stream: String, version: i64, metadata: StreamMetadata },
+    Deleted { stream: Chars },
+    NotFound { stream: Chars },
+    Success { stream: Chars, version: i64, metadata: StreamMetadata },
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
@@ -317,11 +319,11 @@ pub trait Slice {
 #[derive(Debug)]
 pub enum ReadStreamStatus<A> {
     Success(A),
-    NoStream(String),
-    StreamDeleled(String),
-    NotModified(String),
-    Error(String),
-    AccessDenied(String),
+    NoStream(Chars),
+    StreamDeleled(Chars),
+    NotModified(Chars),
+    Error(Chars),
+    AccessDenied(Chars),
 }
 
 #[derive(Debug)]
@@ -426,32 +428,37 @@ impl Slice for AllSlice {
 }
 
 enum Payload {
-    Json(Vec<u8>),
-    Binary(Vec<u8>),
+    Json(Bytes),
+    Binary(Bytes),
 }
 
 pub struct EventData {
-    event_type: String,
+    event_type: Chars,
     payload: Payload,
     id_opt: Option<Uuid>,
     metadata_payload_opt: Option<Payload>,
 }
 
 impl EventData {
-    pub fn json<P>(event_type: String, payload: P) -> EventData
-        where P: Serialize
+    pub fn json<P, S>(event_type: S, payload: P) -> EventData
+        where P: Serialize,
+              S: Into<Chars>
     {
+        let bytes = Bytes::from(serde_json::to_vec(&payload).unwrap());
+
         EventData {
-            event_type,
-            payload: Payload::Json(serde_json::to_vec(&payload).unwrap()),
+            event_type: event_type.into(),
+            payload: Payload::Json(bytes),
             id_opt: None,
             metadata_payload_opt: None,
         }
     }
 
-    pub fn binary(event_type: String, payload: Vec<u8>) -> EventData {
+    pub fn binary<S>(event_type: S, payload: Bytes) -> EventData
+        where S: Into<Chars>
+    {
         EventData {
-            event_type,
+            event_type: event_type.into(),
             payload: Payload::Binary(payload),
             id_opt: None,
             metadata_payload_opt: None,
@@ -465,13 +472,13 @@ impl EventData {
     pub fn metadata_as_json<P>(self, payload: P) -> EventData
         where P: Serialize
     {
-        let json_bin = serde_json::to_vec(&payload).unwrap();
-        let json_bin = Some(Payload::Json(json_bin));
+        let bytes    = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let json_bin = Some(Payload::Json(bytes));
 
         EventData { metadata_payload_opt: json_bin, ..self }
     }
 
-    pub fn metadata_as_binary(self, payload: Vec<u8>) -> EventData {
+    pub fn metadata_as_binary(self, payload: Bytes) -> EventData {
         let content_bin = Some(Payload::Binary(payload));
 
         EventData { metadata_payload_opt: content_bin, ..self }
@@ -481,7 +488,7 @@ impl EventData {
         let mut new_event = messages::NewEvent::new();
         let     id        = self.id_opt.unwrap_or_else(|| Uuid::new_v4());
 
-        new_event.set_event_id(id.as_bytes().to_vec());
+        new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
 
         match self.payload {
             Payload::Json(bin) => {

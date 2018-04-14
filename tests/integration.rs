@@ -28,15 +28,15 @@ fn all_round_operation_test() {
     });
 
     let fut =
-        client.write_events("languages".to_owned())
-              .push_event(EventData::json("foo-type".to_owned(), foo))
+        client.write_events("languages")
+              .push_event(EventData::json("foo-type", foo))
               .execute();
 
     let result = fut.wait().unwrap();
 
     println!("Write response: {:?}", result);
 
-    let result = client.read_event("languages".to_owned(), 0)
+    let result = client.read_event("languages", 0)
                        .require_master(true)
                        .resolve_link_tos(true)
                        .execute()
@@ -65,7 +65,7 @@ fn all_round_operation_test() {
         .build();
 
     let result =
-        client.write_stream_metadata("languages".to_owned(), metadata)
+        client.write_stream_metadata("languages", metadata)
               .require_master(true)
               .execute()
               .wait()
@@ -74,7 +74,7 @@ fn all_round_operation_test() {
     println!("Write stream metadata {:?}", result);
 
     let result =
-        client.read_stream_metadata("languages".to_owned())
+        client.read_stream_metadata("languages")
               .execute()
               .wait()
               .unwrap();
@@ -93,7 +93,7 @@ fn all_round_operation_test() {
     }
 
     let transaction =
-        client.start_transaction("languages-transaction".to_owned())
+        client.start_transaction("languages-transaction")
               .execute()
               .wait()
               .unwrap();
@@ -102,7 +102,7 @@ fn all_round_operation_test() {
         "transactions_are_working_nicely": true,
     });
 
-    transaction.write_single(EventData::json("foo-type-transaction".to_owned(), data))
+    transaction.write_single(EventData::json("foo-type-transaction", data))
                .wait()
                .unwrap();
 
@@ -114,7 +114,7 @@ fn all_round_operation_test() {
     println!("Transaction commit result {:?}", result);
 
     let result =
-        client.read_stream("languages".to_owned())
+        client.read_stream("languages")
               .execute()
               .wait()
               .unwrap();
@@ -138,7 +138,7 @@ fn all_round_operation_test() {
     });
 
     let _ = client.write_events(stream_id.clone())
-                  .push_event(EventData::json("foo-type".to_owned(), foo))
+                  .push_event(EventData::json("foo-type", foo))
                   .execute()
                   .wait()
                   .unwrap();

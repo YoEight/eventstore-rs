@@ -3,6 +3,7 @@ use std::thread::{ spawn, JoinHandle };
 
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
+use protobuf::Chars;
 use tokio_core::reactor::Core;
 
 use internal::driver::{ Driver, Report };
@@ -84,27 +85,39 @@ impl Client {
         self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
-    pub fn write_events(&self, stream: String) -> command::WriteEvents {
+    pub fn write_events<S>(&self, stream: S) -> command::WriteEvents
+        where S: Into<Chars>
+    {
         command::WriteEvents::new(self.sender.clone(), stream)
     }
 
-    pub fn write_stream_metadata(&self, stream: String, metadata: StreamMetadata) -> command::WriteStreamData {
+    pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata) -> command::WriteStreamData
+        where S: Into<Chars>
+    {
         command::WriteStreamData::new(self.sender.clone(), stream, metadata)
     }
 
-    pub fn read_event(&self, stream: String, event_number: i64) -> command::ReadEvent {
+    pub fn read_event<S>(&self, stream: S, event_number: i64) -> command::ReadEvent
+        where S: Into<Chars>
+    {
         command::ReadEvent::new(self.sender.clone(), stream, event_number)
     }
 
-    pub fn read_stream_metadata(&self, stream: String) -> command::ReadStreamData {
+    pub fn read_stream_metadata<S>(&self, stream: S) -> command::ReadStreamData
+        where S: Into<Chars>
+    {
         command::ReadStreamData::new(self.sender.clone(), stream)
     }
 
-    pub fn start_transaction(&self, stream: String) -> command::TransactionStart {
+    pub fn start_transaction<S>(&self, stream: S) -> command::TransactionStart
+        where S: Into<Chars>
+    {
         command::TransactionStart::new(self.sender.clone(), stream)
     }
 
-    pub fn read_stream(&self, stream: String) -> command::ReadStreamEvents {
+    pub fn read_stream<S>(&self, stream: S) -> command::ReadStreamEvents
+        where S: Into<Chars>
+    {
         command::ReadStreamEvents::new(self.sender.clone(), stream)
     }
 
@@ -112,7 +125,9 @@ impl Client {
         command::ReadAllEvents::new(self.sender.clone())
     }
 
-    pub fn delete_stream(&self, stream: String) -> command::DeleteStream {
+    pub fn delete_stream<S>(&self, stream: S) -> command::DeleteStream
+        where S: Into<Chars>
+    {
         command::DeleteStream::new(self.sender.clone(), stream)
     }
 
