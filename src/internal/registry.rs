@@ -29,11 +29,6 @@ struct Register {
     op: Box<Operation>,
 }
 
-pub enum Outcome {
-    Handled,
-    NotHandled,
-}
-
 struct Checking {
     key: Uuid,
     is_retry: bool,

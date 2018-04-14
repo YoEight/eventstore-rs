@@ -1,7 +1,11 @@
+use std::collections::HashMap;
 use futures::sync::mpsc::Sender;
 use futures::{ Future, Sink, Stream };
+use serde_json;
+
 use internal::messaging::Msg;
 use internal::operations;
+use internal::timespan::Timespan;
 use types;
 
 type Task<A> = Box<Future<Item=A, Error=operations::OperationError>>;
@@ -132,6 +136,91 @@ impl ReadEvent {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct StreamMetadataInternal {
+    #[serde(rename = "$maxCount")]
+    max_count: Option<u64>,
+
+    #[serde(rename = "$maxAge")]
+    max_age: Option<Timespan>,
+
+    #[serde(rename = "$tb")]
+    truncate_before: Option<u64>,
+
+    #[serde(rename = "$cacheControl")]
+    cache_control: Option<Timespan>,
+
+    #[serde(rename = "$acl")]
+    acl: StreamAclInternal,
+
+    #[serde(flatten)]
+    custom_properties: HashMap<String, serde_json::Value>,
+}
+
+impl StreamMetadataInternal {
+    fn from_metadata(metadata: types::StreamMetadata) -> StreamMetadataInternal {
+        StreamMetadataInternal {
+            max_count: metadata.max_count,
+            max_age: metadata.max_age.map(Timespan::from_duration),
+            truncate_before: metadata.truncate_before,
+            cache_control: metadata.cache_control.map(Timespan::from_duration),
+            acl: StreamAclInternal::from_acl(metadata.acl),
+            custom_properties: metadata.custom_properties,
+        }
+    }
+
+    fn to_metadata(self) -> types::StreamMetadata {
+        types::StreamMetadata {
+            max_count: self.max_count,
+            max_age: self.max_age.map(|t| t.to_duration()),
+            truncate_before: self.truncate_before,
+            cache_control: self.cache_control.map(|t| t.to_duration()),
+            acl: self.acl.to_acl(),
+            custom_properties: self.custom_properties,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct StreamAclInternal {
+    #[serde(rename = "$r")]
+    read_roles: Vec<String>,
+
+    #[serde(rename = "$w")]
+    write_roles: Vec<String>,
+
+    #[serde(rename = "$d")]
+    delete_roles: Vec<String>,
+
+    #[serde(rename = "$mr")]
+    meta_read_roles: Vec<String>,
+
+    #[serde(rename = "$mw")]
+    meta_write_roles: Vec<String>,
+}
+
+impl StreamAclInternal {
+    fn from_acl(acl: types::StreamAcl) -> StreamAclInternal {
+        StreamAclInternal {
+            read_roles: acl.read_roles,
+            write_roles: acl.write_roles,
+            delete_roles: acl.delete_roles,
+            meta_read_roles: acl.meta_read_roles,
+            meta_write_roles: acl.meta_write_roles,
+        }
+    }
+
+    fn to_acl(self) -> types::StreamAcl {
+        types::StreamAcl {
+            read_roles: self.read_roles,
+            write_roles: self.write_roles,
+            delete_roles: self.delete_roles,
+            meta_read_roles: self.meta_read_roles,
+            meta_write_roles: self.meta_write_roles,
+        }
+    }
+}
+
 pub struct WriteStreamData {
     metadata: types::StreamMetadata,
     inner: WriteEvents,
@@ -164,7 +253,8 @@ impl WriteStreamData {
     }
 
     pub fn execute(self) -> Task<types::WriteResult> {
-        let event = types::EventData::json("$metadata".to_owned(), self.metadata);
+        let metadata = StreamMetadataInternal::from_metadata(self.metadata);
+        let event    = types::EventData::json("$metadata".to_owned(), metadata);
 
         self.inner.push_event(event)
                   .execute()
@@ -203,7 +293,7 @@ impl ReadStreamData {
         let fut    = self.inner.execute().map(|res| {
             match res {
                 types::ReadEventStatus::Success(result) => {
-                    let metadata =
+                    let metadata_internal: StreamMetadataInternal =
                         result.event
                               .get_original_event()
                               .unwrap()
@@ -213,7 +303,7 @@ impl ReadStreamData {
                     types::StreamMetadataResult::Success {
                         stream: stream,
                         version: result.event_number,
-                        metadata,
+                        metadata: metadata_internal.to_metadata(),
                     }
                 },
 

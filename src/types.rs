@@ -7,7 +7,6 @@ use serde_json;
 use uuid::{ Uuid, ParseError };
 
 use internal::messages;
-use internal::timespan::Timespan;
 
 #[derive(Copy, Clone)]
 pub enum Retry {
@@ -519,9 +518,9 @@ impl EventData {
 #[derive(Default)]
 pub struct StreamMetadataBuilder {
     max_count: Option<u64>,
-    max_age: Option<Timespan>,
+    max_age: Option<Duration>,
     truncate_before: Option<u64>,
-    cache_control: Option<Timespan>,
+    cache_control: Option<Duration>,
     acl: Option<StreamAcl>,
     properties: HashMap<String, serde_json::Value>,
 }
@@ -535,7 +534,7 @@ impl StreamMetadataBuilder {
         StreamMetadataBuilder { max_count: Some(value), ..self }
     }
 
-    pub fn max_age(self, value: Timespan) -> StreamMetadataBuilder {
+    pub fn max_age(self, value: Duration) -> StreamMetadataBuilder {
         StreamMetadataBuilder { max_age: Some(value), ..self }
     }
 
@@ -543,7 +542,7 @@ impl StreamMetadataBuilder {
         StreamMetadataBuilder { truncate_before: Some(value), ..self }
     }
 
-    pub fn cache_control(self, value: Timespan) -> StreamMetadataBuilder {
+    pub fn cache_control(self, value: Duration) -> StreamMetadataBuilder {
         StreamMetadataBuilder { cache_control: Some(value), ..self }
     }
 
@@ -572,24 +571,13 @@ impl StreamMetadataBuilder {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Default)]
 pub struct StreamMetadata {
-    #[serde(rename = "$maxCount")]
     pub max_count: Option<u64>,
-
-    #[serde(rename = "$maxAge")]
-    pub max_age: Option<Timespan>,
-
-    #[serde(rename = "$tb")]
+    pub max_age: Option<Duration>,
     pub truncate_before: Option<u64>,
-
-    #[serde(rename = "$cacheControl")]
-    pub cache_control: Option<Timespan>,
-
-    #[serde(rename = "$acl")]
+    pub cache_control: Option<Duration>,
     pub acl: StreamAcl,
-
-    #[serde(flatten)]
     pub custom_properties: HashMap<String, serde_json::Value>,
 }
 
@@ -599,20 +587,11 @@ impl StreamMetadata {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Default, Debug)]
 pub struct StreamAcl {
-    #[serde(rename = "$r")]
     pub read_roles: Vec<String>,
-
-    #[serde(rename = "$w")]
     pub write_roles: Vec<String>,
-
-    #[serde(rename = "$d")]
     pub delete_roles: Vec<String>,
-
-    #[serde(rename = "$mr")]
     pub meta_read_roles: Vec<String>,
-
-    #[serde(rename = "$mw")]
     pub meta_write_roles: Vec<String>,
 }

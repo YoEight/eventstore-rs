@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use time::Duration;
+use std::time::Duration;
 use serde::de::{ self, Visitor, Deserializer, Deserialize };
 use serde::ser::{ Serialize, Serializer };
 
@@ -77,7 +77,8 @@ impl Timespan {
     pub fn from_duration(duration: Duration) -> Timespan {
         let mut builder = Timespan::builder();
 
-        builder.milliseconds(duration.num_milliseconds() as u64)
+        builder.seconds(duration.as_secs())
+               .milliseconds(duration.subsec_millis() as u64)
                .build()
     }
 
@@ -101,10 +102,6 @@ impl Timespan {
         (self.ticks / TICKS_PER_SECONDS) % 60
     }
 
-    pub fn milliseconds(&self) -> u64 {
-        (self.ticks / TICKS_PER_MILLIS) % 1000
-    }
-
     pub fn total_milliseconds(&self) -> u64 {
         let millis = ((self.ticks as f64) * MILLIS_PER_TICK) as u64;
 
@@ -115,10 +112,8 @@ impl Timespan {
         }
     }
 
-    /// Potential precision lost. Unfortunately, nothing can be done here. .NET Timespon uses
-    /// `u64`. We expose a `Duration` to easily integrate with current Rust ecosystem.
     pub fn to_duration(&self) -> Duration {
-        Duration::milliseconds(self.total_milliseconds() as i64)
+        Duration::from_millis(self.total_milliseconds())
     }
 
     fn str_repr(&self) -> String {

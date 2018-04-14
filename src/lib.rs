@@ -1,3 +1,5 @@
+#![feature(duration_extras)]
+
 extern crate core;
 extern crate bytes;
 extern crate uuid;
@@ -18,17 +20,8 @@ extern crate serde_json;
 // #[macro_use]
 // extern crate log;
 
-pub mod internal;
+mod internal;
 pub mod discovery;
 pub mod client;
 pub mod command;
 pub mod types;
-// pub mod internal {
-//     mod command;
-//     mod messages;
-//     mod messaging;
-//     mod operations;
-//     mod package;
-//     pub mod types;
-//     mod registry;
-// }

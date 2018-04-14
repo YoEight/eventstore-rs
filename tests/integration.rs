@@ -4,9 +4,9 @@ extern crate futures;
 extern crate serde_json;
 extern crate uuid;
 
+use std::time::Duration;
 use futures::Future;
 use eventstore::client::Client;
-use eventstore::internal::timespan::Timespan;
 use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata };
 use uuid::Uuid;
 
@@ -56,14 +56,10 @@ fn all_round_operation_test() {
         _ => unreachable!(),
     }
 
-    let timespan =
-        Timespan::builder()
-            .hours(2)
-            .milliseconds(300)
-            .build();
+    let duration = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
 
     let metadata = StreamMetadata::builder()
-        .max_age(timespan)
+        .max_age(duration)
         .max_count(1000)
         .insert_custom_property("foo".to_owned(), "Bar!")
         .build();
@@ -89,7 +85,7 @@ fn all_round_operation_test() {
         types::StreamMetadataResult::Success { metadata,.. } => {
             let read_max_age = metadata.max_age.unwrap();
 
-            assert_eq!(read_max_age, timespan);
+            assert_eq!(read_max_age, duration);
             println!("Deserialized metadata {:?}", metadata);
         },
 
