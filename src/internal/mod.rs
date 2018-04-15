@@ -1,13 +1,10 @@
-pub mod acl;
 pub mod command;
+pub mod commands;
 pub mod connection;
-pub mod data;
-pub mod endpoint;
+pub mod driver;
 pub mod messaging;
-pub mod metadata;
 pub mod operations;
 pub mod package;
 pub mod messages;
 pub mod registry;
-pub mod types;
 pub mod timespan;

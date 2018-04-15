@@ -1,15 +1,16 @@
-use protobuf::Message;
+use bytes::{ Bytes, BytesMut, BufMut };
+use protobuf::{ Message, MessageStatic, parse_from_carllerche_bytes };
 use uuid::Uuid;
 
 use internal::command::Cmd;
 use internal::messages;
-use internal::types::Credentials;
+use types::Credentials;
 
 pub struct Pkg {
-    pub cmd:         Cmd,
-    pub creds_opt:   Option<Credentials>,
+    pub cmd: Cmd,
+    pub creds_opt: Option<Credentials>,
     pub correlation: Uuid,
-    pub payload:     Vec<u8>,
+    pub payload: Bytes,
 }
 
 static CLIENT_VERSION: i32 = 1;
@@ -18,25 +19,36 @@ pub static PKG_MANDATORY_SIZE: usize = 18;
 impl Pkg {
     pub fn new(cmd: Cmd, correlation: Uuid) -> Pkg {
         Pkg {
-            cmd:         cmd,
-            creds_opt:   None,
-            correlation: correlation,
-            payload:     Vec::new(),
+            cmd,
+            correlation,
+            creds_opt: None,
+            payload: Default::default(),
         }
     }
 
-    pub fn set_payload(&mut self, payload: Vec<u8>) {
-        self.payload = payload;
-    }
+    pub fn from_message<M>(cmd: Cmd, creds_opt: Option<Credentials>, msg: &M)
+        -> ::std::io::Result<Pkg>
+        where M: Message
+    {
+        let mut writer =
+            BytesMut::with_capacity(msg.compute_size() as usize).writer();
 
-    pub fn set_credentials(&mut self, creds: Credentials) {
-        self.creds_opt = Some(creds);
+        msg.write_to_writer(&mut writer)?;
+
+        let pkg = Pkg {
+            cmd,
+            creds_opt,
+            correlation: Uuid::new_v4(),
+            payload: writer.into_inner().freeze(),
+        };
+
+        Ok(pkg)
     }
 
     pub fn size(&self) -> usize {
         let creds_size = {
             match self.creds_opt {
-                Some(ref creds) => creds.login.len() + creds.password.len() + 2, // Including 2 length bytes.
+                Some(ref creds) => creds.network_size(),
                 None            => 0,
             }
         };
@@ -49,28 +61,35 @@ impl Pkg {
     }
 
     pub fn authenticate(creds: Credentials) -> Pkg {
-        let corr_id = Uuid::new_v4();
-        let mut pkg = Pkg::new(Cmd::Authenticate, corr_id);
-
-        pkg.set_credentials(creds);
-
-        pkg
+        Pkg {
+            cmd: Cmd::Authenticate,
+            correlation: Uuid::new_v4(),
+            creds_opt: Some(creds),
+            payload: Default::default(),
+        }
     }
 
     pub fn identify_client(name_opt: &Option<String>) -> Pkg {
-        let     corr_id = Uuid::new_v4();
-        let mut pkg     = Pkg::new(Cmd::IdentifyClient, corr_id);
-        let mut msg     = messages::IdentifyClient::new();
-        let     name    = match *name_opt {
+        let mut msg  = messages::IdentifyClient::new();
+        let     name = match *name_opt {
             Some(ref name) => name.clone(),
             None           => format!("ES-{}", Uuid::new_v4()),
         };
 
         msg.set_connection_name(name);
         msg.set_version(CLIENT_VERSION);
-        msg.write_to_vec(&mut pkg.payload).unwrap();
 
-        pkg
+        let mut writer =
+            BytesMut::with_capacity(msg.compute_size() as usize).writer();
+
+        msg.write_to_writer(&mut writer).unwrap();
+
+        Pkg {
+            cmd: Cmd::IdentifyClient,
+            correlation: Uuid::new_v4(),
+            creds_opt: None,
+            payload: writer.into_inner().freeze(),
+        }
     }
 
     // Copies the Pkg except its payload.
@@ -78,8 +97,14 @@ impl Pkg {
         Pkg {
             cmd:         self.cmd,
             correlation: self.correlation,
-            payload:     Vec::new(),
+            payload:     Default::default(),
             creds_opt:   None,
         }
+    }
+
+    pub fn to_message<M>(&self) -> ::std::io::Result<M>
+        where M: MessageStatic
+    {
+        parse_from_carllerche_bytes(&self.payload).map_err(|e| e.into())
     }
 }

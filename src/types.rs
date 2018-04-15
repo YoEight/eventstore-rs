@@ -1,11 +1,15 @@
+use std::collections::HashMap;
+use std::io::Read;
 use std::time::Duration;
 
+use bytes::{ Bytes, BytesMut, BufMut, Buf };
+use protobuf::Chars;
 use serde::de::Deserialize;
+use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, ParseError };
 
 use internal::messages;
-use internal::metadata::StreamMetadata;
 
 #[derive(Copy, Clone)]
 pub enum Retry {
@@ -22,10 +26,56 @@ impl Retry {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Credentials {
-    pub login: String,
-    pub password: String,
+    login: Bytes,
+    password: Bytes,
+}
+
+impl Credentials {
+    pub fn new<S>(login: S, password: S) -> Credentials
+        where S: Into<Bytes>
+    {
+        Credentials {
+            login: login.into(),
+            password: password.into(),
+        }
+    }
+
+    pub fn write_to_bytes_mut(&self, dst: &mut BytesMut) {
+        dst.put_u8(self.login.len() as u8);
+        dst.put(&self.login);
+        dst.put_u8(self.password.len() as u8);
+        dst.put(&self.password);
+    }
+
+    pub fn parse_from_buf<B>(buf: &mut B) -> ::std::io::Result<Credentials>
+        where B: Buf + Read
+    {
+        let     login_len = buf.get_u8() as usize;
+        let mut login     = Vec::with_capacity(login_len);
+
+        let mut take = Read::take(buf, login_len as u64);
+        take.read_to_end(&mut login)?;
+        let buf = take.into_inner();
+
+        let     passw_len = buf.get_u8() as usize;
+        let mut password  = Vec::with_capacity(passw_len);
+
+        let mut take = Read::take(buf, passw_len as u64);
+        take.read_to_end(&mut password)?;
+
+        let creds = Credentials {
+            login: login.into(),
+            password: password.into(),
+        };
+
+        Ok(creds)
+    }
+
+    pub fn network_size(&self) -> usize {
+        self.login.len() + self.password.len() + 2 // Including 2 length bytes.
+    }
 }
 
 pub struct Settings {
@@ -127,12 +177,12 @@ pub struct ReadEventResult {
 
 #[derive(Debug)]
 pub struct RecordedEvent {
-    pub event_stream_id: String,
+    pub event_stream_id: Chars,
     pub event_id: Uuid,
     pub event_number: i64,
-    pub event_type: String,
-    pub data: Vec<u8>,
-    pub metadata: Vec<u8>,
+    pub event_type: Chars,
+    pub data: Bytes,
+    pub metadata: Bytes,
     pub is_json: bool,
     pub created: Option<i64>,
     pub created_epoch: Option<i64>,
@@ -187,7 +237,7 @@ impl RecordedEvent {
     pub fn as_json<'a, T>(&'a self) -> serde_json::Result<T>
         where T: Deserialize<'a>
     {
-        serde_json::from_slice(self.data.as_slice())
+        serde_json::from_slice(&self.data[..])
     }
 }
 
@@ -272,16 +322,16 @@ impl ResolvedEvent {
         self.link.as_ref().or(self.event.as_ref())
     }
 
-    pub fn get_original_stream_id(&self) -> Option<&String> {
+    pub fn get_original_stream_id(&self) -> Option<&Chars> {
         self.get_original_event().map(|event| &event.event_stream_id)
     }
 }
 
 #[derive(Debug)]
 pub enum StreamMetadataResult {
-    Deleted { stream: String },
-    NotFound { stream: String },
-    Success { stream: String, version: i64, metadata: StreamMetadata },
+    Deleted { stream: Chars },
+    NotFound { stream: Chars },
+    Success { stream: Chars, version: i64, metadata: StreamMetadata },
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
@@ -316,11 +366,11 @@ pub trait Slice {
 #[derive(Debug)]
 pub enum ReadStreamStatus<A> {
     Success(A),
-    NoStream(String),
-    StreamDeleled(String),
-    NotModified(String),
-    Error(String),
-    AccessDenied(String),
+    NoStream(Chars),
+    StreamDeleled(Chars),
+    NotModified(Chars),
+    Error(Chars),
+    AccessDenied(Chars),
 }
 
 #[derive(Debug)]
@@ -422,4 +472,180 @@ impl Slice for AllSlice {
             }
         }
     }
+}
+
+enum Payload {
+    Json(Bytes),
+    Binary(Bytes),
+}
+
+pub struct EventData {
+    event_type: Chars,
+    payload: Payload,
+    id_opt: Option<Uuid>,
+    metadata_payload_opt: Option<Payload>,
+}
+
+impl EventData {
+    pub fn json<P, S>(event_type: S, payload: P) -> EventData
+        where P: Serialize,
+              S: Into<Chars>
+    {
+        let bytes = Bytes::from(serde_json::to_vec(&payload).unwrap());
+
+        EventData {
+            event_type: event_type.into(),
+            payload: Payload::Json(bytes),
+            id_opt: None,
+            metadata_payload_opt: None,
+        }
+    }
+
+    pub fn binary<S>(event_type: S, payload: Bytes) -> EventData
+        where S: Into<Chars>
+    {
+        EventData {
+            event_type: event_type.into(),
+            payload: Payload::Binary(payload),
+            id_opt: None,
+            metadata_payload_opt: None,
+        }
+    }
+
+    pub fn id(self, value: Uuid) -> EventData {
+        EventData { id_opt: Some(value), ..self }
+    }
+
+    pub fn metadata_as_json<P>(self, payload: P) -> EventData
+        where P: Serialize
+    {
+        let bytes    = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let json_bin = Some(Payload::Json(bytes));
+
+        EventData { metadata_payload_opt: json_bin, ..self }
+    }
+
+    pub fn metadata_as_binary(self, payload: Bytes) -> EventData {
+        let content_bin = Some(Payload::Binary(payload));
+
+        EventData { metadata_payload_opt: content_bin, ..self }
+    }
+
+    pub fn build(self) -> messages::NewEvent {
+        let mut new_event = messages::NewEvent::new();
+        let     id        = self.id_opt.unwrap_or_else(|| Uuid::new_v4());
+
+        new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
+
+        match self.payload {
+            Payload::Json(bin) => {
+                new_event.set_data_content_type(1);
+                new_event.set_data(bin);
+            },
+
+            Payload::Binary(bin) => {
+                new_event.set_data_content_type(0);
+                new_event.set_data(bin);
+            },
+        }
+
+        match self.metadata_payload_opt {
+            Some(Payload::Json(bin)) => {
+                new_event.set_metadata_content_type(1);
+                new_event.set_metadata(bin);
+            },
+
+            Some(Payload::Binary(bin)) => {
+                new_event.set_metadata_content_type(0);
+                new_event.set_metadata(bin);
+            },
+
+            None => new_event.set_metadata_content_type(0),
+        }
+
+        new_event.set_event_type(self.event_type);
+
+        new_event
+    }
+}
+
+#[derive(Default)]
+pub struct StreamMetadataBuilder {
+    max_count: Option<u64>,
+    max_age: Option<Duration>,
+    truncate_before: Option<u64>,
+    cache_control: Option<Duration>,
+    acl: Option<StreamAcl>,
+    properties: HashMap<String, serde_json::Value>,
+}
+
+impl StreamMetadataBuilder {
+    pub fn new() -> StreamMetadataBuilder {
+        Default::default()
+    }
+
+    pub fn max_count(self, value: u64) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { max_count: Some(value), ..self }
+    }
+
+    pub fn max_age(self, value: Duration) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { max_age: Some(value), ..self }
+    }
+
+    pub fn truncate_before(self, value: u64) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { truncate_before: Some(value), ..self }
+    }
+
+    pub fn cache_control(self, value: Duration) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { cache_control: Some(value), ..self }
+    }
+
+    pub fn acl(self, value: StreamAcl) -> StreamMetadataBuilder {
+        StreamMetadataBuilder { acl: Some(value), ..self }
+    }
+
+    pub fn insert_custom_property<V>(mut self, key: String, value: V) -> StreamMetadataBuilder
+        where V: Serialize
+    {
+        let serialized = serde_json::to_value(value).unwrap();
+        let _          = self.properties.insert(key, serialized);
+
+        self
+    }
+
+    pub fn build(self) -> StreamMetadata {
+        StreamMetadata {
+            max_count: self.max_count,
+            max_age: self.max_age,
+            truncate_before: self.truncate_before,
+            cache_control: self.cache_control,
+            acl: self.acl.unwrap_or_default(),
+            custom_properties: self.properties,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StreamMetadata {
+    pub max_count: Option<u64>,
+    pub max_age: Option<Duration>,
+    pub truncate_before: Option<u64>,
+    pub cache_control: Option<Duration>,
+    pub acl: StreamAcl,
+    pub custom_properties: HashMap<String, serde_json::Value>,
+}
+
+impl StreamMetadata {
+    pub fn builder() -> StreamMetadataBuilder {
+        StreamMetadataBuilder::new()
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct StreamAcl {
+    pub read_roles: Vec<String>,
+    pub write_roles: Vec<String>,
+    pub delete_roles: Vec<String>,
+    pub meta_read_roles: Vec<String>,
+    pub meta_write_roles: Vec<String>,
 }

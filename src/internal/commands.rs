@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+use std::ops::Deref;
+
 use futures::sync::mpsc::Sender;
 use futures::{ Future, Sink, Stream };
-use internal::data::EventData;
+use protobuf::Chars;
+use serde_json;
+
 use internal::messaging::Msg;
-use internal::metadata::StreamMetadata;
 use internal::operations;
-use internal::types;
+use internal::timespan::Timespan;
+use types;
 
 type Task<A> = Box<Future<Item=A, Error=operations::OperationError>>;
 
@@ -21,8 +26,8 @@ fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
 }
 
 pub struct WriteEvents {
-    stream: String,
-    events: Vec<EventData>,
+    stream: Chars,
+    events: Vec<types::EventData>,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
@@ -30,9 +35,11 @@ pub struct WriteEvents {
 }
 
 impl WriteEvents {
-    pub fn new(sender: Sender<Msg>, stream: String) -> WriteEvents {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> WriteEvents
+        where S: Into<Chars>
+    {
         WriteEvents {
-            stream,
+            stream: stream.into(),
             events: Vec::new(),
             require_master: false,
             version: types::ExpectedVersion::Any,
@@ -41,42 +48,34 @@ impl WriteEvents {
         }
     }
 
-    pub fn set_events(mut self, events: Vec<EventData>) -> WriteEvents {
-        self.events = events;
-
-        self
+    pub fn set_events(self, events: Vec<types::EventData>) -> WriteEvents {
+        WriteEvents { events, ..self}
     }
 
-    pub fn push_event(mut self, event: EventData) -> WriteEvents {
+    pub fn push_event(mut self, event: types::EventData) -> WriteEvents {
         self.events.push(event);
 
         self
     }
 
     pub fn append_events<T>(mut self, events: T) -> WriteEvents
-        where T: IntoIterator<Item=EventData>
+        where T: IntoIterator<Item=types::EventData>
     {
         self.events.extend(events);
 
         self
     }
 
-    pub fn require_master(mut self, value: bool) -> WriteEvents {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> WriteEvents {
+        WriteEvents { require_master, ..self }
     }
 
-    pub fn expected_version(mut self, version: types::ExpectedVersion) -> WriteEvents {
-        self.version = version;
-
-        self
+    pub fn expected_version(self, version: types::ExpectedVersion) -> WriteEvents {
+        WriteEvents { version, ..self }
     }
 
-    pub fn credentials(mut self, creds: types::Credentials) -> WriteEvents {
-        self.creds = Some(creds);
-
-        self
+    pub fn credentials(self, creds: types::Credentials) -> WriteEvents {
+        WriteEvents { creds: Some(creds), ..self }
     }
 
     pub fn execute(self) -> Task<types::WriteResult> {
@@ -88,14 +87,14 @@ impl WriteEvents {
         op.set_events(self.events);
         op.set_require_master(self.require_master);
 
-        self.sender.send(Msg::NewOp(operations::Op::Write(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
 }
 
 pub struct ReadEvent {
-    stream: String,
+    stream: Chars,
     event_number: i64,
     resolve_link_tos: bool,
     require_master: bool,
@@ -104,9 +103,11 @@ pub struct ReadEvent {
 }
 
 impl ReadEvent {
-    pub fn new(sender: Sender<Msg>, stream: String, event_number: i64) -> ReadEvent {
+    pub fn new<S>(sender: Sender<Msg>, stream: S, event_number: i64) -> ReadEvent
+        where S: Into<Chars>
+    {
         ReadEvent {
-            stream,
+            stream: stream.into(),
             event_number,
             sender,
             resolve_link_tos: false,
@@ -115,22 +116,16 @@ impl ReadEvent {
         }
     }
 
-    pub fn resolve_link_tos(mut self, value: bool) -> ReadEvent {
-        self.resolve_link_tos = value;
-
-        self
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadEvent {
+        ReadEvent { resolve_link_tos, ..self }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadEvent {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> ReadEvent {
+        ReadEvent { require_master, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadEvent {
-        self.creds = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> ReadEvent {
+        ReadEvent { creds: Some(value), ..self }
     }
 
     pub fn execute(self) -> Task<types::ReadEventStatus<types::ReadEventResult>> {
@@ -142,22 +137,109 @@ impl ReadEvent {
         op.set_resolve_link_tos(self.resolve_link_tos);
         op.set_require_master(self.require_master);
 
-        self.sender.send(Msg::NewOp(operations::Op::Read(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct StreamMetadataInternal {
+    #[serde(rename = "$maxCount")]
+    max_count: Option<u64>,
+
+    #[serde(rename = "$maxAge")]
+    max_age: Option<Timespan>,
+
+    #[serde(rename = "$tb")]
+    truncate_before: Option<u64>,
+
+    #[serde(rename = "$cacheControl")]
+    cache_control: Option<Timespan>,
+
+    #[serde(rename = "$acl")]
+    acl: StreamAclInternal,
+
+    #[serde(flatten)]
+    custom_properties: HashMap<String, serde_json::Value>,
+}
+
+impl StreamMetadataInternal {
+    fn from_metadata(metadata: types::StreamMetadata) -> StreamMetadataInternal {
+        StreamMetadataInternal {
+            max_count: metadata.max_count,
+            max_age: metadata.max_age.map(Timespan::from_duration),
+            truncate_before: metadata.truncate_before,
+            cache_control: metadata.cache_control.map(Timespan::from_duration),
+            acl: StreamAclInternal::from_acl(metadata.acl),
+            custom_properties: metadata.custom_properties,
+        }
+    }
+
+    fn to_metadata(self) -> types::StreamMetadata {
+        types::StreamMetadata {
+            max_count: self.max_count,
+            max_age: self.max_age.map(|t| t.to_duration()),
+            truncate_before: self.truncate_before,
+            cache_control: self.cache_control.map(|t| t.to_duration()),
+            acl: self.acl.to_acl(),
+            custom_properties: self.custom_properties,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct StreamAclInternal {
+    #[serde(rename = "$r")]
+    read_roles: Vec<String>,
+
+    #[serde(rename = "$w")]
+    write_roles: Vec<String>,
+
+    #[serde(rename = "$d")]
+    delete_roles: Vec<String>,
+
+    #[serde(rename = "$mr")]
+    meta_read_roles: Vec<String>,
+
+    #[serde(rename = "$mw")]
+    meta_write_roles: Vec<String>,
+}
+
+impl StreamAclInternal {
+    fn from_acl(acl: types::StreamAcl) -> StreamAclInternal {
+        StreamAclInternal {
+            read_roles: acl.read_roles,
+            write_roles: acl.write_roles,
+            delete_roles: acl.delete_roles,
+            meta_read_roles: acl.meta_read_roles,
+            meta_write_roles: acl.meta_write_roles,
+        }
+    }
+
+    fn to_acl(self) -> types::StreamAcl {
+        types::StreamAcl {
+            read_roles: self.read_roles,
+            write_roles: self.write_roles,
+            delete_roles: self.delete_roles,
+            meta_read_roles: self.meta_read_roles,
+            meta_write_roles: self.meta_write_roles,
+        }
+    }
+}
+
 pub struct WriteStreamData {
-    metadata: StreamMetadata,
+    metadata: types::StreamMetadata,
     inner: WriteEvents,
 }
 
 impl WriteStreamData {
-    pub fn new(sender: Sender<Msg>, stream: String, metadata: StreamMetadata) -> WriteStreamData {
+    pub fn new<S>(sender: Sender<Msg>, stream: S, metadata: types::StreamMetadata) -> WriteStreamData
+        where S: Into<Chars>
+    {
         WriteStreamData {
             metadata,
-            inner: WriteEvents::new(sender, format!("$${}", stream)),
+            inner: WriteEvents::new(sender, format!("$${}", stream.into().deref())),
         }
     }
 
@@ -180,7 +262,8 @@ impl WriteStreamData {
     }
 
     pub fn execute(self) -> Task<types::WriteResult> {
-        let event = EventData::json("$metadata".to_owned(), self.metadata);
+        let metadata = StreamMetadataInternal::from_metadata(self.metadata);
+        let event    = types::EventData::json("$metadata", metadata);
 
         self.inner.push_event(event)
                   .execute()
@@ -188,16 +271,19 @@ impl WriteStreamData {
 }
 
 pub struct ReadStreamData {
-    stream: String,
+    stream: Chars,
     inner: ReadEvent,
 }
 
 impl ReadStreamData {
-    pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamData {
-        let name = format!("$${}", stream);
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> ReadStreamData
+        where S: Into<Chars>
+    {
+        let stream_chars = stream.into();
+        let name         = format!("$${}", stream_chars.deref());
 
         ReadStreamData {
-            stream,
+            stream: stream_chars,
             inner: ReadEvent::new(sender, name, -1),
         }
     }
@@ -219,7 +305,7 @@ impl ReadStreamData {
         let fut    = self.inner.execute().map(|res| {
             match res {
                 types::ReadEventStatus::Success(result) => {
-                    let metadata =
+                    let metadata_internal: StreamMetadataInternal =
                         result.event
                               .get_original_event()
                               .unwrap()
@@ -229,7 +315,7 @@ impl ReadStreamData {
                     types::StreamMetadataResult::Success {
                         stream: stream,
                         version: result.event_number,
-                        metadata,
+                        metadata: metadata_internal.to_metadata(),
                     }
                 },
 
@@ -248,7 +334,7 @@ impl ReadStreamData {
 }
 
 pub struct TransactionStart {
-    stream: String,
+    stream: Chars,
     version: types::ExpectedVersion,
     require_master: bool,
     creds_opt: Option<types::Credentials>,
@@ -256,9 +342,11 @@ pub struct TransactionStart {
 }
 
 impl TransactionStart {
-    pub fn new(sender: Sender<Msg>, stream: String) -> TransactionStart {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> TransactionStart
+        where S: Into<Chars>
+    {
         TransactionStart {
-            stream,
+            stream: stream.into(),
             require_master: false,
             version: types::ExpectedVersion::Any,
             creds_opt: None,
@@ -266,22 +354,16 @@ impl TransactionStart {
         }
     }
 
-    pub fn require_master(mut self, value: bool) -> TransactionStart {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> TransactionStart {
+        TransactionStart { require_master, ..self }
     }
 
-    pub fn version(mut self, value: types::ExpectedVersion) -> TransactionStart {
-        self.version = value;
-
-        self
+    pub fn version(self, version: types::ExpectedVersion) -> TransactionStart {
+        TransactionStart { version, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> TransactionStart {
-        self.creds_opt = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> TransactionStart {
+        TransactionStart { creds_opt: Some(value), ..self }
     }
 
     pub fn execute(self) -> Task<Transaction> {
@@ -298,7 +380,7 @@ impl TransactionStart {
         let version        = self.version;
         let sender         = self.sender.clone();
 
-        self.sender.send(Msg::NewOp(operations::Op::TransactionStart(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         let fut = single_value_future(rcv).map(move |id| {
             Transaction {
@@ -316,7 +398,7 @@ impl TransactionStart {
 }
 
 pub struct Transaction {
-    stream: String,
+    stream: Chars,
     id: types::TransactionId,
     version: types::ExpectedVersion,
     require_master: bool,
@@ -325,16 +407,16 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn get_it(&self) -> types::TransactionId {
+    pub fn get_id(&self) -> types::TransactionId {
         self.id
     }
 
-    pub fn write_single(&self, event: EventData) -> Task<()> {
+    pub fn write_single(&self, event: types::EventData) -> Task<()> {
         self.write(::std::iter::once(event))
     }
 
     pub fn write<I>(&self, events: I) -> Task<()>
-        where I: IntoIterator<Item=EventData>
+        where I: IntoIterator<Item=types::EventData>
     {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op = operations::TransactionWrite::new(
@@ -344,7 +426,7 @@ impl Transaction {
         op.set_events(events);
         op.set_require_master(self.require_master);
 
-        self.sender.clone().send(Msg::NewOp(operations::Op::TransactionWrite(op))).wait().unwrap();
+        self.sender.clone().send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -358,7 +440,7 @@ impl Transaction {
         op.set_transaction_id(self.id);
         op.set_require_master(self.require_master);
 
-        self.sender.clone().send(Msg::NewOp(operations::Op::TransactionCommit(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -371,7 +453,7 @@ impl Transaction {
 }
 
 pub struct ReadStreamEvents {
-    stream: String,
+    stream: Chars,
     max_count: i32,
     start: i64,
     require_master: bool,
@@ -382,9 +464,11 @@ pub struct ReadStreamEvents {
 }
 
 impl ReadStreamEvents {
-    pub fn new(sender: Sender<Msg>, stream: String) -> ReadStreamEvents {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> ReadStreamEvents
+        where S: Into<Chars>
+    {
         ReadStreamEvents {
-            stream,
+            stream: stream.into(),
             max_count: 500,
             start: 0,
             require_master: false,
@@ -395,46 +479,32 @@ impl ReadStreamEvents {
         }
     }
 
-    pub fn forward(mut self) -> ReadStreamEvents {
-        self.direction = types::ReadDirection::Forward;
-
-        self
+    pub fn forward(self) -> ReadStreamEvents {
+        ReadStreamEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
-    pub fn backward(mut self) -> ReadStreamEvents {
-        self.direction = types::ReadDirection::Backward;
-
-        self
+    pub fn backward(self) -> ReadStreamEvents {
+        ReadStreamEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadStreamEvents {
-        self.creds = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> ReadStreamEvents {
+        ReadStreamEvents { creds: Some(value), ..self }
     }
 
-    pub fn max_count(mut self, value: i32) -> ReadStreamEvents {
-        self.max_count = value;
-
-        self
+    pub fn max_count(self, max_count: i32) -> ReadStreamEvents {
+        ReadStreamEvents { max_count, ..self }
     }
 
-    pub fn start_from(mut self, value: i64) -> ReadStreamEvents {
-        self.start = value;
-
-        self
+    pub fn start_from(self, start: i64) -> ReadStreamEvents {
+        ReadStreamEvents { start, ..self }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadStreamEvents {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> ReadStreamEvents {
+        ReadStreamEvents { require_master, ..self }
     }
 
-    pub fn resolve_link_tos(mut self, value: bool) -> ReadStreamEvents {
-        self.resolve_link_tos = value;
-
-        self
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadStreamEvents {
+        ReadStreamEvents { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> Task<types::ReadStreamStatus<types::StreamSlice>> {
@@ -447,7 +517,7 @@ impl ReadStreamEvents {
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        self.sender.send(Msg::NewOp(operations::Op::ReadStreams(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -476,46 +546,32 @@ impl ReadAllEvents {
         }
     }
 
-    pub fn forward(mut self) -> ReadAllEvents {
-        self.direction = types::ReadDirection::Forward;
-
-        self
+    pub fn forward(self) -> ReadAllEvents {
+        ReadAllEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
-    pub fn backward(mut self) -> ReadAllEvents {
-        self.direction = types::ReadDirection::Backward;
-
-        self
+    pub fn backward(self) -> ReadAllEvents {
+        ReadAllEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadAllEvents {
-        self.creds = Some(value);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> ReadAllEvents {
+        ReadAllEvents { creds: Some(value), ..self }
     }
 
-    pub fn max_count(mut self, value: i32) -> ReadAllEvents {
-        self.max_count = value;
-
-        self
+    pub fn max_count(self, max_count: i32) -> ReadAllEvents {
+        ReadAllEvents { max_count, ..self }
     }
 
-    pub fn start_from(mut self, value: types::Position) -> ReadAllEvents {
-        self.start = value;
-
-        self
+    pub fn start_from(self, start: types::Position) -> ReadAllEvents {
+        ReadAllEvents { start, ..self }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadAllEvents {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> ReadAllEvents {
+        ReadAllEvents { require_master, ..self }
     }
 
-    pub fn resolve_link_tos(mut self, value: bool) -> ReadAllEvents {
-        self.resolve_link_tos = value;
-
-        self
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadAllEvents {
+        ReadAllEvents { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> Task<types::ReadStreamStatus<types::AllSlice>> {
@@ -527,14 +583,14 @@ impl ReadAllEvents {
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        self.sender.send(Msg::NewOp(operations::Op::ReadAll(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
 }
 
 pub struct DeleteStream {
-    stream: String,
+    stream: Chars,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
@@ -543,9 +599,11 @@ pub struct DeleteStream {
 }
 
 impl DeleteStream {
-    pub fn new(sender: Sender<Msg>, stream: String) -> DeleteStream {
+    pub fn new<S>(sender: Sender<Msg>, stream: S) -> DeleteStream
+        where S: Into<Chars>
+    {
         DeleteStream {
-            stream,
+            stream: stream.into(),
             require_master: false,
             hard_delete: false,
             version: types::ExpectedVersion::Any,
@@ -554,28 +612,20 @@ impl DeleteStream {
         }
     }
 
-    pub fn require_master(mut self, value: bool) -> DeleteStream {
-        self.require_master = value;
-
-        self
+    pub fn require_master(self, require_master: bool) -> DeleteStream {
+        DeleteStream { require_master, ..self }
     }
 
-    pub fn expected_version(mut self, version: types::ExpectedVersion) -> DeleteStream {
-        self.version = version;
-
-        self
+    pub fn expected_version(self, version: types::ExpectedVersion) -> DeleteStream {
+        DeleteStream { version, ..self }
     }
 
-    pub fn credentials(mut self, creds: types::Credentials) -> DeleteStream {
-        self.creds = Some(creds);
-
-        self
+    pub fn credentials(self, value: types::Credentials) -> DeleteStream {
+        DeleteStream { creds: Some(value), ..self }
     }
 
-    pub fn hard_delete(mut self, value: bool) -> DeleteStream {
-        self.hard_delete = value;
-
-        self
+    pub fn hard_delete(self, hard_delete: bool) -> DeleteStream {
+        DeleteStream { hard_delete, ..self }
     }
 
     pub fn execute(self) -> Task<types::Position> {
@@ -587,7 +637,7 @@ impl DeleteStream {
         op.set_require_master(self.require_master);
         op.set_hard_delete(self.hard_delete);
 
-        self.sender.send(Msg::NewOp(operations::Op::Delete(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }

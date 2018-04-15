@@ -1,27 +1,25 @@
-use uuid::Uuid;
+use std::ops::Deref;
 
 use futures::sync::mpsc;
-use protobuf::{ RepeatedField, Message };
-use protobuf::core::parse_from_bytes;
+use protobuf::{ Chars, RepeatedField };
 
 use internal::command::Cmd;
-use internal::data::EventData;
 use internal::messages;
 use internal::package::Pkg;
-use internal::types;
+use types;
 
 use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
 
 #[derive(Debug)]
 pub enum OperationError {
-    WrongExpectedVersion(String, types::ExpectedVersion),
-    StreamDeleted(String),
+    WrongExpectedVersion(Chars, types::ExpectedVersion),
+    StreamDeleted(Chars),
     InvalidTransaction,
-    AccessDenied(String),
+    AccessDenied(Chars),
     ProtobufDecodingError(String),
-    ServerError(Option<String>),
+    ServerError(Option<Chars>),
     InvalidOperation(String),
-    StreamNotFound(String),
+    StreamNotFound(Chars),
     AuthenticationRequired,
     Aborted,
     WrongClientImpl(Cmd),
@@ -88,7 +86,8 @@ fn op_done() -> Decision {
     Ok(Outcome::Done)
 }
 
-fn op_continue() -> Decision {
+
+fn _op_continue() -> Decision {
     Ok(Outcome::Continue(None))
 }
 
@@ -100,36 +99,10 @@ fn op_retry() -> Decision {
     Ok(Outcome::Retry)
 }
 
-pub enum Op {
-    Write(WriteEvents),
-    Read(ReadEvent),
-    TransactionStart(TransactionStart),
-    TransactionWrite(TransactionWrite),
-    TransactionCommit(TransactionCommit),
-    ReadStreams(ReadStreamEvents),
-    ReadAll(ReadAllEvents),
-    Delete(DeleteStream),
-}
-
-impl Op {
-    // FIXME - Currently, I don't know how to encode existential types so it
-    // can be shared across several threads.
-    pub fn to_operation(self) -> Box<Operation> {
-        match self {
-            Op::Write(w)             => Box::new(w),
-            Op::Read(r)              => Box::new(r),
-            Op::TransactionStart(t)  => Box::new(t),
-            Op::TransactionWrite(t)  => Box::new(t),
-            Op::TransactionCommit(t) => Box::new(t),
-            Op::ReadStreams(r)       => Box::new(r),
-            Op::ReadAll(r)           => Box::new(r),
-            Op::Delete(d)            => Box::new(d),
-        }
-    }
-}
+pub type Exchange = Box<Operation + Sync + Send>;
 
 pub trait Operation {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision;
+    fn poll(&mut self, input: Option<Pkg>) -> Decision;
     fn failed(&mut self, error: OperationError);
     fn retry(&mut self);
 }
@@ -156,7 +129,7 @@ impl WriteEvents {
         }
     }
 
-    pub fn set_event_stream_id(&mut self, stream_id: String) {
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
         self.inner.set_event_stream_id(stream_id);
     }
 
@@ -164,7 +137,7 @@ impl WriteEvents {
         self.inner.set_expected_version(exp_ver.to_i64());
     }
 
-    pub fn set_events(&mut self, events: Vec<EventData>) {
+    pub fn set_events(&mut self, events: Vec<types::EventData>) {
         let mut repeated = RepeatedField::new();
 
         for event in events {
@@ -180,17 +153,11 @@ impl WriteEvents {
 }
 
 impl Operation for WriteEvents {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::WriteEvents, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::WriteEvents, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -201,7 +168,7 @@ impl Operation for WriteEvents {
                     match pkg.cmd {
                         Cmd::WriteEventsCompleted => {
                             let response: messages::WriteEventsCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -225,7 +192,7 @@ impl Operation for WriteEvents {
                                 }
 
                                 OperationResult::WrongExpectedVersion => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
                                     let exp_i64   = self.inner.get_expected_version();
                                     let exp       = types::ExpectedVersion::from_i64(exp_i64);
 
@@ -235,7 +202,7 @@ impl Operation for WriteEvents {
                                 },
 
                                 OperationResult::StreamDeleted => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
 
                                     self.promise.reject(OperationError::StreamDeleted(stream_id));
 
@@ -249,7 +216,7 @@ impl Operation for WriteEvents {
                                 }
 
                                 OperationResult::AccessDenied => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
 
                                     self.promise.reject(OperationError::AccessDenied(stream_id));
 
@@ -297,7 +264,7 @@ impl ReadEvent {
         }
     }
 
-    pub fn set_event_stream_id(&mut self, stream_id: String) {
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
         self.inner.set_event_stream_id(stream_id);
     }
 
@@ -315,17 +282,11 @@ impl ReadEvent {
 }
 
 impl Operation for ReadEvent {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::ReadEvent, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::ReadEvent, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -336,7 +297,7 @@ impl Operation for ReadEvent {
                     match pkg.cmd {
                         Cmd::ReadEventCompleted => {
                             let mut response: messages::ReadEventCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 messages::ReadEventCompleted_ReadEventResult::Success => {
@@ -381,7 +342,7 @@ impl Operation for ReadEvent {
                                 },
 
                                 messages::ReadEventCompleted_ReadEventResult::AccessDenied => {
-                                    let stream_id = self.inner.get_event_stream_id().to_owned();
+                                    let stream_id = self.inner.take_event_stream_id();
                                     let error     = OperationError::AccessDenied(stream_id);
 
                                     self.promise.reject(error);
@@ -429,7 +390,7 @@ impl TransactionStart {
         }
     }
 
-    pub fn set_event_stream_id(&mut self, value: String) {
+    pub fn set_event_stream_id(&mut self, value: Chars) {
         self.inner.set_event_stream_id(value);
     }
 
@@ -443,17 +404,11 @@ impl TransactionStart {
 }
 
 impl Operation for TransactionStart {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let    size     = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::TransactionStart, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::TransactionStart, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -464,7 +419,7 @@ impl Operation for TransactionStart {
                     match pkg.cmd {
                         Cmd::TransactionStartCompleted => {
                             let response: messages::TransactionStartCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -479,7 +434,7 @@ impl Operation for TransactionStart {
                                 },
 
                                 OperationResult::WrongExpectedVersion => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
                                     let exp_i64   = self.inner.get_expected_version();
                                     let exp       = types::ExpectedVersion::from_i64(exp_i64);
 
@@ -489,7 +444,7 @@ impl Operation for TransactionStart {
                                 },
 
                                 OperationResult::StreamDeleted => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
 
                                     self.failed(OperationError::StreamDeleted(stream_id));
 
@@ -503,7 +458,7 @@ impl Operation for TransactionStart {
                                 }
 
                                 OperationResult::AccessDenied => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
 
                                     self.failed(OperationError::AccessDenied(stream_id));
 
@@ -534,7 +489,7 @@ impl Operation for TransactionStart {
 }
 
 pub struct TransactionWrite {
-    stream: String,
+    stream: Chars,
     promise: Promise<()>,
     inner: messages::TransactionWrite,
     creds: Option<types::Credentials>,
@@ -542,7 +497,7 @@ pub struct TransactionWrite {
 }
 
 impl TransactionWrite {
-    pub fn new(promise: Promise<()>, stream: String, creds: Option<types::Credentials>) -> TransactionWrite {
+    pub fn new(promise: Promise<()>, stream: Chars, creds: Option<types::Credentials>) -> TransactionWrite {
         TransactionWrite {
             stream,
             promise,
@@ -557,7 +512,7 @@ impl TransactionWrite {
     }
 
     pub fn set_events<I>(&mut self, events: I)
-        where I: IntoIterator<Item=EventData>
+        where I: IntoIterator<Item=types::EventData>
     {
         let mut repeated = RepeatedField::new();
 
@@ -574,17 +529,11 @@ impl TransactionWrite {
 }
 
 impl Operation for TransactionWrite {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::TransactionWrite, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::TransactionWrite, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -595,7 +544,7 @@ impl Operation for TransactionWrite {
                     match pkg.cmd {
                         Cmd::TransactionWriteCompleted => {
                             let response: messages::TransactionWriteCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -615,7 +564,7 @@ impl Operation for TransactionWrite {
                                 },
 
                                 OperationResult::StreamDeleted => {
-                                    let stream = self.stream.clone();
+                                    let stream = Chars::from(self.stream.deref());
                                     self.failed(OperationError::StreamDeleted(stream));
 
                                     op_done()
@@ -658,7 +607,7 @@ impl Operation for TransactionWrite {
 }
 
 pub struct TransactionCommit {
-    stream: String,
+    stream: Chars,
     version: types::ExpectedVersion,
     promise: Promise<types::WriteResult>,
     inner: messages::TransactionCommit,
@@ -669,7 +618,7 @@ pub struct TransactionCommit {
 impl TransactionCommit {
     pub fn new(
         promise: Promise<types::WriteResult>,
-        stream: String,
+        stream: Chars,
         version: types::ExpectedVersion,
         creds: Option<types::Credentials>) -> TransactionCommit
     {
@@ -693,17 +642,11 @@ impl TransactionCommit {
 }
 
 impl Operation for TransactionCommit {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::TransactionCommit, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::TransactionCommit, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -714,7 +657,7 @@ impl Operation for TransactionCommit {
                     match pkg.cmd {
                         Cmd::TransactionCommitCompleted => {
                             let response: messages::TransactionCommitCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -738,7 +681,7 @@ impl Operation for TransactionCommit {
                                 }
 
                                 OperationResult::WrongExpectedVersion => {
-                                    let stream = self.stream.clone();
+                                    let stream = Chars::from(self.stream.deref());
 
                                     self.promise.reject(OperationError::WrongExpectedVersion(stream, self.version));
 
@@ -746,7 +689,7 @@ impl Operation for TransactionCommit {
                                 },
 
                                 OperationResult::StreamDeleted => {
-                                    let stream = self.stream.clone();
+                                    let stream = Chars::from(self.stream.deref());
 
                                     self.promise.reject(OperationError::StreamDeleted(stream));
 
@@ -760,7 +703,7 @@ impl Operation for TransactionCommit {
                                 }
 
                                 OperationResult::AccessDenied => {
-                                    let stream = self.stream.clone();
+                                    let stream = Chars::from(self.stream.deref());
 
                                     self.promise.reject(OperationError::AccessDenied(stream));
 
@@ -828,7 +771,7 @@ impl ReadStreamEvents {
         }
     }
 
-    pub fn set_event_stream_id(&mut self, value: String) {
+    pub fn set_event_stream_id(&mut self, value: Chars) {
         self.inner.set_event_stream_id(value);
     }
 
@@ -850,17 +793,11 @@ impl ReadStreamEvents {
 }
 
 impl Operation for ReadStreamEvents {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(self.request_cmd, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    self.request_cmd, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -870,7 +807,7 @@ impl Operation for ReadStreamEvents {
                 if let Some(pkg) = input {
                     if pkg.cmd == self.response_cmd {
                         let mut response: messages::ReadStreamEventsCompleted =
-                                parse_from_bytes(&pkg.payload.as_slice())?;
+                                pkg.to_message()?;
 
                         match response.get_result() {
                             ReadStreamEventsCompleted_ReadStreamResult::Success => {
@@ -903,7 +840,7 @@ impl Operation for ReadStreamEvents {
                             },
 
                             ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
-                                let stream = self.inner.get_event_stream_id().to_string();
+                                let stream = self.inner.take_event_stream_id();
 
                                 self.promise.accept(types::ReadStreamStatus::NoStream(stream));
 
@@ -911,7 +848,7 @@ impl Operation for ReadStreamEvents {
                             },
 
                             ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
-                                let stream = self.inner.get_event_stream_id().to_string();
+                                let stream = self.inner.take_event_stream_id();
 
                                 self.promise.accept(types::ReadStreamStatus::StreamDeleled(stream));
 
@@ -919,7 +856,7 @@ impl Operation for ReadStreamEvents {
                             },
 
                             ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
-                                let stream = self.inner.get_event_stream_id().to_string();
+                                let stream = self.inner.take_event_stream_id();
 
                                 self.promise.accept(types::ReadStreamStatus::AccessDenied(stream));
 
@@ -927,7 +864,7 @@ impl Operation for ReadStreamEvents {
                             },
 
                             ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
-                                let stream = self.inner.get_event_stream_id().to_string();
+                                let stream = self.inner.take_event_stream_id();
 
                                 self.promise.accept(types::ReadStreamStatus::NotModified(stream));
 
@@ -935,7 +872,7 @@ impl Operation for ReadStreamEvents {
                             },
 
                             ReadStreamEventsCompleted_ReadStreamResult::Error => {
-                                let error_msg = response.get_error().to_string();
+                                let error_msg = response.take_error();
 
                                 self.promise.accept(types::ReadStreamStatus::Error(error_msg));
 
@@ -1019,17 +956,11 @@ impl ReadAllEvents {
 }
 
 impl Operation for ReadAllEvents {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(self.request_cmd, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    self.request_cmd, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -1039,7 +970,7 @@ impl Operation for ReadAllEvents {
                 if let Some(pkg) = input {
                     if pkg.cmd == self.response_cmd {
                         let mut response: messages::ReadAllEventsCompleted =
-                                parse_from_bytes(&pkg.payload.as_slice())?;
+                                pkg.to_message()?;
 
                         match response.get_result() {
                             ReadAllEventsCompleted_ReadAllResult::Success => {
@@ -1076,19 +1007,21 @@ impl Operation for ReadAllEvents {
                             },
 
                             ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
-                                self.promise.accept(types::ReadStreamStatus::AccessDenied("$all".to_owned()));
+                                self.promise.accept(
+                                    types::ReadStreamStatus::AccessDenied(Chars::from("$all")));
 
                                 op_done()
                             },
 
                             ReadAllEventsCompleted_ReadAllResult::NotModified => {
-                                self.promise.accept(types::ReadStreamStatus::NotModified("$all".to_owned()));
+                                self.promise.accept(
+                                    types::ReadStreamStatus::NotModified(Chars::from("$all")));
 
                                 op_done()
                             },
 
                             ReadAllEventsCompleted_ReadAllResult::Error => {
-                                let error_msg = response.get_error().to_string();
+                                let error_msg = response.take_error();
 
                                 self.promise.accept(types::ReadStreamStatus::Error(error_msg));
 
@@ -1133,7 +1066,7 @@ impl DeleteStream {
         }
     }
 
-    pub fn set_event_stream_id(&mut self, stream_id: String) {
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
         self.inner.set_event_stream_id(stream_id);
     }
 
@@ -1151,17 +1084,11 @@ impl DeleteStream {
 }
 
 impl Operation for DeleteStream {
-    fn poll(&mut self, input: Option<&Pkg>) -> Decision {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
         match self.state {
             State::CreatePkg => {
-                let     size    = self.inner.compute_size() as usize;
-                let mut pkg     = Pkg::new(Cmd::DeleteStream, Uuid::new_v4());
-                let mut payload = Vec::with_capacity(size);
-
-                self.inner.write_to_vec(&mut payload)?;
-
-                pkg.set_payload(payload);
-                pkg.creds_opt = self.creds.clone();
+                let pkg = Pkg::from_message(
+                    Cmd::DeleteStream, self.creds.clone(), &self.inner)?;
 
                 self.state = State::Awaiting;
                 op_send(pkg)
@@ -1172,7 +1099,7 @@ impl Operation for DeleteStream {
                     match pkg.cmd {
                         Cmd::DeleteStreamCompleted => {
                             let response: messages::DeleteStreamCompleted =
-                                    parse_from_bytes(&pkg.payload.as_slice())?;
+                                    pkg.to_message()?;
 
                             match response.get_result() {
                                 OperationResult::Success => {
@@ -1191,7 +1118,7 @@ impl Operation for DeleteStream {
                                 }
 
                                 OperationResult::WrongExpectedVersion => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
                                     let exp_i64   = self.inner.get_expected_version();
                                     let exp       = types::ExpectedVersion::from_i64(exp_i64);
 
@@ -1201,7 +1128,7 @@ impl Operation for DeleteStream {
                                 },
 
                                 OperationResult::StreamDeleted => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
 
                                     self.promise.reject(OperationError::StreamDeleted(stream_id));
 
@@ -1215,7 +1142,7 @@ impl Operation for DeleteStream {
                                 }
 
                                 OperationResult::AccessDenied => {
-                                    let stream_id = self.inner.get_event_stream_id().to_string();
+                                    let stream_id = self.inner.take_event_stream_id();
 
                                     self.promise.reject(OperationError::AccessDenied(stream_id));
 

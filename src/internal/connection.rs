@@ -1,7 +1,7 @@
-use std::io::{ self, Read, Cursor };
+use std::io::{ self, Cursor };
 use std::net::{ SocketAddr, SocketAddrV4 };
 
-use bytes::{ Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
+use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
 use tokio_io::AsyncRead;
@@ -13,7 +13,7 @@ use uuid::{ Uuid, ParseError };
 use internal::command::Cmd;
 use internal::messaging::Msg;
 use internal::package::Pkg;
-use internal::types::Credentials;
+use types::Credentials;
 
 pub struct Connection {
     pub id:     Uuid,
@@ -74,40 +74,36 @@ impl Decoder for PkgCodec {
 
             cursor.copy_to_slice(&mut correlation_bytes);
 
-            let     correlation = Uuid::from_bytes(&correlation_bytes).map_err(decode_parse_error)?;
-            let mut pkg         = Pkg::new(cmd, correlation);
+            let correlation = Uuid::from_bytes(&correlation_bytes).map_err(decode_parse_error)?;
 
-            pkg.creds_opt = {
+            // Client-wise, the server doesn't send back authentication
+            // information. For a matter of consistency, we still implement
+            // `Credentials` parsing, even if it will never be use at the client
+            // level.
+            let creds_opt = {
                 if auth_flag == 0x01 {
-                    let     login_len = cursor.get_u8() as usize;
-                    let mut login     = String::with_capacity(login_len);
+                    let creds = Credentials::parse_from_buf(&mut cursor)?;
 
-                    let mut take = Read::take(cursor, login_len as u64);
-                    take.read_to_string(&mut login)?;
-                    cursor = take.into_inner();
-
-                    let     passw_len = cursor.get_u8() as usize;
-                    let mut password  = String::with_capacity(passw_len);
-
-                    let mut take = Read::take(cursor, passw_len as u64);
-                    take.read_to_string(&mut password)?;
-                    cursor = take.into_inner();
-
-                    Some(Credentials { login, password })
+                    Some(creds)
                 } else {
                     None
                 }
             };
 
-            if self.frame_size > cursor.position() as usize {
-                let     remaining = cursor.remaining();
-                let mut payload   = Vec::with_capacity(remaining);
+            let payload = {
+                if self.frame_size > cursor.position() as usize {
+                    cursor.collect()
+                } else {
+                    Bytes::new()
+                }
+            };
 
-                cursor.read_to_end(&mut payload)?;
-                pkg.set_payload(payload);
+            Pkg {
+                cmd,
+                creds_opt,
+                correlation,
+                payload,
             }
-
-            pkg
         };
 
         src.advance(self.frame_size);
@@ -139,16 +135,10 @@ impl Encoder for PkgCodec {
         dst.put_slice(item.correlation.as_bytes());
 
         if let Some(creds) = item.creds_opt.as_ref() {
-            let login_len = creds.login.len();
-            let passw_len = creds.password.len();
-
-            dst.put_u8(login_len as u8);
-            dst.put_slice(creds.login.as_bytes());
-            dst.put_u8(passw_len as u8);
-            dst.put_slice(creds.password.as_bytes());
+            creds.write_to_bytes_mut(dst);
         }
 
-        dst.put_slice(item.payload.as_slice());
+        dst.put(item.payload);
 
         Ok(())
     }
