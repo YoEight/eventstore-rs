@@ -1,9 +1,7 @@
 use std::ops::Deref;
 
 use futures::sync::mpsc;
-use protobuf::{ Chars, RepeatedField, Message };
-use protobuf::core::parse_from_bytes;
-use uuid::Uuid;
+use protobuf::{ Chars, RepeatedField };
 
 use internal::command::Cmd;
 use internal::messages;

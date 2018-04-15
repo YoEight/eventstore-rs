@@ -1,7 +1,7 @@
 use std::io::{ self, Read, Cursor };
 use std::net::{ SocketAddr, SocketAddrV4 };
 
-use bytes::{ Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
+use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
 use tokio_io::AsyncRead;
@@ -74,10 +74,8 @@ impl Decoder for PkgCodec {
 
             cursor.copy_to_slice(&mut correlation_bytes);
 
-            let     correlation = Uuid::from_bytes(&correlation_bytes).map_err(decode_parse_error)?;
-            let mut pkg         = Pkg::new(cmd, correlation);
-
-            pkg.creds_opt = {
+            let correlation = Uuid::from_bytes(&correlation_bytes).map_err(decode_parse_error)?;
+            let creds_opt   = {
                 if auth_flag == 0x01 {
                     let     login_len = cursor.get_u8() as usize;
                     let mut login     = String::with_capacity(login_len);
@@ -99,15 +97,20 @@ impl Decoder for PkgCodec {
                 }
             };
 
-            if self.frame_size > cursor.position() as usize {
-                let     remaining = cursor.remaining();
-                let mut payload   = Vec::with_capacity(remaining);
+            let payload = {
+                if self.frame_size > cursor.position() as usize {
+                    cursor.collect()
+                } else {
+                    Bytes::new()
+                }
+            };
 
-                cursor.read_to_end(&mut payload)?;
-                pkg.set_payload(payload);
+            Pkg {
+                cmd,
+                creds_opt,
+                correlation,
+                payload,
             }
-
-            pkg
         };
 
         src.advance(self.frame_size);
@@ -148,7 +151,7 @@ impl Encoder for PkgCodec {
             dst.put_slice(creds.password.as_bytes());
         }
 
-        dst.put_slice(item.payload.as_slice());
+        dst.put(item.payload);
 
         Ok(())
     }
