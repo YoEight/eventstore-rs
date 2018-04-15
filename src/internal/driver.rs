@@ -12,7 +12,7 @@ use discovery::{ Endpoint, Discovery };
 use internal::command::Cmd;
 use internal::connection::Connection;
 use internal::messaging::Msg;
-use internal::operations::Op;
+use internal::operations::Exchange;
 use internal::package::Pkg;
 use internal::registry::Registry;
 use types::{ Credentials, Settings };
@@ -372,9 +372,7 @@ impl Driver {
         }
     }
 
-    pub fn on_new_op(&mut self, op: Op) {
-        let operation = op.to_operation();
-
+    pub fn on_new_op(&mut self, operation: Exchange) {
         let conn_opt = {
             if self.state.is_connected() {
                 // Will be always 'Some' when connected.

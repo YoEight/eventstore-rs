@@ -99,33 +99,7 @@ fn op_retry() -> Decision {
     Ok(Outcome::Retry)
 }
 
-pub enum Op {
-    Write(WriteEvents),
-    Read(ReadEvent),
-    TransactionStart(TransactionStart),
-    TransactionWrite(TransactionWrite),
-    TransactionCommit(TransactionCommit),
-    ReadStreams(ReadStreamEvents),
-    ReadAll(ReadAllEvents),
-    Delete(DeleteStream),
-}
-
-impl Op {
-    // FIXME - Currently, I don't know how to encode existential types so it
-    // can be shared across several threads.
-    pub fn to_operation(self) -> Box<Operation> {
-        match self {
-            Op::Write(w)             => Box::new(w),
-            Op::Read(r)              => Box::new(r),
-            Op::TransactionStart(t)  => Box::new(t),
-            Op::TransactionWrite(t)  => Box::new(t),
-            Op::TransactionCommit(t) => Box::new(t),
-            Op::ReadStreams(r)       => Box::new(r),
-            Op::ReadAll(r)           => Box::new(r),
-            Op::Delete(d)            => Box::new(d),
-        }
-    }
-}
+pub type Exchange = Box<Operation + Sync + Send>;
 
 pub trait Operation {
     fn poll(&mut self, input: Option<Pkg>) -> Decision;

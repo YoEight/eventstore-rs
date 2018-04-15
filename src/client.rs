@@ -65,7 +65,7 @@ impl Client {
 
                     Msg::NewOp(op) => {
                         driver.on_new_op(op);
-                    }
+                    },
                 };
 
                 Ok(())

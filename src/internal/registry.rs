@@ -4,7 +4,7 @@ use std::time::{ Duration, Instant };
 use uuid::Uuid;
 
 use internal::connection::Connection;
-use internal::operations::{ Operation, OperationError };
+use internal::operations::{ OperationError, Exchange };
 use internal::package::Pkg;
 use types::{ Settings, Retry };
 
@@ -26,7 +26,7 @@ struct Register {
     conn_id: Option<Uuid>,
 
     // Actual operation state-machine.
-    op: Box<Operation>,
+    op: Exchange,
 }
 
 struct Checking {
@@ -51,7 +51,7 @@ impl Checking {
 }
 
 impl Register {
-    fn new(op: Box<Operation>) -> Register {
+    fn new(op: Exchange) -> Register {
         Register {
             started: Instant::now(),
             tries: 0,
@@ -63,7 +63,7 @@ impl Register {
 }
 
 pub struct Registry {
-    awaiting: Vec<Box<Operation>>,
+    awaiting: Vec<Exchange>,
     pending: HashMap<Uuid, Register>,
     operation_timeout: Duration,
     operation_retry: Retry,
@@ -79,7 +79,7 @@ impl Registry {
         }
     }
 
-    pub fn register(&mut self, op: Box<Operation>, conn: Option<&Connection>) {
+    pub fn register(&mut self, op: Exchange, conn: Option<&Connection>) {
         match conn {
             None => self.awaiting.push(op),
 

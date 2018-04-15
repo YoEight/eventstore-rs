@@ -87,7 +87,7 @@ impl WriteEvents {
         op.set_events(self.events);
         op.set_require_master(self.require_master);
 
-        self.sender.send(Msg::NewOp(operations::Op::Write(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -137,7 +137,7 @@ impl ReadEvent {
         op.set_resolve_link_tos(self.resolve_link_tos);
         op.set_require_master(self.require_master);
 
-        self.sender.send(Msg::NewOp(operations::Op::Read(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -380,7 +380,7 @@ impl TransactionStart {
         let version        = self.version;
         let sender         = self.sender.clone();
 
-        self.sender.send(Msg::NewOp(operations::Op::TransactionStart(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         let fut = single_value_future(rcv).map(move |id| {
             Transaction {
@@ -426,7 +426,7 @@ impl Transaction {
         op.set_events(events);
         op.set_require_master(self.require_master);
 
-        self.sender.clone().send(Msg::NewOp(operations::Op::TransactionWrite(op))).wait().unwrap();
+        self.sender.clone().send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -440,7 +440,7 @@ impl Transaction {
         op.set_transaction_id(self.id);
         op.set_require_master(self.require_master);
 
-        self.sender.clone().send(Msg::NewOp(operations::Op::TransactionCommit(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -517,7 +517,7 @@ impl ReadStreamEvents {
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        self.sender.send(Msg::NewOp(operations::Op::ReadStreams(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -583,7 +583,7 @@ impl ReadAllEvents {
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        self.sender.send(Msg::NewOp(operations::Op::ReadAll(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
@@ -637,7 +637,7 @@ impl DeleteStream {
         op.set_require_master(self.require_master);
         op.set_hard_delete(self.hard_delete);
 
-        self.sender.send(Msg::NewOp(operations::Op::Delete(op))).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
