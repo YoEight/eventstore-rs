@@ -8,7 +8,7 @@ use tokio_core::reactor::Core;
 
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
-use command;
+use internal::commands;
 use discovery::StaticDiscovery;
 use types::{ StreamMetadata, Settings };
 
@@ -85,50 +85,50 @@ impl Client {
         self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
-    pub fn write_events<S>(&self, stream: S) -> command::WriteEvents
+    pub fn write_events<S>(&self, stream: S) -> commands::WriteEvents
         where S: Into<Chars>
     {
-        command::WriteEvents::new(self.sender.clone(), stream)
+        commands::WriteEvents::new(self.sender.clone(), stream)
     }
 
-    pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata) -> command::WriteStreamData
+    pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata) -> commands::WriteStreamData
         where S: Into<Chars>
     {
-        command::WriteStreamData::new(self.sender.clone(), stream, metadata)
+        commands::WriteStreamData::new(self.sender.clone(), stream, metadata)
     }
 
-    pub fn read_event<S>(&self, stream: S, event_number: i64) -> command::ReadEvent
+    pub fn read_event<S>(&self, stream: S, event_number: i64) -> commands::ReadEvent
         where S: Into<Chars>
     {
-        command::ReadEvent::new(self.sender.clone(), stream, event_number)
+        commands::ReadEvent::new(self.sender.clone(), stream, event_number)
     }
 
-    pub fn read_stream_metadata<S>(&self, stream: S) -> command::ReadStreamData
+    pub fn read_stream_metadata<S>(&self, stream: S) -> commands::ReadStreamData
         where S: Into<Chars>
     {
-        command::ReadStreamData::new(self.sender.clone(), stream)
+        commands::ReadStreamData::new(self.sender.clone(), stream)
     }
 
-    pub fn start_transaction<S>(&self, stream: S) -> command::TransactionStart
+    pub fn start_transaction<S>(&self, stream: S) -> commands::TransactionStart
         where S: Into<Chars>
     {
-        command::TransactionStart::new(self.sender.clone(), stream)
+        commands::TransactionStart::new(self.sender.clone(), stream)
     }
 
-    pub fn read_stream<S>(&self, stream: S) -> command::ReadStreamEvents
+    pub fn read_stream<S>(&self, stream: S) -> commands::ReadStreamEvents
         where S: Into<Chars>
     {
-        command::ReadStreamEvents::new(self.sender.clone(), stream)
+        commands::ReadStreamEvents::new(self.sender.clone(), stream)
     }
 
-    pub fn read_all(&self) -> command::ReadAllEvents {
-        command::ReadAllEvents::new(self.sender.clone())
+    pub fn read_all(&self) -> commands::ReadAllEvents {
+        commands::ReadAllEvents::new(self.sender.clone())
     }
 
-    pub fn delete_stream<S>(&self, stream: S) -> command::DeleteStream
+    pub fn delete_stream<S>(&self, stream: S) -> commands::DeleteStream
         where S: Into<Chars>
     {
-        command::DeleteStream::new(self.sender.clone(), stream)
+        commands::DeleteStream::new(self.sender.clone(), stream)
     }
 
     pub fn shutdown(&self) {

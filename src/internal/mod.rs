@@ -1,4 +1,5 @@
 pub mod command;
+pub mod commands;
 pub mod connection;
 pub mod driver;
 pub mod messaging;

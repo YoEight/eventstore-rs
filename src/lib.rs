@@ -23,5 +23,4 @@ extern crate serde_json;
 mod internal;
 pub mod discovery;
 pub mod client;
-pub mod command;
 pub mod types;
