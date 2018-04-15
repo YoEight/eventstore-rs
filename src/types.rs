@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::time::Duration;
 
-use bytes::Bytes;
+use bytes::{ Bytes, BytesMut, BufMut, Buf };
 use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
@@ -25,10 +26,56 @@ impl Retry {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Credentials {
-    pub login: String,
-    pub password: String,
+    login: Bytes,
+    password: Bytes,
+}
+
+impl Credentials {
+    pub fn new<S>(login: S, password: S) -> Credentials
+        where S: Into<Bytes>
+    {
+        Credentials {
+            login: login.into(),
+            password: password.into(),
+        }
+    }
+
+    pub fn write_to_bytes_mut(&self, dst: &mut BytesMut) {
+        dst.put_u8(self.login.len() as u8);
+        dst.put(&self.login);
+        dst.put_u8(self.password.len() as u8);
+        dst.put(&self.password);
+    }
+
+    pub fn parse_from_buf<B>(buf: &mut B) -> ::std::io::Result<Credentials>
+        where B: Buf + Read
+    {
+        let     login_len = buf.get_u8() as usize;
+        let mut login     = Vec::with_capacity(login_len);
+
+        let mut take = Read::take(buf, login_len as u64);
+        take.read_to_end(&mut login)?;
+        let buf = take.into_inner();
+
+        let     passw_len = buf.get_u8() as usize;
+        let mut password  = Vec::with_capacity(passw_len);
+
+        let mut take = Read::take(buf, passw_len as u64);
+        take.read_to_end(&mut password)?;
+
+        let creds = Credentials {
+            login: login.into(),
+            password: password.into(),
+        };
+
+        Ok(creds)
+    }
+
+    pub fn network_size(&self) -> usize {
+        self.login.len() + self.password.len() + 2 // Including 2 length bytes.
+    }
 }
 
 pub struct Settings {

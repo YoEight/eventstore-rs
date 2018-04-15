@@ -13,10 +13,10 @@ use uuid::Uuid;
 #[test]
 fn all_round_operation_test() {
     let mut settings = Settings::default();
-    let login        = "admin".to_owned();
-    let passw        = "changeit".to_owned();
+    let login        = "admin";
+    let password     = "changeit";
 
-    settings.default_user = Some(Credentials { login: login, password: passw });
+    settings.default_user = Some(Credentials::new(login, password));
 
     let client = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
 

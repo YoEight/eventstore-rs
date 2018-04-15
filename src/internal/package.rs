@@ -48,7 +48,7 @@ impl Pkg {
     pub fn size(&self) -> usize {
         let creds_size = {
             match self.creds_opt {
-                Some(ref creds) => creds.login.len() + creds.password.len() + 2, // Including 2 length bytes.
+                Some(ref creds) => creds.network_size(),
                 None            => 0,
             }
         };
