@@ -66,6 +66,10 @@ impl Client {
                     Msg::NewOp(op) => {
                         driver.on_new_op(op);
                     },
+
+                    Msg::Send(pkg) => {
+                        driver.on_send_pkg(pkg);
+                    },
                 };
 
                 Ok(())
@@ -129,6 +133,12 @@ impl Client {
         where S: Into<Chars>
     {
         commands::DeleteStream::new(self.sender.clone(), stream)
+    }
+
+    pub fn subcribe_to_stream<S>(&self, stream_id: S) -> commands::SubscribeToStream
+        where S: Into<Chars>
+    {
+        commands::SubscribeToStream::new(self.sender.clone(), stream_id)
     }
 
     pub fn shutdown(&self) {

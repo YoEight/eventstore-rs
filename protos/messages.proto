@@ -16,7 +16,7 @@ enum OperationResult
 
 message NewEvent {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+  option (rustproto.carllerche_bytes_for_string) = true;
 
 	required bytes event_id = 1;
 	required string event_type = 2;
@@ -355,6 +355,9 @@ message PersistentSubscriptionStreamEventAppeared {
 }
 
 message SubscribeToStream {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+  option (rustproto.carllerche_bytes_for_string) = true;
+
 	required string event_stream_id = 1;
 	required bool resolve_link_tos = 2;
 }

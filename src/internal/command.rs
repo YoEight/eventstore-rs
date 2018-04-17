@@ -27,6 +27,11 @@ pub enum Cmd {
     ReadAllEventsBackwardCompleted,
     DeleteStream,
     DeleteStreamCompleted,
+    SubscribeToStream,
+    SubscriptionConfirmed,
+    StreamEventAppeared,
+    UnsubscribeFromStream,
+    SubscriptionDropped,
     Unknown(u8),
 }
 
@@ -68,6 +73,11 @@ impl Cmd {
             Cmd::ReadAllEventsBackwardCompleted    => 0xB9,
             Cmd::DeleteStream                      => 0x8A,
             Cmd::DeleteStreamCompleted             => 0x8B,
+            Cmd::SubscribeToStream                 => 0xC0,
+            Cmd::SubscriptionConfirmed             => 0xC1,
+            Cmd::StreamEventAppeared               => 0xC2,
+            Cmd::UnsubscribeFromStream             => 0xC3,
+            Cmd::SubscriptionDropped               => 0xC4,
             Cmd::Unknown(cmd)                      => cmd,
         }
     }
@@ -101,6 +111,11 @@ impl Cmd {
             0xB9 => Cmd::ReadAllEventsBackwardCompleted,
             0x8A => Cmd::DeleteStream,
             0x8B => Cmd::DeleteStreamCompleted,
+            0xC0 => Cmd::SubscribeToStream,
+            0xC1 => Cmd::SubscriptionConfirmed,
+            0xC2 => Cmd::StreamEventAppeared,
+            0xC3 => Cmd::UnsubscribeFromStream,
+            0xC4 => Cmd::SubscriptionDropped,
             _    => Cmd::Unknown(cmd),
         }
     }
