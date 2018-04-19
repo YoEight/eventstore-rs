@@ -479,6 +479,14 @@ impl Driver {
 
         Report::Continue
     }
+
+    pub fn on_send_pkg(&mut self, pkg: Pkg) {
+        if self.state == ConnectionState::Connected {
+            if let Some(ref conn) = self.candidate {
+                conn.enqueue(pkg);
+            }
+        }
+    }
 }
 
 fn heartbeat_timeout_error() -> Error {

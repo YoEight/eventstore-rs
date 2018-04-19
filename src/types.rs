@@ -3,13 +3,18 @@ use std::io::Read;
 use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
+use futures::{ Future, Stream, Sink };
+use futures::sync::mpsc::{ Receiver, Sender };
 use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, ParseError };
 
+use internal::command::Cmd;
 use internal::messages;
+use internal::messaging::Msg;
+use internal::package::Pkg;
 
 #[derive(Copy, Clone)]
 pub enum Retry {
@@ -648,4 +653,72 @@ pub struct StreamAcl {
     pub delete_roles: Vec<String>,
     pub meta_read_roles: Vec<String>,
     pub meta_write_roles: Vec<String>,
+}
+
+crate enum SubEvent {
+    Confirmed {
+        id: Uuid,
+        last_commit_position: i64,
+        last_event_number: i64
+    },
+
+    EventAppeared(ResolvedEvent),
+    Dropped
+}
+
+pub struct Subscription {
+    pub(crate) receiver: Receiver<SubEvent>,
+    pub(crate) sender: Sender<Msg>,
+}
+
+impl Subscription {
+    pub fn consume<C>(self, consumer: C)
+        where C: SubscriptionConsumer
+    {
+        self.consume_async(consumer).wait().unwrap()
+    }
+
+    pub fn consume_async<C>(self, mut consumer: C) -> impl Future<Item=(), Error=()>
+        where C: SubscriptionConsumer
+    {
+        let mut sub_id_opt = None;
+        let     sender     = self.sender.clone();
+
+        self.receiver.for_each(move |event| {
+            match event {
+                SubEvent::Confirmed { id, last_commit_position, last_event_number } => {
+                    sub_id_opt = Some(id);
+
+                    consumer.when_confirmed(id, last_commit_position, last_event_number);
+                },
+
+                SubEvent::EventAppeared(evt) => {
+                    if let OnEventAppeared::Drop = consumer.when_event_appeared(evt) {
+                        if let Some(id) = sub_id_opt.as_ref() {
+                            let pkg = Pkg::new(Cmd::UnsubscribeFromStream, *id);
+
+                            sender.clone().send(Msg::Send(pkg)).wait().unwrap();
+                        }
+                    }
+                },
+
+                SubEvent::Dropped => {
+                    consumer.when_dropped();
+                },
+            }
+
+            Ok(())
+        })
+    }
+}
+
+pub enum OnEventAppeared {
+    Continue,
+    Drop,
+}
+
+pub trait SubscriptionConsumer {
+    fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64);
+    fn when_event_appeared(&mut self, event: ResolvedEvent) -> OnEventAppeared;
+    fn when_dropped(&mut self);
 }

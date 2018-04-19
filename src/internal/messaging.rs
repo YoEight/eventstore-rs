@@ -14,7 +14,8 @@ pub enum Msg {
     Established(Uuid),
     Arrived(Pkg),
     ConnectionClosed(Uuid, Error),
-    NewOp(operations::Exchange)
+    NewOp(operations::Exchange),
+    Send(Pkg),
 }
 
 impl Msg {

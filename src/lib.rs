@@ -1,3 +1,4 @@
+#![feature(crate_visibility_modifier)]
 #![feature(duration_extras)]
 
 extern crate core;

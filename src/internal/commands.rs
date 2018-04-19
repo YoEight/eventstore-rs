@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 
-use futures::sync::mpsc::Sender;
+use futures::sync::mpsc::{ self, Sender };
 use futures::{ Future, Sink, Stream };
 use protobuf::Chars;
 use serde_json;
@@ -640,5 +640,50 @@ impl DeleteStream {
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
+    }
+}
+
+pub struct SubscribeToStream {
+    stream_id: Chars,
+    sender: Sender<Msg>,
+    resolve_link_tos: bool,
+    creds: Option<types::Credentials>,
+}
+
+impl SubscribeToStream {
+    pub(crate) fn new<S>(sender: Sender<Msg>, stream_id: S)
+        -> SubscribeToStream
+        where S: Into<Chars>
+    {
+        SubscribeToStream {
+            stream_id: stream_id.into(),
+            resolve_link_tos: false,
+            creds: None,
+            sender,
+        }
+    }
+
+    pub fn credentials(self, value: types::Credentials) -> SubscribeToStream {
+        SubscribeToStream { creds: Some(value), ..self }
+    }
+
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> SubscribeToStream {
+        SubscribeToStream { resolve_link_tos, ..self }
+    }
+
+    pub fn execute(self) -> types::Subscription {
+        let sender   = self.sender.clone();
+        let (tx, rx) = mpsc::channel(500);
+        let mut op   = operations::SubscribeToStream::new(tx, self.creds);
+
+        op.set_event_stream_id(self.stream_id);
+        op.set_resolve_link_tos(self.resolve_link_tos);
+
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
+
+        types::Subscription {
+            receiver: rx,
+            sender,
+        }
     }
 }

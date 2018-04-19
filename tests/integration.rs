@@ -5,10 +5,38 @@ extern crate serde_json;
 extern crate uuid;
 
 use std::time::Duration;
+use std::thread::spawn;
 use futures::Future;
 use eventstore::client::Client;
 use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata };
 use uuid::Uuid;
+
+struct TestSub {
+    count: u8,
+}
+
+impl types::SubscriptionConsumer for TestSub {
+    fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
+        println!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
+            id, last_commit_position, last_event_number);
+    }
+
+    fn when_event_appeared(&mut self, event: types::ResolvedEvent) -> types::OnEventAppeared {
+        println!("Event appeared: {:?}", event);
+
+        self.count += 1;
+
+        if self.count == 3 {
+            types::OnEventAppeared::Drop
+        } else {
+            types::OnEventAppeared::Continue
+        }
+    }
+
+    fn when_dropped(&mut self) {
+        println!("Subscription dropped!");
+    }
+}
 
 #[test]
 fn all_round_operation_test() {
@@ -150,4 +178,30 @@ fn all_round_operation_test() {
                        .unwrap();
 
     println!("Delete stream [{}] result: {:?}", stream_id, result);
+
+    let     uuid      = Uuid::new_v4();
+    let     stream_id = format!("volatile:{}", uuid);
+    let     sub       = client.subcribe_to_stream(stream_id.clone()).execute();
+    let mut events    = Vec::with_capacity(3);
+
+    for idx in 1..4 {
+        let payload = json!({
+            "event_index": idx,
+        });
+
+        let data = EventData::json("volatile-test", payload);
+        events.push(data);
+    }
+
+    let handle = spawn(move || {
+        sub.consume(TestSub { count: 0 });
+    });
+
+    let _ = client.write_events(stream_id)
+                  .append_events(events)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+    handle.join().unwrap();
 }

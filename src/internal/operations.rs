@@ -87,7 +87,7 @@ fn op_done() -> Decision {
 }
 
 
-fn _op_continue() -> Decision {
+fn op_continue() -> Decision {
     Ok(Outcome::Continue(None))
 }
 
@@ -1166,6 +1166,113 @@ impl Operation for DeleteStream {
 
     fn failed(&mut self, error: OperationError) {
         self.promise.reject(error);
+    }
+
+    fn retry(&mut self) {
+        self.state = State::CreatePkg;
+    }
+}
+
+pub struct SubscribeToStream {
+    sub_bus: mpsc::Sender<types::SubEvent>,
+    inner: messages::SubscribeToStream,
+    creds: Option<types::Credentials>,
+    state: State,
+}
+
+impl SubscribeToStream {
+    crate fn new(sub_bus: mpsc::Sender<types::SubEvent>, creds: Option<types::Credentials>)
+        -> SubscribeToStream
+    {
+        SubscribeToStream {
+            sub_bus,
+            creds,
+            inner: messages::SubscribeToStream::new(),
+            state: State::CreatePkg,
+        }
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub fn set_resolve_link_tos(&mut self, value: bool) {
+        self.inner.set_resolve_link_tos(value);
+    }
+
+    fn publish(&mut self, event: types::SubEvent) {
+        if let Err(_) = self.sub_bus.try_send(event) {
+            print!("ERROR: Max unprocessed events limit reached!");
+        }
+    }
+}
+
+impl Operation for SubscribeToStream {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
+        match self.state {
+            State::CreatePkg => {
+                let pkg = Pkg::from_message(
+                    Cmd::SubscribeToStream, self.creds.clone(), &self.inner)?;
+
+                self.state = State::Awaiting;
+                op_send(pkg)
+            },
+
+            State::Awaiting => {
+                if let Some(pkg) = input {
+                    match pkg.cmd {
+                        Cmd::SubscriptionConfirmed => {
+                            let response: messages::SubscriptionConfirmation =
+                                pkg.to_message()?;
+
+                            let last_commit_position = response.get_last_commit_position();
+                            let last_event_number    = response.get_last_event_number();
+
+                            let confirmed = types::SubEvent::Confirmed {
+                                id: pkg.correlation,
+                                last_commit_position,
+                                last_event_number,
+                            };
+
+                            self.publish(confirmed);
+
+                            op_continue()
+                        },
+
+                        Cmd::StreamEventAppeared => {
+                            let mut response: messages::StreamEventAppeared =
+                                pkg.to_message()?;
+
+                            let event    = types::ResolvedEvent::new(response.take_event())?;
+                            let appeared = types::SubEvent::EventAppeared(event);
+
+                            self.publish(appeared);
+
+                            op_continue()
+                        }
+
+                        Cmd::SubscriptionDropped => {
+                            self.publish(types::SubEvent::Dropped);
+
+                            op_done()
+                        },
+
+                        _ => {
+                            // Will never happened, has error in subscription is
+                            // reported through `Cmd::SubscriptionDropped`
+                            // command.
+                            op_done()
+                        },
+                    }
+                } else {
+                    op_done()
+                }
+            },
+        }
+    }
+
+    fn failed(&mut self, _: OperationError) {
+        self.publish(types::SubEvent::Dropped);
     }
 
     fn retry(&mut self) {
