@@ -694,11 +694,10 @@ impl Subscription {
 
                 SubEvent::EventAppeared(evt) => {
                     if let OnEventAppeared::Drop = consumer.when_event_appeared(evt) {
-                        if let Some(id) = sub_id_opt.as_ref() {
-                            let pkg = Pkg::new(Cmd::UnsubscribeFromStream, *id);
+                        let id  = sub_id_opt.take().expect("impossible situation when dropping subscription");
+                        let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
 
-                            sender.clone().send(Msg::Send(pkg)).wait().unwrap();
-                        }
+                        sender.clone().send(Msg::Send(pkg)).wait().unwrap();
                     }
                 },
 
