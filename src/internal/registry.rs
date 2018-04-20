@@ -140,8 +140,8 @@ impl Registry {
                             // This operation wants to keep its old correlation
                             // id, so we insert it back with its previous
                             // value.
-                            self.pending.insert(pkg_id, reg);
                             reg.lasting_session = true;
+                            self.pending.insert(pkg_id, reg);
                         }
                     } else if outcome.is_retrying() {
                         // The operation figured out it's better to retry. We decide to not
