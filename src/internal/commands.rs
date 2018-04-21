@@ -11,7 +11,7 @@ use internal::operations::{ self, OperationError };
 use internal::timespan::Timespan;
 use types;
 
-fn single_value_future<S: 'static, A: 'static>(stream: S) -> impl Future<Item=A, Error=OperationError>
+fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationError>
     where S: Stream<Item = Result<A, operations::OperationError>, Error = ()>
 {
     stream.into_future().then(|res| {
