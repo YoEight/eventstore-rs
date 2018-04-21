@@ -1181,7 +1181,7 @@ pub struct SubscribeToStream {
 }
 
 impl SubscribeToStream {
-    crate fn new(sub_bus: mpsc::Sender<types::SubEvent>, creds: Option<types::Credentials>)
+    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>, creds: Option<types::Credentials>)
         -> SubscribeToStream
     {
         SubscribeToStream {

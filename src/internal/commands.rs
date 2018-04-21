@@ -7,22 +7,19 @@ use protobuf::Chars;
 use serde_json;
 
 use internal::messaging::Msg;
-use internal::operations;
+use internal::operations::{ self, OperationError };
 use internal::timespan::Timespan;
 use types;
 
-type Task<A> = Box<Future<Item=A, Error=operations::OperationError>>;
-
-fn single_value_future<S: 'static, A: 'static>(stream: S) -> Task<A>
+fn single_value_future<S: 'static, A: 'static>(stream: S) -> impl Future<Item=A, Error=OperationError>
     where S: Stream<Item = Result<A, operations::OperationError>, Error = ()>
 {
-    let fut = stream.into_future().then(|res| {
+    stream.into_future().then(|res| {
         match res {
             Ok((Some(x), _)) => x,
             _                => unreachable!(),
         }
-    });
-    Box::new(fut)
+    })
 }
 
 pub struct WriteEvents {
@@ -78,7 +75,7 @@ impl WriteEvents {
         WriteEvents { creds: Some(creds), ..self }
     }
 
-    pub fn execute(self) -> Task<types::WriteResult> {
+    pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::WriteEvents::new(promise, self.creds);
 
@@ -128,7 +125,7 @@ impl ReadEvent {
         ReadEvent { creds: Some(value), ..self }
     }
 
-    pub fn execute(self) -> Task<types::ReadEventStatus<types::ReadEventResult>> {
+    pub fn execute(self) -> impl Future<Item=types::ReadEventStatus<types::ReadEventResult>, Error=OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op         = operations::ReadEvent::new(promise, self.creds);
 
@@ -261,7 +258,7 @@ impl WriteStreamData {
         self
     }
 
-    pub fn execute(self) -> Task<types::WriteResult> {
+    pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let metadata = StreamMetadataInternal::from_metadata(self.metadata);
         let event    = types::EventData::json("$metadata", metadata);
 
@@ -300,9 +297,10 @@ impl ReadStreamData {
         self
     }
 
-    pub fn execute(self) -> Task<types::StreamMetadataResult> {
+    pub fn execute(self) -> impl Future<Item=types::StreamMetadataResult, Error=OperationError> {
         let stream = self.stream;
-        let fut    = self.inner.execute().map(|res| {
+
+        self.inner.execute().map(|res| {
             match res {
                 types::ReadEventStatus::Success(result) => {
                     let metadata_internal: StreamMetadataInternal =
@@ -327,9 +325,7 @@ impl ReadStreamData {
                     types::StreamMetadataResult::Deleted { stream: stream }
                 },
             }
-        });
-
-        Box::new(fut)
+        })
     }
 }
 
@@ -366,7 +362,7 @@ impl TransactionStart {
         TransactionStart { creds_opt: Some(value), ..self }
     }
 
-    pub fn execute(self) -> Task<Transaction> {
+    pub fn execute(self) -> impl Future<Item=Transaction, Error=OperationError> {
         let cloned_creds   = self.creds_opt.clone();
         let (rcv, promise) = operations::Promise::new(1);
         let mut op         = operations::TransactionStart::new(promise, self.creds_opt);
@@ -382,7 +378,7 @@ impl TransactionStart {
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
-        let fut = single_value_future(rcv).map(move |id| {
+        single_value_future(rcv).map(move |id| {
             Transaction {
                 stream,
                 id,
@@ -391,9 +387,7 @@ impl TransactionStart {
                 creds: cloned_creds,
                 version,
             }
-        });
-
-        Box::new(fut)
+        })
     }
 }
 
@@ -411,11 +405,11 @@ impl Transaction {
         self.id
     }
 
-    pub fn write_single(&self, event: types::EventData) -> Task<()> {
+    pub fn write_single(&self, event: types::EventData) -> impl Future<Item=(), Error=OperationError> {
         self.write(::std::iter::once(event))
     }
 
-    pub fn write<I>(&self, events: I) -> Task<()>
+    pub fn write<I>(&self, events: I) -> impl Future<Item=(), Error=OperationError>
         where I: IntoIterator<Item=types::EventData>
     {
         let (rcv, promise) = operations::Promise::new(1);
@@ -431,7 +425,7 @@ impl Transaction {
         single_value_future(rcv)
     }
 
-    pub fn commit(self) -> Task<types::WriteResult> {
+    pub fn commit(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op =
             operations::TransactionCommit::new(
@@ -507,7 +501,7 @@ impl ReadStreamEvents {
         ReadStreamEvents { resolve_link_tos, ..self }
     }
 
-    pub fn execute(self) -> Task<types::ReadStreamStatus<types::StreamSlice>> {
+    pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::ReadStreamEvents::new(promise, self.direction, self.creds);
 
@@ -574,7 +568,7 @@ impl ReadAllEvents {
         ReadAllEvents { resolve_link_tos, ..self }
     }
 
-    pub fn execute(self) -> Task<types::ReadStreamStatus<types::AllSlice>> {
+    pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::AllSlice>, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::ReadAllEvents::new(promise, self.direction, self.creds);
 
@@ -628,7 +622,7 @@ impl DeleteStream {
         DeleteStream { hard_delete, ..self }
     }
 
-    pub fn execute(self) -> Task<types::Position> {
+    pub fn execute(self) -> impl Future<Item=types::Position, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::DeleteStream::new(promise, self.creds);
 

@@ -655,7 +655,7 @@ pub struct StreamAcl {
     pub meta_write_roles: Vec<String>,
 }
 
-crate enum SubEvent {
+pub(crate) enum SubEvent {
     Confirmed {
         id: Uuid,
         last_commit_position: i64,
