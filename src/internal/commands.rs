@@ -681,3 +681,60 @@ impl SubscribeToStream {
         }
     }
 }
+
+pub struct RegularCatchupSubscribe {
+    stream_id: Chars,
+    resolve_link_tos: bool,
+    require_master: bool,
+    batch_size: u16,
+    start_pos: i64,
+    creds_opt: Option<types::Credentials>,
+    sender: Sender<Msg>,
+}
+
+impl RegularCatchupSubscribe {
+    pub(crate) fn new<S: Into<Chars>>(sender: Sender<Msg>, stream: S) -> RegularCatchupSubscribe {
+        RegularCatchupSubscribe {
+            stream_id: stream.into(),
+            resolve_link_tos: false,
+            require_master: false,
+            batch_size: 500,
+            start_pos: 0,
+            sender,
+            creds_opt: None,
+        }
+    }
+
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> RegularCatchupSubscribe {
+        RegularCatchupSubscribe { resolve_link_tos, ..self }
+    }
+
+    pub fn require_master(self, require_master: bool) -> RegularCatchupSubscribe {
+        RegularCatchupSubscribe { require_master, ..self }
+    }
+
+    pub fn start_position(self, start_pos: i64) -> RegularCatchupSubscribe {
+        RegularCatchupSubscribe { start_pos, ..self }
+    }
+
+    pub fn credentials(self, creds: types::Credentials) -> RegularCatchupSubscribe {
+        RegularCatchupSubscribe { creds_opt: Some(creds), ..self }
+    }
+
+    pub fn execute(self) -> types::Subscription {
+        let sender   = self.sender.clone();
+        let (tx, rx) = mpsc::channel(500);
+
+        let puller = operations::RegularStreamPull::new(
+            self.stream_id.clone(), self.resolve_link_tos, self.require_master, self.batch_size as i32, self.start_pos, self.creds_opt.clone());
+        let op = operations::CatchupSubscribe::new(
+            Some(self.stream_id), self.resolve_link_tos, tx, self.creds_opt, puller);
+
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
+
+        types::Subscription {
+            receiver: rx,
+            sender,
+        }
+    }
+}

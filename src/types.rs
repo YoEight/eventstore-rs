@@ -360,6 +360,15 @@ pub enum LocatedEvents<A> {
     Events { events: Vec<ResolvedEvent>, next: Option<A> },
 }
 
+impl <A> LocatedEvents<A> {
+    pub fn is_end_of_stream(&self) -> bool {
+        match *self {
+            LocatedEvents::EndOfStream            => true,
+            LocatedEvents::Events { ref next, ..} => next.is_some(),
+        }
+    }
+}
+
 pub trait Slice {
     type Location;
 
@@ -369,13 +378,18 @@ pub trait Slice {
 }
 
 #[derive(Debug)]
-pub enum ReadStreamStatus<A> {
-    Success(A),
+pub enum ReadStreamError {
     NoStream(Chars),
-    StreamDeleled(Chars),
+    StreamDeleted(Chars),
     NotModified(Chars),
     Error(Chars),
     AccessDenied(Chars),
+}
+
+#[derive(Debug)]
+pub enum ReadStreamStatus<A> {
+    Success(A),
+    Error(ReadStreamError),
 }
 
 #[derive(Debug)]
@@ -672,19 +686,19 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    pub fn consume<C>(self, consumer: C)
+    pub fn consume<C>(self, consumer: C) -> C
         where C: SubscriptionConsumer
     {
         self.consume_async(consumer).wait().unwrap()
     }
 
-    pub fn consume_async<C>(self, mut consumer: C) -> impl Future<Item=(), Error=()>
+    pub fn consume_async<C>(self, init: C) -> impl Future<Item=C, Error=()>
         where C: SubscriptionConsumer
     {
         let mut sub_id_opt = None;
         let     sender     = self.sender.clone();
 
-        self.receiver.for_each(move |event| {
+        self.receiver.fold(init, move |mut consumer, event| {
             match event {
                 SubEvent::Confirmed { id, last_commit_position, last_event_number } => {
                     sub_id_opt = Some(id);
@@ -706,7 +720,7 @@ impl Subscription {
                 },
             }
 
-            Ok(())
+            Ok::<C, ()>(consumer)
         })
     }
 }

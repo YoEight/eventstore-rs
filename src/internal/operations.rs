@@ -1,12 +1,13 @@
 use std::ops::Deref;
 
+use futures::{ Future, Stream };
 use futures::sync::mpsc;
 use protobuf::{ Chars, RepeatedField };
 
 use internal::command::Cmd;
 use internal::messages;
 use internal::package::Pkg;
-use types;
+use types::{ self, Slice };
 
 use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
 
@@ -23,6 +24,14 @@ pub enum OperationError {
     AuthenticationRequired,
     Aborted,
     WrongClientImpl(Cmd),
+}
+
+impl OperationError {
+    fn to_io_error(self) -> ::std::io::Error {
+        let msg = format!("internal operation error: {:?}", self);
+
+        ::std::io::Error::new(::std::io::ErrorKind::Other, msg)
+    }
 }
 
 pub enum Outcome {
@@ -55,9 +64,30 @@ impl Outcome {
             false
         }
     }
+
+    pub fn is_done(&self) -> bool {
+        match *self {
+            Outcome::Done => true,
+            _             => false,
+        }
+    }
 }
 
 pub type Decision = ::std::io::Result<Outcome>;
+
+fn decision_is_continuing(value: &Decision) -> bool {
+    match *value {
+        Ok(ref outcome) => outcome.is_continuing(),
+        _               => false,
+    }
+}
+
+fn decision_is_retrying(value: &Decision) -> bool {
+    match *value {
+        Ok(ref outcome) => outcome.is_retrying(),
+        _               => false,
+    }
+}
 
 pub struct Promise<A> {
     inner: mpsc::Sender<Result<A, OperationError>>,
@@ -790,6 +820,10 @@ impl ReadStreamEvents {
     pub fn set_require_master(&mut self, value: bool) {
         self.inner.set_require_master(value);
     }
+
+    fn report_error(&mut self, error: types::ReadStreamError) {
+        self.promise.accept(types::ReadStreamStatus::Error(error))
+    }
 }
 
 impl Operation for ReadStreamEvents {
@@ -842,7 +876,7 @@ impl Operation for ReadStreamEvents {
                             ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
                                 let stream = self.inner.take_event_stream_id();
 
-                                self.promise.accept(types::ReadStreamStatus::NoStream(stream));
+                                self.report_error(types::ReadStreamError::NoStream(stream));
 
                                 op_done()
                             },
@@ -850,7 +884,7 @@ impl Operation for ReadStreamEvents {
                             ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
                                 let stream = self.inner.take_event_stream_id();
 
-                                self.promise.accept(types::ReadStreamStatus::StreamDeleled(stream));
+                                self.report_error(types::ReadStreamError::StreamDeleted(stream));
 
                                 op_done()
                             },
@@ -858,7 +892,7 @@ impl Operation for ReadStreamEvents {
                             ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
                                 let stream = self.inner.take_event_stream_id();
 
-                                self.promise.accept(types::ReadStreamStatus::AccessDenied(stream));
+                                self.report_error(types::ReadStreamError::AccessDenied(stream));
 
                                 op_done()
                             },
@@ -866,7 +900,7 @@ impl Operation for ReadStreamEvents {
                             ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
                                 let stream = self.inner.take_event_stream_id();
 
-                                self.promise.accept(types::ReadStreamStatus::NotModified(stream));
+                                self.report_error(types::ReadStreamError::NotModified(stream));
 
                                 op_done()
                             },
@@ -874,7 +908,7 @@ impl Operation for ReadStreamEvents {
                             ReadStreamEventsCompleted_ReadStreamResult::Error => {
                                 let error_msg = response.take_error();
 
-                                self.promise.accept(types::ReadStreamStatus::Error(error_msg));
+                                self.report_error(types::ReadStreamError::Error(error_msg));
 
                                 op_done()
                             },
@@ -953,6 +987,10 @@ impl ReadAllEvents {
     pub fn set_require_master(&mut self, value: bool) {
         self.inner.set_require_master(value);
     }
+
+    fn report_error(&mut self, error: types::ReadStreamError) {
+        self.promise.accept(types::ReadStreamStatus::Error(error))
+    }
 }
 
 impl Operation for ReadAllEvents {
@@ -1007,15 +1045,15 @@ impl Operation for ReadAllEvents {
                             },
 
                             ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
-                                self.promise.accept(
-                                    types::ReadStreamStatus::AccessDenied(Chars::from("$all")));
+                                self.report_error(
+                                    types::ReadStreamError::AccessDenied("$all".into()));
 
                                 op_done()
                             },
 
                             ReadAllEventsCompleted_ReadAllResult::NotModified => {
-                                self.promise.accept(
-                                    types::ReadStreamStatus::NotModified(Chars::from("$all")));
+                                self.report_error(
+                                    types::ReadStreamError::NotModified("$all".into()));
 
                                 op_done()
                             },
@@ -1023,7 +1061,7 @@ impl Operation for ReadAllEvents {
                             ReadAllEventsCompleted_ReadAllResult::Error => {
                                 let error_msg = response.take_error();
 
-                                self.promise.accept(types::ReadStreamStatus::Error(error_msg));
+                                self.report_error(types::ReadStreamError::Error(error_msg));
 
                                 op_done()
                             },
@@ -1277,5 +1315,373 @@ impl Operation for SubscribeToStream {
 
     fn retry(&mut self) {
         self.state = State::CreatePkg;
+    }
+}
+
+pub(crate) trait StreamPull {
+    fn pull(&mut self, dest: &mut PullDest, pkg: Option<Pkg>) -> Decision;
+}
+
+enum PullState {
+    Prepare,
+    Await,
+}
+
+enum PullStatus {
+    Success(Option<i64>),
+    Failed,
+}
+
+struct PullProcess {
+    receiver: Receiver<types::ReadStreamStatus<types::StreamSlice>>,
+    inner: ReadStreamEvents,
+}
+
+impl PullProcess {
+    fn retry(&mut self) {
+        self.inner.retry();
+    }
+}
+
+pub(crate) struct PullDest {
+    buffer_opt: Option<Vec<types::ResolvedEvent>>,
+    error_opt: Option<types::ReadStreamError>,
+}
+
+fn blocking_pull_error(error: &types::ReadStreamError) -> bool {
+    match *error {
+        types::ReadStreamError::NoStream(_) => false,
+        _                                   => true,
+    }
+}
+
+impl PullDest {
+    fn new() -> PullDest {
+        PullDest {
+            buffer_opt: None,
+            error_opt: None,
+        }
+    }
+}
+
+fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationError>
+    where S: Stream<Item = Result<A, OperationError>, Error = ()>
+{
+    stream.into_future().then(|res| {
+        match res {
+            Ok((Some(x), _)) => x,
+            _                => unreachable!(),
+        }
+    })
+}
+
+pub(crate) struct RegularStreamPull {
+    stream_id: Chars,
+    process_opt: Option<PullProcess>,
+    pos: i64,
+    resolve_link_tos: bool,
+    require_master: bool,
+    batch_size: i32,
+    creds_opt: Option<types::Credentials>,
+    state: PullState,
+}
+
+impl RegularStreamPull {
+    pub(crate) fn new(
+        stream_id: Chars,
+        resolve_link_tos: bool,
+        require_master: bool,
+        batch_size: i32,
+        start_from: i64,
+        creds_opt: Option<types::Credentials>) -> RegularStreamPull
+    {
+        RegularStreamPull {
+            stream_id,
+            resolve_link_tos,
+            require_master,
+            batch_size,
+            process_opt: None,
+            pos: start_from,
+            creds_opt,
+            state: PullState::Prepare,
+        }
+    }
+
+    fn prepare(&mut self) -> Decision {
+        let (receiver, sender) = Promise::new(1);
+        let mut inner          = ReadStreamEvents::new(sender, types::ReadDirection::Forward, self.creds_opt.clone());
+
+        inner.set_event_stream_id(self.stream_id.clone());
+        inner.set_from_event_number(self.pos);
+        inner.set_max_count(self.batch_size);
+        inner.set_require_master(self.require_master);
+        inner.set_resolve_link_tos(self.resolve_link_tos);
+
+        let pkg = inner.poll(None);
+
+        let process = PullProcess {
+            receiver,
+            inner,
+        };
+
+        self.process_opt = Some(process);
+
+        pkg
+    }
+
+    fn accept_response(&mut self, dest: &mut PullDest, pkg: Pkg) -> Decision {
+        if let Some(mut process) = self.process_opt.take() {
+            let outcome = process.inner.poll(Some(pkg))?;
+
+            if outcome.is_retrying() {
+                return Ok(outcome);
+            }
+
+            let fut = single_value_future(process.receiver).map(|status| {
+                match status {
+                    types::ReadStreamStatus::Success(slice) => {
+                        let events = slice.events();
+
+                        if let types::LocatedEvents::Events { events, next } = events {
+                            dest.buffer_opt = Some(events);
+
+                            PullStatus::Success(next)
+                        } else {
+                            PullStatus::Success(None)
+                        }
+                    },
+
+                    types::ReadStreamStatus::Error(error) => {
+                        if blocking_pull_error(&error) {
+                            dest.error_opt = Some(error);
+                        }
+
+                        PullStatus::Failed
+                    },
+                }
+            });
+
+            match fut.wait() {
+                Ok(status) => {
+                    match status {
+                        PullStatus::Success(next_pos) => {
+                            if let Some(pos) = next_pos {
+                                self.pos = pos;
+
+                                op_done()
+                            } else {
+                                op_continue()
+                            }
+                        },
+
+                        PullStatus::Failed => {
+                            op_done()
+                        }
+                    }
+                },
+
+                Err(op_error) => {
+                    Err(op_error.to_io_error())
+                },
+            }
+        } else {
+            op_done()
+        }
+    }
+}
+
+impl StreamPull for RegularStreamPull {
+    fn pull(&mut self, dest: &mut PullDest, pkg_opt: Option<Pkg>) -> Decision {
+        match self.state {
+            PullState::Prepare => {
+                self.state = PullState::Await;
+
+                self.prepare()
+            },
+
+            PullState::Await => {
+                match pkg_opt {
+                    Some(pkg) => {
+                        let decision = self.accept_response(dest, pkg);
+
+                        if decision_is_continuing(&decision) {
+                            self.state = PullState::Prepare;
+                            self.pull(dest, None)
+                        } else {
+                            if decision_is_retrying(&decision) {
+                                let inner = self.process_opt
+                                                .as_mut()
+                                                .expect("Process must be available");
+
+                                inner.retry();
+                            }
+
+                            decision
+                        }
+                    },
+
+                    None => {
+                        op_done()
+                    },
+                }
+            },
+        }
+    }
+}
+
+pub(crate) struct CatchupSubscribe<P: StreamPull> {
+    stream_id_opt: Option<Chars>, // If `None`, it means we target $all stream.
+    resolve_link_tos: bool,
+    sub_bus: mpsc::Sender<types::SubEvent>,
+    puller: P,
+    dest: PullDest,
+    creds_opt: Option<types::Credentials>,
+    sub_opt: Option<SubscribeToStream>,
+    state: CatchupState,
+}
+
+fn max_unprocessed_events_limit_error_reached() -> ::std::io::Error {
+    let msg = format!("Max unprocessed events limit reached!");
+
+    ::std::io::Error::new(::std::io::ErrorKind::Other, msg)
+}
+
+impl <P: StreamPull> CatchupSubscribe<P> {
+    pub(crate) fn new(
+        stream_id_opt: Option<Chars>,
+        resolve_link_tos: bool,
+        sub_bus: mpsc::Sender<types::SubEvent>,
+        creds_opt: Option<types::Credentials>,
+        puller: P) -> CatchupSubscribe<P>
+    {
+        CatchupSubscribe {
+            stream_id_opt,
+            resolve_link_tos,
+            sub_bus,
+            puller,
+            dest: PullDest::new(),
+            sub_opt: None,
+            creds_opt,
+            state: CatchupState::CatchingUp,
+        }
+    }
+
+    fn notify_sub(&mut self, msg: types::SubEvent) -> ::std::io::Result<()> {
+        if let Err(_) = self.sub_bus.try_send(msg) {
+            Err(max_unprocessed_events_limit_error_reached())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn notify_sub_drop(&mut self) -> ::std::io::Result<()> {
+        self.notify_sub(types::SubEvent::Dropped)
+    }
+
+    fn notify_event_appeared(&mut self, event: types::ResolvedEvent)
+        -> ::std::io::Result<()>
+    {
+        let msg = types::SubEvent::EventAppeared(event);
+
+        self.notify_sub(msg)
+    }
+
+    fn notify_events_appeared(&mut self, events: Vec<types::ResolvedEvent>)
+        -> ::std::io::Result<()>
+    {
+        // Initially, we used `send_all` but considering it might block the
+        // driver if we reach the maximum capacity of the queue. Besides,
+        // `Sender` is the sink that does nothing regarding to flushing,
+        for event in events {
+            self.notify_event_appeared(event)?;
+        }
+
+        Ok(())
+    }
+
+    fn prepare_sub_request(&mut self) -> Decision {
+        let mut sub       = SubscribeToStream::new(self.sub_bus.clone(), self.creds_opt.clone());
+        let     stream_id = self.stream_id_opt.clone().unwrap_or_default();
+
+        sub.set_event_stream_id(stream_id);
+        sub.set_resolve_link_tos(self.resolve_link_tos);
+
+        let pkg = sub.poll(None);
+        self.sub_opt = Some(sub);
+
+        pkg
+    }
+}
+
+#[derive(Copy, Clone)]
+enum CatchupState {
+    CatchingUp,
+    Subscribe,
+    Live,
+}
+
+impl <P: StreamPull> Operation for CatchupSubscribe<P> {
+    fn poll(&mut self, input: Option<Pkg>) -> Decision {
+        match self.state {
+            CatchupState::CatchingUp => {
+                let outcome = self.puller.pull(&mut self.dest, input)?;
+
+                // Safe because if we shouldn't expect events or something went
+                // wrong, it will be a `None`.
+                if let Some(events) = self.dest.buffer_opt.take() {
+                    self.notify_events_appeared(events)?;
+                }
+
+                if outcome.is_done() {
+                    if let None = self.dest.error_opt.take() {
+                        self.state = CatchupState::Subscribe;
+
+                        self.poll(None)
+                    } else {
+                        self.notify_sub_drop()?;
+
+                        Ok(outcome)
+                    }
+                } else {
+                    Ok(outcome)
+                }
+            },
+
+            CatchupState::Subscribe => {
+                // When we have to send the subscription request.
+                if input.is_none() {
+                    self.prepare_sub_request()
+                } else {
+                    // If everything went smootly, we should receive a confirmation
+                    // response.
+                    self.state = CatchupState::Live;
+                    let sub = self.sub_opt.as_mut().expect("Sub reference must be available on confirmation");
+
+                    // If things didn't go well, `sub` will ask to drop the
+                    // transaction with the server for us.
+                    sub.poll(input)
+                }
+            },
+
+            CatchupState::Live => {
+                // At this point we let the subcription driving the transaction
+                // with the server for us.
+                let sub = self.sub_opt.as_mut().expect("Sub reference must be available when live");
+
+                sub.poll(input)
+            },
+        }
+    }
+
+    fn failed(&mut self, _: OperationError) {
+        // It would mean either the catching up phase or our subscription
+        // request was invalid. All we can do is notify the user the
+        // subscription has been dropped.
+        let _ = self.notify_sub_drop();
+    }
+
+    fn retry(&mut self) {
+        // Nothing to do. Everything will be handle properly by `poll`
+        // as we didn't update `CatchupSubscribe` stage state.
     }
 }

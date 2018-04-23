@@ -14,7 +14,7 @@ Rust GetEventStore TCP Client.
 - [x] Transactions.
 - [x] Delete stream.
 - [x] Volatile Subscriptions.
-- [ ] Catchup Subscriptions.
+- [x] Catchup Subscriptions.
 - [ ] Persistent Subscriptions.
 - [ ] Support connection to server clusters.
 - [ ] Support SSL connection.

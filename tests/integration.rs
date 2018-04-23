@@ -12,7 +12,8 @@ use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata 
 use uuid::Uuid;
 
 struct TestSub {
-    count: u8,
+    count: usize,
+    max: usize,
 }
 
 impl types::SubscriptionConsumer for TestSub {
@@ -26,7 +27,7 @@ impl types::SubscriptionConsumer for TestSub {
 
         self.count += 1;
 
-        if self.count == 3 {
+        if self.count == self.max {
             types::OnEventAppeared::Drop
         } else {
             types::OnEventAppeared::Continue
@@ -36,6 +37,27 @@ impl types::SubscriptionConsumer for TestSub {
     fn when_dropped(&mut self) {
         println!("Subscription dropped!");
     }
+}
+
+fn fresh_stream_id(prefix: &str) -> String {
+    let uuid = Uuid::new_v4();
+
+    format!("{}:{}", prefix, uuid)
+}
+
+fn generate_events(event_type: &str, cnt: usize) -> Vec<EventData> {
+    let mut events = Vec::with_capacity(cnt);
+
+    for idx in 1..cnt+1 {
+        let payload = json!({
+            "event_index": idx,
+        });
+
+        let data = EventData::json(event_type, payload);
+        events.push(data);
+    }
+
+    events
 }
 
 #[test]
@@ -179,22 +201,12 @@ fn all_round_operation_test() {
 
     println!("Delete stream [{}] result: {:?}", stream_id, result);
 
-    let     uuid      = Uuid::new_v4();
-    let     stream_id = format!("volatile:{}", uuid);
-    let     sub       = client.subcribe_to_stream(stream_id.clone()).execute();
-    let mut events    = Vec::with_capacity(3);
-
-    for idx in 1..4 {
-        let payload = json!({
-            "event_index": idx,
-        });
-
-        let data = EventData::json("volatile-test", payload);
-        events.push(data);
-    }
+    let stream_id = fresh_stream_id("volatile");
+    let sub       = client.subcribe_to_stream(stream_id.clone()).execute();
+    let events    = generate_events("volatile-test", 3);
 
     let handle = spawn(move || {
-        sub.consume(TestSub { count: 0 });
+        sub.consume(TestSub { count: 0, max: 3 })
     });
 
     let _ = client.write_events(stream_id)
@@ -203,5 +215,33 @@ fn all_round_operation_test() {
                   .wait()
                   .unwrap();
 
-    handle.join().unwrap();
+    let test_sub = handle.join().unwrap();
+
+    assert_eq!(test_sub.count, 3, "We are testing proper state after volatile subscription: got {} expected {}.", test_sub.count, 3);
+
+    let stream_id     = fresh_stream_id("catchup");
+    let events_before = generate_events("catchup-test-before", 3);
+    let events_after  = generate_events("catchup-test-after", 3);
+
+    let _ = client.write_events(stream_id.clone())
+                  .append_events(events_before)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+    let sub = client.subscribe_to_stream_from(stream_id.clone()).execute();
+
+    let handle = spawn(move || {
+        sub.consume(TestSub { count: 0, max: 6 })
+    });
+
+    let _ = client.write_events(stream_id)
+                  .append_events(events_after)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+    let test_sub = handle.join().unwrap();
+
+    assert_eq!(test_sub.count, 6, "We are testing proper state after catchup subscription: got {} expected {}.", test_sub.count, 3);
 }

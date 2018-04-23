@@ -141,6 +141,12 @@ impl Client {
         commands::SubscribeToStream::new(self.sender.clone(), stream_id)
     }
 
+    pub fn subscribe_to_stream_from<S>(&self, stream: S) -> commands::RegularCatchupSubscribe
+        where S: Into<Chars>
+    {
+        commands::RegularCatchupSubscribe::new(self.sender.clone(), stream)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }
