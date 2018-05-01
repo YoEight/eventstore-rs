@@ -847,3 +847,88 @@ pub trait SubscriptionConsumer {
     fn when_event_appeared(&mut self, event: ResolvedEvent) -> OnEventAppeared;
     fn when_dropped(&mut self);
 }
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SystemConsumerStrategy {
+    DispatchToSingle,
+    RoundRobin,
+}
+
+impl SystemConsumerStrategy {
+    pub(crate) fn as_str(&self) -> &str {
+        match *self {
+            SystemConsumerStrategy::DispatchToSingle => "DispatchToSingle",
+            SystemConsumerStrategy::RoundRobin       => "RoundRobin",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PersistentSubscriptionSettings {
+    pub resolve_link_tos: bool,
+    pub start_from: i64,
+    pub extra_stats: bool,
+    pub msg_timeout: Duration,
+    pub max_retry_count: u16,
+    pub live_buf_size: u16,
+    pub read_batch_size: u16,
+    pub history_buf_size: u16,
+    pub checkpoint_after: Duration,
+    pub min_checkpoint_count: u16,
+    pub max_checkpoint_count: u16,
+    pub max_subs_count: u16,
+    pub named_consumer_strategy: SystemConsumerStrategy,
+}
+
+impl PersistentSubscriptionSettings {
+    pub fn default() -> PersistentSubscriptionSettings {
+        PersistentSubscriptionSettings {
+            resolve_link_tos: false,
+            start_from: -1, // Means the stream doesn't exist yet.
+            extra_stats: false,
+            msg_timeout: Duration::from_secs(30),
+            max_retry_count: 500,
+            live_buf_size: 500,
+            read_batch_size: 10,
+            history_buf_size: 20,
+            checkpoint_after: Duration::from_secs(2),
+            min_checkpoint_count: 10,
+            max_checkpoint_count: 1000,
+            max_subs_count: 0, // Means their is no limit.
+            named_consumer_strategy: SystemConsumerStrategy::RoundRobin,
+        }
+    }
+}
+
+impl Default for PersistentSubscriptionSettings {
+    fn default() -> PersistentSubscriptionSettings {
+        PersistentSubscriptionSettings::default()
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum PersistActionResult {
+    Success,
+    Failure(PersistActionError),
+}
+
+impl PersistActionResult {
+    pub fn is_success(&self) -> bool {
+        match *self {
+            PersistActionResult::Success => true,
+            _                            => false,
+        }
+    }
+
+    pub fn is_failure(&self) -> bool {
+        !self.is_success()
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum PersistActionError {
+    Fail,
+    AlreadyExists,
+    DoesNotExist,
+    AccessDenied,
+}

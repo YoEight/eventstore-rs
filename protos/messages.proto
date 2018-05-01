@@ -55,8 +55,8 @@ message ResolvedEvent {
 }
 
 message WriteEvents {
-    option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required int64 expected_version = 2;
@@ -65,8 +65,8 @@ message WriteEvents {
 }
 
 message WriteEventsCompleted {
-    option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required OperationResult result = 1;
 	optional string message = 2;
@@ -79,7 +79,7 @@ message WriteEventsCompleted {
 
 message DeleteStream {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required int64 expected_version = 2;
@@ -89,7 +89,7 @@ message DeleteStream {
 
 message DeleteStreamCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required OperationResult result = 1;
 	optional string message = 2;
@@ -99,7 +99,7 @@ message DeleteStreamCompleted {
 
 message TransactionStart {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required int64 expected_version = 2;
@@ -108,7 +108,7 @@ message TransactionStart {
 
 message TransactionStartCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required int64 transaction_id = 1;
 	required OperationResult result = 2;
@@ -123,7 +123,7 @@ message TransactionWrite {
 
 message TransactionWriteCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required int64 transaction_id = 1;
 	required OperationResult result = 2;
@@ -137,7 +137,7 @@ message TransactionCommit {
 
 message TransactionCommitCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required int64 transaction_id = 1;
 	required OperationResult result = 2;
@@ -150,7 +150,7 @@ message TransactionCommitCompleted {
 
 message ReadEvent {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required int64 event_number = 2;
@@ -160,7 +160,7 @@ message ReadEvent {
 
 message ReadEventCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	enum ReadEventResult {
 		Success = 0;
@@ -179,7 +179,7 @@ message ReadEventCompleted {
 
 message ReadStreamEvents {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required int64 from_event_number = 2;
@@ -190,7 +190,7 @@ message ReadStreamEvents {
 
 message ReadStreamEventsCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	enum ReadStreamResult {
 		Success = 0;
@@ -221,7 +221,7 @@ message ReadAllEvents {
 
 message ReadAllEventsCompleted {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	enum ReadAllResult {
 		Success = 0;
@@ -241,6 +241,9 @@ message ReadAllEventsCompleted {
 }
 
 message CreatePersistentSubscription {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	required string subscription_group_name = 1;
 	required string event_stream_id = 2;
 	required bool resolve_link_tos = 3;
@@ -260,11 +263,17 @@ message CreatePersistentSubscription {
 }
 
 message DeletePersistentSubscription {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	required string subscription_group_name = 1;
 	required string event_stream_id = 2;
 }
 
 message UpdatePersistentSubscription {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	required string subscription_group_name = 1;
 	required string event_stream_id = 2;
 	required bool resolve_link_tos = 3;
@@ -284,6 +293,9 @@ message UpdatePersistentSubscription {
 }
 
 message UpdatePersistentSubscriptionCompleted {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	enum UpdatePersistentSubscriptionResult {
 		Success = 0;
 		DoesNotExist = 1;
@@ -295,6 +307,9 @@ message UpdatePersistentSubscriptionCompleted {
 }
 
 message CreatePersistentSubscriptionCompleted {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	enum CreatePersistentSubscriptionResult {
 		Success = 0;
 		AlreadyExists = 1;
@@ -306,6 +321,9 @@ message CreatePersistentSubscriptionCompleted {
 }
 
 message DeletePersistentSubscriptionCompleted {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	enum DeletePersistentSubscriptionResult {
 		Success = 0;
 		DoesNotExist = 1;
@@ -317,6 +335,9 @@ message DeletePersistentSubscriptionCompleted {
 }
 
 message ConnectToPersistentSubscription {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	required string subscription_id = 1;
 	required string event_stream_id = 2;
 	required int32 allowed_in_flight_messages = 3;
@@ -324,11 +345,17 @@ message ConnectToPersistentSubscription {
 }
 
 message PersistentSubscriptionAckEvents {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	required string subscription_id = 1;
 	repeated bytes processed_event_ids = 2;
 }
 
 message PersistentSubscriptionNakEvents {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	enum NakAction {
 		Unknown = 0;
 		Park = 1;
@@ -344,6 +371,9 @@ message PersistentSubscriptionNakEvents {
 }
 
 message PersistentSubscriptionConfirmation {
+	option (rustproto.carllerche_bytes_for_bytes) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
+
 	required int64 last_commit_position = 1;
 	required string subscription_id = 2;
 	optional int64 last_event_number = 3;
@@ -356,7 +386,7 @@ message PersistentSubscriptionStreamEventAppeared {
 
 message SubscribeToStream {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-  option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required bool resolve_link_tos = 2;

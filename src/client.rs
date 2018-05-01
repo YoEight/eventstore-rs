@@ -160,6 +160,12 @@ impl Client {
         commands::AllCatchupSubscribe::new(self.sender.clone(), &self.settings)
     }
 
+    pub fn create_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::CreatePersistentSubscription
+        where S: Into<Chars>
+    {
+        commands::CreatePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }

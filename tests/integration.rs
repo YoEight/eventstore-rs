@@ -294,7 +294,24 @@ fn test_catchup_all_subscription(client: &Client) {
     assert_eq!(
         tmp.count,
         10,
-        "We are testing proper state after $all catchup");
+        "We are testing proper state after $all catchup"
+    );
+}
+
+// We test we can successfully create a persistent subscription.
+fn test_create_persistent_subscription(client: &Client) {
+    let stream_id = fresh_stream_id("create_persistent_sub");
+    let result = client
+        .create_persistent_subscription(stream_id, "a_group_name".to_string())
+        .execute()
+        .wait()
+        .unwrap();
+
+    assert_eq!(
+        result,
+        types::PersistActionResult::Success,
+        "We expect create a persistent subscription to succeed",
+    );
 }
 
 #[test]
@@ -321,4 +338,5 @@ fn all_round_operation_test() {
     test_volatile_subscription(&client);
     test_catchup_subscription(&client);
     test_catchup_all_subscription(&client);
+    test_create_persistent_subscription(&client);
 }

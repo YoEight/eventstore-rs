@@ -11,9 +11,10 @@ use uuid::Uuid;
 use internal::command::Cmd;
 use internal::messages;
 use internal::package::Pkg;
+use internal::timespan;
 use types::{ self, Slice };
 
-use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
+use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult };
 
 #[derive(Debug, Clone)]
 pub enum OperationError {
@@ -2037,5 +2038,98 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
         let _ = buffer.push_req(self.initial_request())?;
 
         Ok(())
+    }
+}
+
+fn duration_to_millis(duration: &::std::time::Duration) -> i32 {
+    let secs_as_millis = duration.as_secs() as i32 * 1_000;
+
+    secs_as_millis + timespan::duration_subsec_millis(duration) as i32
+}
+
+pub struct CreatePersistentSubscription {
+    inner: messages::CreatePersistentSubscription,
+    promise: Promise<types::PersistActionResult>,
+}
+
+impl CreatePersistentSubscription {
+    pub fn new(promise: Promise<types::PersistActionResult>)
+        -> CreatePersistentSubscription
+    {
+        CreatePersistentSubscription {
+            inner: messages::CreatePersistentSubscription::new(),
+            promise,
+        }
+    }
+
+    pub fn set_subscription_group_name(&mut self, name: Chars) {
+        self.inner.set_subscription_group_name(name);
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub fn set_settings(&mut self, settings: types::PersistentSubscriptionSettings) {
+        self.inner.set_resolve_link_tos(settings.resolve_link_tos);
+        self.inner.set_start_from(settings.start_from);
+        self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+        self.inner.set_record_statistics(settings.extra_stats);
+        self.inner.set_live_buffer_size(settings.live_buf_size as i32);
+        self.inner.set_read_batch_size(settings.read_batch_size as i32);
+        self.inner.set_buffer_size(settings.history_buf_size as i32);
+        self.inner.set_max_retry_count(settings.max_retry_count as i32);
+        self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
+        self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+        self.inner.set_checkpoint_max_count(settings.max_checkpoint_count as i32);
+        self.inner.set_checkpoint_min_count(settings.min_checkpoint_count as i32);
+        self.inner.set_subscriber_max_count(settings.max_subs_count as i32);
+        self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
+    }
+}
+
+impl OperationImpl for CreatePersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::CreatePersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        Cmd::CreatePersistentSubscriptionCompleted == cmd
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        let response: messages::CreatePersistentSubscriptionCompleted =
+            pkg.to_message()?;
+
+        let result = match response.get_result() {
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Success => {
+                types::PersistActionResult::Success
+            },
+
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AlreadyExists => {
+                types::PersistActionResult::Failure(types::PersistActionError::AlreadyExists)
+            },
+
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Fail => {
+                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+            },
+
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AccessDenied => {
+                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+            },
+        };
+
+        self.promise.accept(result);
+
+        ImplResult::done()
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.promise.reject(error);
     }
 }
