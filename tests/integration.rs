@@ -60,35 +60,35 @@ fn generate_events(event_type: &str, cnt: usize) -> Vec<EventData> {
     events
 }
 
-#[test]
-fn all_round_operation_test() {
-    let mut settings = Settings::default();
-    let login        = "admin";
-    let password     = "changeit";
+fn generate_event(event_type: &str) -> EventData {
+    generate_events(event_type, 1).pop().expect("Can't be empty")
+}
 
-    settings.default_user = Some(Credentials::new(login, password));
+// We write an event into a stream.
+fn test_write_events(client: &Client) {
+    let stream_id = fresh_stream_id("write-events");
+    let event     = generate_event("write-events-test");
 
-    let client = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
-
-    client.start();
-
-    let foo = json!({
-        "is_rust_a_nice_language": true,
-        "is_haskell_still_better": true,
-    });
-
-    let fut =
-        client.write_events("languages")
-              .push_event(EventData::json("foo-type", foo))
-              .execute();
-
-    let result = fut.wait().unwrap();
+    let result = client.write_events(stream_id)
+                       .push_event(event)
+                       .execute()
+                       .wait()
+                       .unwrap();
 
     println!("Write response: {:?}", result);
+}
 
-    let result = client.read_event("languages", 0)
-                       .require_master(true)
-                       .resolve_link_tos(true)
+// We write an event into a stream then try to read it back.
+fn test_read_event(client: &Client) {
+    let stream_id = fresh_stream_id("read_event");
+    let event     = generate_event("read_event_test");
+    let _         = client.write_events(stream_id.as_str())
+                          .push_event(event)
+                          .execute()
+                          .wait()
+                          .unwrap();
+
+    let result = client.read_event(stream_id.as_str(), 0)
                        .execute()
                        .wait()
                        .unwrap();
@@ -96,27 +96,31 @@ fn all_round_operation_test() {
     println!("Read response: {:?}", result);
 
     match result {
-        types::ReadEventStatus::Success(ref res) => {
-            let event = res.event.get_original_event().unwrap();
+        types::ReadEventStatus::Success(ref result) => {
+            let event = result.event.get_original_event().unwrap();
             let value: serde_json::Value = serde_json::from_slice(&event.data).unwrap();
 
             println!("Payload as JSON {:?}", value);
         },
 
-        _ => unreachable!(),
+        _ => panic!("Something went wrong when reading stream {}", stream_id),
     }
 
-    let duration = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
+}
 
-    let metadata = StreamMetadata::builder()
-        .max_age(duration)
-        .max_count(1000)
-        .insert_custom_property("foo".to_owned(), "Bar!")
-        .build();
+// We write metadata to a stream then try to read it back.
+fn test_write_and_read_stream_metadata(client: &Client) {
+    let stream_id = fresh_stream_id("metadata");
+    let duration  = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
+    let metadata  =
+        StreamMetadata::builder()
+            .max_age(duration)
+            .max_count(1000)
+            .insert_custom_property("foo".to_owned(), "Bar!")
+            .build();
 
     let result =
-        client.write_stream_metadata("languages", metadata)
-              .require_master(true)
+        client.write_stream_metadata(stream_id.as_str(), metadata)
               .execute()
               .wait()
               .unwrap();
@@ -124,7 +128,7 @@ fn all_round_operation_test() {
     println!("Write stream metadata {:?}", result);
 
     let result =
-        client.read_stream_metadata("languages")
+        client.read_stream_metadata(stream_id.as_str())
               .execute()
               .wait()
               .unwrap();
@@ -136,23 +140,24 @@ fn all_round_operation_test() {
             let read_max_age = metadata.max_age.unwrap();
 
             assert_eq!(read_max_age, duration);
-            println!("Deserialized metadata {:?}", metadata);
         },
 
-        _ => unreachable!(),
+        _ => panic!("Something went wrong when reading stream {} metadata", stream_id),
     }
+}
 
+// We write a stream using a transaction. The write will be only be taken into
+// account by the server after the `commit` call.
+fn test_transaction(client: &Client) {
+    let stream_id   = fresh_stream_id("transaction");
+    let event       = generate_event("transaction_test");
     let transaction =
-        client.start_transaction("languages-transaction")
+        client.start_transaction(stream_id.as_str())
               .execute()
               .wait()
               .unwrap();
 
-    let data = json!({
-        "transactions_are_working_nicely": true,
-    });
-
-    transaction.write_single(EventData::json("foo-type-transaction", data))
+    transaction.write_single(event)
                .wait()
                .unwrap();
 
@@ -162,15 +167,32 @@ fn all_round_operation_test() {
                    .unwrap();
 
     println!("Transaction commit result {:?}", result);
+}
+
+// We read stream events by batch.
+fn test_read_stream_events(client: &Client) {
+    let stream_id = fresh_stream_id("read-stream-events");
+    let events    = generate_events("read-stream-events-test", 10);
+
+    let _ = client.write_events(stream_id.as_str())
+                  .append_events(events)
+                  .execute()
+                  .wait()
+                  .unwrap();
 
     let result =
-        client.read_stream("languages")
+        client.read_stream(stream_id.as_str())
               .execute()
               .wait()
               .unwrap();
 
     println!("Read stream events result {:?}", result);
+}
 
+// We read $all system stream. We cannot write on $all stream. It's very
+// unlikely for $all stream to be empty. From a personal note, I never saw that
+// stream empty even right after booting the server.
+fn test_read_all_stream(client: &Client) {
     let result =
         client.read_all()
               .max_count(10)
@@ -178,31 +200,35 @@ fn all_round_operation_test() {
               .wait()
               .unwrap();
 
-    println!(" Read $all events result {:?}", result);
+    println!("Read $all events result {:?}", result);
+}
 
-    let uuid      = Uuid::new_v4();
-    let stream_id = format!("foo:{}", uuid);
-    let foo = json!({
-        "is_rust_a_nice_language": true,
-        "is_haskell_still_better": true,
-    });
+// We write an event into a stream then delete that stream.
+fn test_delete_stream(client: &Client) {
+    let stream_id = fresh_stream_id("delete");
+    let event     = generate_event("delete-test");
 
-    let _ = client.write_events(stream_id.clone())
-                  .push_event(EventData::json("foo-type", foo))
+    let _ = client.write_events(stream_id.as_str())
+                  .push_event(event)
                   .execute()
                   .wait()
                   .unwrap();
 
-    let result = client.delete_stream(stream_id.clone())
+    let result = client.delete_stream(stream_id.as_str())
                        .hard_delete(true)
                        .execute()
                        .wait()
                        .unwrap();
 
     println!("Delete stream [{}] result: {:?}", stream_id, result);
+}
 
+// We create a volatile subscription on a stream then write events into that
+// same stream. We check our subscription consumer internal state to see it
+// has consumed all the expected events.
+fn test_volatile_subscription(client: &Client) {
     let stream_id = fresh_stream_id("volatile");
-    let sub       = client.subcribe_to_stream(stream_id.clone()).execute();
+    let sub       = client.subcribe_to_stream(stream_id.as_str()).execute();
     let events    = generate_events("volatile-test", 3);
 
     let handle = spawn(move || {
@@ -218,7 +244,14 @@ fn all_round_operation_test() {
     let test_sub = handle.join().unwrap();
 
     assert_eq!(test_sub.count, 3, "We are testing proper state after volatile subscription: got {} expected {}.", test_sub.count, 3);
+}
 
+// We write events into a stream. Then, we issue a catchup subscription. After,
+// we write another batch of events into the same stream. The goal is to make
+// sure we receive events written prior and after our subscription request.
+// To assess we received all the events we expected, we test our subscription
+// internal state value.
+fn test_catchup_subscription(client: &Client) {
     let stream_id     = fresh_stream_id("catchup");
     let events_before = generate_events("catchup-test-before", 3);
     let events_after  = generate_events("catchup-test-after", 3);
@@ -244,4 +277,27 @@ fn all_round_operation_test() {
     let test_sub = handle.join().unwrap();
 
     assert_eq!(test_sub.count, 6, "We are testing proper state after catchup subscription: got {} expected {}.", test_sub.count, 3);
+}
+
+#[test]
+fn all_round_operation_test() {
+    let mut settings = Settings::default();
+    let login        = "admin";
+    let password     = "changeit";
+
+    settings.default_user = Some(Credentials::new(login, password));
+
+    let client = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
+
+    client.start();
+
+    test_write_events(&client);
+    test_read_event(&client);
+    test_write_and_read_stream_metadata(&client);
+    test_transaction(&client);
+    test_read_stream_events(&client);
+    test_read_all_stream(&client);
+    test_delete_stream(&client);
+    test_volatile_subscription(&client);
+    test_catchup_subscription(&client);
 }
