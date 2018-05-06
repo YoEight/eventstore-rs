@@ -1,211 +1,289 @@
 use std::collections::HashMap;
-use std::time::{ Duration, Instant };
 
+use bytes::BytesMut;
 use uuid::Uuid;
 
 use internal::connection::Connection;
-use internal::operations::{ OperationError, Exchange };
+use internal::operations::{ OperationError, OperationWrapper, OperationId, Outcome };
 use internal::package::Pkg;
-use types::{ Settings, Retry };
-
-struct Register {
-    // When the operation has started.
-    started: Instant,
-
-    // How many times, that operation has been tried so far.
-    tries: u32,
-
-    // Lasting session are meant for special operation like subscriptions which
-    // usually keep the same correlation until the end of the universe, unless
-    // if the user want to unsubscribe.
-    lasting_session: bool,
-
-    // When the operation has sent its request to server, indicates what was
-    // the connection id. If it's 'None', it means the operation didn't sent
-    // anything yet.
-    conn_id: Option<Uuid>,
-
-    // Actual operation state-machine.
-    op: Exchange,
-}
 
 struct Checking {
     key: Uuid,
-    is_retry: bool,
+    is_checking: bool,
 }
 
 impl Checking {
     fn delete(id: Uuid) -> Checking {
         Checking {
             key: id,
-            is_retry: false,
+            is_checking: false,
         }
     }
 
-    fn retry(id: Uuid) -> Checking {
+    fn check(id: Uuid) -> Checking {
         Checking {
             key: id,
-            is_retry: true,
+            is_checking: true,
         }
     }
 }
 
-impl Register {
-    fn new(op: Exchange) -> Register {
-        Register {
-            started: Instant::now(),
-            tries: 0,
-            lasting_session: false,
-            conn_id: None,
-            op: op,
+struct Session {
+    op: OperationWrapper,
+    requests: Vec<Uuid>,
+}
+
+impl Session {
+    fn new(op: OperationWrapper) -> Session {
+        Session {
+            op,
+            requests: Vec::new(),
         }
+    }
+
+    fn issue_requests(&mut self, buffer: &mut BytesMut) -> ::std::io::Result<Vec<Pkg>> {
+        self.op.poll(buffer, None).map(|outcome| outcome.produced_pkgs())
+    }
+
+    fn insert_request(&mut self, req_id: Uuid) {
+        self.requests.push(req_id);
+    }
+
+    fn remove_request(&mut self, req_id: &Uuid) {
+        if let Ok(id) = self.requests.binary_search(req_id) {
+            self.requests.remove(id);
+        }
+    }
+
+    fn report_error(&mut self, error: OperationError) {
+        self.op.failed(error);
+    }
+
+    fn has_running_requests(&mut self) -> bool {
+        self.requests.is_empty()
+    }
+
+    fn accept_pkg(&mut self, buffer: &mut BytesMut, pkg: Pkg) -> ::std::io::Result<Outcome> {
+        self.op.poll(buffer, Some(pkg))
     }
 }
 
-pub struct Registry {
-    awaiting: Vec<Exchange>,
-    pending: HashMap<Uuid, Register>,
-    operation_timeout: Duration,
-    operation_retry: Retry,
+type SessionAssocs = HashMap<OperationId, Session>;
+type Requests      = HashMap<Uuid, Request>;
+
+struct Sessions {
+    buffer: BytesMut,
+    assocs: SessionAssocs,
+    requests: Requests,
 }
 
-impl Registry {
-    pub fn new(setts: &Settings) -> Registry {
-        Registry {
-            awaiting: Vec::new(),
-            pending: HashMap::new(),
-            operation_timeout: setts.operation_timeout,
-            operation_retry: setts.operation_retry,
+impl Sessions {
+    fn new() -> Sessions {
+        Sessions {
+            buffer: BytesMut::new(),
+            assocs: HashMap::new(),
+            requests: HashMap::new(),
         }
     }
 
-    pub fn register(&mut self, op: Exchange, conn: Option<&Connection>) {
-        match conn {
-            None => self.awaiting.push(op),
-
-            Some(conn) => {
-                let reg = Register::new(op);
-
-                self.send_register(conn, reg);
-            }
-        }
+    fn insert_session(&mut self, session: Session) {
+        self.assocs.insert(session.op.id, session);
     }
 
-    fn send_register(&mut self, conn: &Connection, mut reg: Register) {
-        // It's the first time this operation run, so we expect it to produce
-        // a 'Pkg' so we can start a transaction with the server.
-        match reg.op.poll(None) {
-            Ok(outcome) => {
-                if let Some(pkg) = outcome.produced_pkg() {
-                    reg.tries  += 1;
-                    reg.started = Instant::now();
-                    reg.conn_id = Some(conn.id);
-                    self.pending.insert(pkg.correlation, reg);
-                    conn.enqueue(pkg);
-                }
-            },
+    fn send_pkgs(requests: &mut Requests, session: &mut Session, conn: &Connection, pkgs: Vec<Pkg>) {
+        for pkg in &pkgs {
+            let req = Request::new(session.op.id, conn);
 
-            Err(e) => {
-                println!("Something bad happened: {}", e);
-            },
+            session.insert_request(pkg.correlation);
+            requests.insert(pkg.correlation, req);
         }
+
+        conn.enqueue_all(pkgs)
     }
 
-    pub fn handle(&mut self, pkg: Pkg, conn: &Connection) {
+    fn get_session_mut<'a>(assocs: &'a mut SessionAssocs, session_id: &OperationId) -> &'a mut Session {
+        assocs.get_mut(session_id).expect("Session must be defined at this point")
+    }
+
+    fn handle_request_response(&mut self, pkg: Pkg, conn: &Connection) {
         let pkg_id  = pkg.correlation;
         let pkg_cmd = pkg.cmd;
 
-        if let Some(mut reg) = self.pending.remove(&pkg_id) {
-            println!("Package [{}] received: command [{}].",
-                                    pkg_id, pkg_cmd.to_u8());
+        if let Some(req) = self.requests.remove(&pkg.correlation) {
+            println!("Package [{}] received: command [{}].", pkg_id, pkg_cmd.to_u8());
 
-            // We notified the operation we receive some 'Pkg' from the server
-            // that might interest it.
-            match reg.op.poll(Some(pkg)) {
-                Ok(outcome) => {
-                    if outcome.is_continuing() {
-                        if let Some(new) = outcome.produced_pkg() {
-                            // This operation issued a new transaction request
-                            // with the server, so we update its id in the
-                            // registry.
-                            self.pending.insert(new.correlation, reg);
+            let session_id = req.session;
+            let session_has_running_requests = {
+                let session = Sessions::get_session_mut(&mut self.assocs, &session_id);
 
-                            // In case the operation was previously in a long
-                            // term transaction.
-                            reg.lasting_session = false;
-                            reg.conn_id         = Some(conn.id);
+                // We notified the operation we've received a 'Pkg' from the server
+                // that might interest it.
+                match session.accept_pkg(&mut self.buffer, pkg) {
+                    Ok(outcome) => {
+                        if outcome.is_continuing() {
+                            let pkgs = outcome.produced_pkgs();
 
-                            conn.enqueue(new);
+                            if pkgs.is_empty() {
+                                // This operation wants to keep its old correlation
+                                // id, so we insert the request back.
+                                self.requests.insert(pkg_id, req);
+                            } else {
+                                // This operation issued a new transaction requests
+                                // with the server,
+                                session.remove_request(&pkg_id);
+                                Sessions::send_pkgs(&mut self.requests, session, conn, pkgs);
+                            }
                         } else {
-                            // This operation wants to keep its old correlation
-                            // id, so we insert it back with its previous
-                            // value.
-                            reg.lasting_session = true;
-                            self.pending.insert(pkg_id, reg);
+                            session.remove_request(&pkg_id);
                         }
-                    } else if outcome.is_retrying() {
-                        // The operation figured out it's better to retry. We decide to not
-                        // increment `Register.tries` property in this specific case.
-                        reg.op.retry();
-                        self.send_register(conn, reg);
-                    }
-                },
+                    },
 
-                Err(e) => {
-                    let msg = format!("Exception raised: {}", e);
+                    Err(e) => {
+                        let msg = format!("Exception raised: {}", e);
 
-                    reg.op.failed(OperationError::InvalidOperation(msg));
-                },
+                        session.report_error(OperationError::InvalidOperation(msg));
+                    },
+                };
+
+                session.has_running_requests()
+            };
+
+            if !session_has_running_requests {
+                // The given operation has no longer opened requests, so we can
+                // drop it safely.
+                let _ = self.assocs.remove(&session_id);
             }
         } else {
-            println!("Package [{}] not handled: command [{}].",
-                                    pkg_id, pkg_cmd.to_u8());
+            println!("Package [{}] not handled: command [{}].", pkg_id, pkg_cmd.to_u8());
         }
     }
 
-    pub fn check_and_retry(&mut self, conn: &Connection) {
-        let mut to_process = Vec::new();
+    fn terminate_session(&mut self, session: &mut Session) {
+        for req_id in &session.requests {
+            let _ = self.requests.remove(req_id);
+        }
+
+        session.report_error(OperationError::Aborted);
+    }
+
+    fn check_and_retry(&mut self, conn: &Connection) {
+        let mut process_later = Vec::new();
+
+        for (key, req) in &self.requests {
+            if req.conn_id != conn.id {
+                process_later.push(Checking::delete(*key));
+            } else {
+                process_later.push(Checking::check(*key));
+            }
+        }
+
+        for status in process_later {
+            if let Some(mut req) = self.requests.remove(&status.key) {
+                if status.is_checking {
+                    let delete_session = {
+                        let session = Sessions::get_session_mut(&mut self.assocs, &req.session);
+                        match session.op.check_and_retry(&mut self.buffer) {
+                            Ok(outcome) => {
+                                if outcome.is_done() {
+                                    Some(req.session)
+                                } else {
+                                    let pkgs = outcome.produced_pkgs();
+
+                                    if pkgs.is_empty() {
+                                        self.requests.insert(status.key, req);
+                                    } else {
+                                        session.remove_request(&status.key);
+                                        Sessions::send_pkgs(&mut self.requests, session, conn, pkgs);
+                                    }
+
+                                    None
+                                }
+                            },
+
+                            Err(e) => {
+                                println!("Exception raised when checking out operation: {}", e);
+                                Some(req.session)
+                            },
+                        }
+                    };
+
+                    if let Some(session_id) = delete_session {
+                        let mut session = self.assocs.remove(&session_id).expect("Session must exist.");
+                        self.terminate_session(&mut session);
+                    }
+                } else {
+                    let mut session = self.assocs.remove(&req.session).expect("Session must exist.");
+
+                    self.terminate_session(&mut session);
+                }
+            }
+        }
+    }
+}
+
+struct Request {
+    session: OperationId,
+    conn_id: Uuid,
+}
+
+impl Request {
+    fn new(session: OperationId, conn: &Connection) -> Request {
+        Request {
+            session,
+            conn_id: conn.id,
+        }
+    }
+}
+
+pub(crate) struct Registry {
+    sessions: Sessions,
+    awaiting: Vec<OperationWrapper>,
+}
+
+impl Registry {
+    pub(crate) fn new() -> Registry {
+        Registry {
+            sessions: Sessions::new(),
+            awaiting: Vec::new(),
+        }
+    }
+
+    fn push_session(&mut self, op: OperationWrapper, conn: &Connection) {
+        let mut session = Session::new(op);
+
+        match session.issue_requests(&mut self.sessions.buffer) {
+            Ok(pkgs) => {
+                Sessions::send_pkgs(&mut self.sessions.requests, &mut session, conn, pkgs);
+
+                self.sessions.insert_session(session);
+            },
+
+            Err(e) => {
+                // Don't need to cleanup the session at this stage
+                // because the session never got the chance to be
+                // inserted in the session maps and having running
+                // requests.
+                println!("Error occured when issuing requests: {}", e);
+            },
+        };
+    }
+
+    pub(crate) fn register(&mut self, op: OperationWrapper, conn: Option<&Connection>) {
+        match conn {
+            None       => self.awaiting.push(op),
+            Some(conn) => self.push_session(op, conn),
+        }
+    }
+
+    pub(crate) fn handle(&mut self, pkg: Pkg, conn: &Connection) {
+        self.sessions.handle_request_response(pkg, conn);
+    }
+
+    pub(crate) fn check_and_retry(&mut self, conn: &Connection) {
+        self.sessions.check_and_retry(conn);
 
         while let Some(op) = self.awaiting.pop() {
             self.register(op, Some(conn));
-        }
-
-        for (key, reg) in self.pending.iter() {
-            let not_same_conn = reg.conn_id != Some(conn.id);
-            let has_timeout   = reg.started.elapsed() >= self.operation_timeout;
-
-            if (has_timeout && !reg.lasting_session) || not_same_conn {
-                // Basically, we have a subscription and the connection has
-                // changed since the subscription has been confirmed.
-                if reg.lasting_session {
-                    to_process.push(Checking::delete(*key));
-                    continue
-                }
-
-                match self.operation_retry {
-                    Retry::Undefinately => {
-                        to_process.push(Checking::retry(*key));
-                    }
-
-                    Retry::Only(n) => {
-                        if reg.tries + 1 > n {
-                            to_process.push(Checking::delete(*key));
-                        } else {
-                            to_process.push(Checking::retry(*key));
-                        }
-                    },
-                }
-            }
-        }
-
-        for status in to_process {
-            if let Some(mut reg) = self.pending.remove(&status.key) {
-                if status.is_retry {
-                    self.send_register(conn, reg);
-                } else {
-                    reg.op.failed(OperationError::Aborted);
-                }
-            }
         }
     }
 }

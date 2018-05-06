@@ -15,6 +15,7 @@ use types::{ StreamMetadata, Settings };
 pub struct Client {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
+    settings: Settings,
 }
 
 impl Client {
@@ -23,11 +24,12 @@ impl Client {
         let disc           = Box::new(StaticDiscovery::new(addr));
 
         let tx     = sender.clone();
+        let setts  = settings.clone();
         let handle = spawn(move || {
             let mut core   = Core::new().unwrap();
             let     handle = core.handle();
 
-            let mut driver = Driver::new(settings, disc, sender, handle.clone());
+            let mut driver = Driver::new(&setts, disc, sender, handle.clone());
             let mut ticker = None;
 
             let worker = recv.for_each(move |msg| {
@@ -82,6 +84,7 @@ impl Client {
         Client {
             worker: handle,
             sender: tx,
+            settings,
         }
     }
 
@@ -92,59 +95,60 @@ impl Client {
     pub fn write_events<S>(&self, stream: S) -> commands::WriteEvents
         where S: Into<Chars>
     {
-        commands::WriteEvents::new(self.sender.clone(), stream)
+        commands::WriteEvents::new(self.sender.clone(), stream, &self.settings)
     }
 
-    pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata) -> commands::WriteStreamData
+    pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata)
+        -> commands::WriteStreamMetadata
         where S: Into<Chars>
     {
-        commands::WriteStreamData::new(self.sender.clone(), stream, metadata)
+        commands::WriteStreamMetadata::new(self.sender.clone(), stream, metadata, &self.settings)
     }
 
     pub fn read_event<S>(&self, stream: S, event_number: i64) -> commands::ReadEvent
         where S: Into<Chars>
     {
-        commands::ReadEvent::new(self.sender.clone(), stream, event_number)
+        commands::ReadEvent::new(self.sender.clone(), stream, event_number, &self.settings)
     }
 
-    pub fn read_stream_metadata<S>(&self, stream: S) -> commands::ReadStreamData
+    pub fn read_stream_metadata<S>(&self, stream: S) -> commands::ReadStreamMetadata
         where S: Into<Chars>
     {
-        commands::ReadStreamData::new(self.sender.clone(), stream)
+        commands::ReadStreamMetadata::new(self.sender.clone(), stream, &self.settings)
     }
 
     pub fn start_transaction<S>(&self, stream: S) -> commands::TransactionStart
         where S: Into<Chars>
     {
-        commands::TransactionStart::new(self.sender.clone(), stream)
+        commands::TransactionStart::new(self.sender.clone(), stream, &self.settings)
     }
 
     pub fn read_stream<S>(&self, stream: S) -> commands::ReadStreamEvents
         where S: Into<Chars>
     {
-        commands::ReadStreamEvents::new(self.sender.clone(), stream)
+        commands::ReadStreamEvents::new(self.sender.clone(), stream, &self.settings)
     }
 
     pub fn read_all(&self) -> commands::ReadAllEvents {
-        commands::ReadAllEvents::new(self.sender.clone())
+        commands::ReadAllEvents::new(self.sender.clone(), &self.settings)
     }
 
     pub fn delete_stream<S>(&self, stream: S) -> commands::DeleteStream
         where S: Into<Chars>
     {
-        commands::DeleteStream::new(self.sender.clone(), stream)
+        commands::DeleteStream::new(self.sender.clone(), stream, &self.settings)
     }
 
     pub fn subcribe_to_stream<S>(&self, stream_id: S) -> commands::SubscribeToStream
         where S: Into<Chars>
     {
-        commands::SubscribeToStream::new(self.sender.clone(), stream_id)
+        commands::SubscribeToStream::new(self.sender.clone(), stream_id, &self.settings)
     }
 
     pub fn subscribe_to_stream_from<S>(&self, stream: S) -> commands::RegularCatchupSubscribe
         where S: Into<Chars>
     {
-        commands::RegularCatchupSubscribe::new(self.sender.clone(), stream)
+        commands::RegularCatchupSubscribe::new(self.sender.clone(), stream, &self.settings)
     }
 
     pub fn shutdown(&self) {

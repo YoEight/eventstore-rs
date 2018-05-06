@@ -45,6 +45,15 @@ impl Pkg {
         Ok(pkg)
     }
 
+    pub fn from_bytes(cmd: Cmd, creds_opt: Option<Credentials>, payload: Bytes) -> Pkg {
+        Pkg {
+            cmd,
+            creds_opt,
+            payload,
+            correlation: Uuid::new_v4(),
+        }
+    }
+
     pub fn size(&self) -> usize {
         let creds_size = {
             match self.creds_opt {

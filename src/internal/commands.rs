@@ -22,17 +22,18 @@ fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationEr
     })
 }
 
-pub struct WriteEvents {
+pub struct WriteEvents<'a> {
     stream: Chars,
     events: Vec<types::EventData>,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
-    sender: Sender<Msg>,
+    settings: &'a types::Settings,
+    pub(crate) sender: Sender<Msg>,
 }
 
-impl WriteEvents {
-    pub fn new<S>(sender: Sender<Msg>, stream: S) -> WriteEvents
+impl <'a> WriteEvents<'a> {
+    pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> WriteEvents
         where S: Into<Chars>
     {
         WriteEvents {
@@ -41,21 +42,22 @@ impl WriteEvents {
             require_master: false,
             version: types::ExpectedVersion::Any,
             creds: None,
+            settings,
             sender,
         }
     }
 
-    pub fn set_events(self, events: Vec<types::EventData>) -> WriteEvents {
+    pub fn set_events(self, events: Vec<types::EventData>) -> WriteEvents<'a> {
         WriteEvents { events, ..self}
     }
 
-    pub fn push_event(mut self, event: types::EventData) -> WriteEvents {
+    pub fn push_event(mut self, event: types::EventData) -> WriteEvents<'a> {
         self.events.push(event);
 
         self
     }
 
-    pub fn append_events<T>(mut self, events: T) -> WriteEvents
+    pub fn append_events<T>(mut self, events: T) -> WriteEvents<'a>
         where T: IntoIterator<Item=types::EventData>
     {
         self.events.extend(events);
@@ -63,26 +65,31 @@ impl WriteEvents {
         self
     }
 
-    pub fn require_master(self, require_master: bool) -> WriteEvents {
+    pub fn require_master(self, require_master: bool) -> WriteEvents<'a> {
         WriteEvents { require_master, ..self }
     }
 
-    pub fn expected_version(self, version: types::ExpectedVersion) -> WriteEvents {
+    pub fn expected_version(self, version: types::ExpectedVersion) -> WriteEvents<'a> {
         WriteEvents { version, ..self }
     }
 
-    pub fn credentials(self, creds: types::Credentials) -> WriteEvents {
+    pub fn credentials(self, creds: types::Credentials) -> WriteEvents<'a> {
         WriteEvents { creds: Some(creds), ..self }
     }
 
     pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::WriteEvents::new(promise, self.creds);
+        let mut op             = operations::WriteEvents::new(promise);
 
         op.set_event_stream_id(self.stream);
         op.set_expected_version(self.version);
         op.set_events(self.events);
         op.set_require_master(self.require_master);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -90,17 +97,22 @@ impl WriteEvents {
     }
 }
 
-pub struct ReadEvent {
+pub struct ReadEvent<'a> {
     stream: Chars,
     event_number: i64,
     resolve_link_tos: bool,
     require_master: bool,
     creds: Option<types::Credentials>,
-    sender: Sender<Msg>,
+    settings: &'a types::Settings,
+    pub(crate) sender: Sender<Msg>,
 }
 
-impl ReadEvent {
-    pub fn new<S>(sender: Sender<Msg>, stream: S, event_number: i64) -> ReadEvent
+impl <'a> ReadEvent<'a> {
+    pub(crate) fn new<S>(
+        sender: Sender<Msg>,
+        stream: S,
+        event_number: i64,
+        settings: &types::Settings) -> ReadEvent
         where S: Into<Chars>
     {
         ReadEvent {
@@ -110,29 +122,35 @@ impl ReadEvent {
             resolve_link_tos: false,
             require_master: false,
             creds: None,
+            settings,
         }
     }
 
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadEvent {
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadEvent<'a> {
         ReadEvent { resolve_link_tos, ..self }
     }
 
-    pub fn require_master(self, require_master: bool) -> ReadEvent {
+    pub fn require_master(self, require_master: bool) -> ReadEvent<'a> {
         ReadEvent { require_master, ..self }
     }
 
-    pub fn credentials(self, value: types::Credentials) -> ReadEvent {
+    pub fn credentials(self, value: types::Credentials) -> ReadEvent<'a> {
         ReadEvent { creds: Some(value), ..self }
     }
 
     pub fn execute(self) -> impl Future<Item=types::ReadEventStatus<types::ReadEventResult>, Error=OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
-        let mut op         = operations::ReadEvent::new(promise, self.creds);
+        let mut op         = operations::ReadEvent::new(promise);
 
         op.set_event_stream_id(self.stream);
         op.set_event_number(self.event_number);
         op.set_resolve_link_tos(self.resolve_link_tos);
         op.set_require_master(self.require_master);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -225,34 +243,38 @@ impl StreamAclInternal {
     }
 }
 
-pub struct WriteStreamData {
+pub struct WriteStreamMetadata<'a> {
     metadata: types::StreamMetadata,
-    inner: WriteEvents,
+    inner: WriteEvents<'a>,
 }
 
-impl WriteStreamData {
-    pub fn new<S>(sender: Sender<Msg>, stream: S, metadata: types::StreamMetadata) -> WriteStreamData
+impl <'a> WriteStreamMetadata<'a> {
+    pub(crate) fn new<S>(
+        sender: Sender<Msg>,
+        stream: S,
+        metadata: types::StreamMetadata,
+        settings: &types::Settings) -> WriteStreamMetadata
         where S: Into<Chars>
     {
-        WriteStreamData {
+        WriteStreamMetadata {
             metadata,
-            inner: WriteEvents::new(sender, format!("$${}", stream.into().deref())),
+            inner: WriteEvents::new(sender, format!("$${}", stream.into().deref()), settings),
         }
     }
 
-    pub fn require_master(mut self, value: bool) -> WriteStreamData {
+    pub fn require_master(mut self, value: bool) -> WriteStreamMetadata<'a> {
         self.inner = self.inner.require_master(value);
 
         self
     }
 
-    pub fn expected_version(mut self, value: types::ExpectedVersion) -> WriteStreamData {
+    pub fn expected_version(mut self, value: types::ExpectedVersion) -> WriteStreamMetadata<'a> {
         self.inner = self.inner.expected_version(value);
 
         self
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> WriteStreamData {
+    pub fn credentials(mut self, value: types::Credentials) -> WriteStreamMetadata<'a> {
         self.inner = self.inner.credentials(value);
 
         self
@@ -267,31 +289,31 @@ impl WriteStreamData {
     }
 }
 
-pub struct ReadStreamData {
+pub struct ReadStreamMetadata<'a> {
     stream: Chars,
-    inner: ReadEvent,
+    inner: ReadEvent<'a>,
 }
 
-impl ReadStreamData {
-    pub fn new<S>(sender: Sender<Msg>, stream: S) -> ReadStreamData
+impl <'a> ReadStreamMetadata<'a> {
+    pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> ReadStreamMetadata
         where S: Into<Chars>
     {
         let stream_chars = stream.into();
         let name         = format!("$${}", stream_chars.deref());
 
-        ReadStreamData {
+        ReadStreamMetadata {
             stream: stream_chars,
-            inner: ReadEvent::new(sender, name, -1),
+            inner: ReadEvent::new(sender, name, -1, settings),
         }
     }
 
-    pub fn require_master(mut self, value: bool) -> ReadStreamData {
+    pub fn require_master(mut self, value: bool) -> ReadStreamMetadata<'a> {
         self.inner = self.inner.require_master(value);
 
         self
     }
 
-    pub fn credentials(mut self, value: types::Credentials) -> ReadStreamData {
+    pub fn credentials(mut self, value: types::Credentials) -> ReadStreamMetadata<'a> {
         self.inner = self.inner.credentials(value);
 
         self
@@ -329,16 +351,20 @@ impl ReadStreamData {
     }
 }
 
-pub struct TransactionStart {
+pub struct TransactionStart<'a> {
     stream: Chars,
     version: types::ExpectedVersion,
     require_master: bool,
     creds_opt: Option<types::Credentials>,
-    sender: Sender<Msg>,
+    settings: &'a types::Settings,
+    pub(crate) sender: Sender<Msg>,
 }
 
-impl TransactionStart {
-    pub fn new<S>(sender: Sender<Msg>, stream: S) -> TransactionStart
+impl <'a> TransactionStart<'a> {
+    pub(crate) fn new<S>(
+        sender: Sender<Msg>,
+        stream: S,
+        settings: &'a types::Settings) -> TransactionStart
         where S: Into<Chars>
     {
         TransactionStart {
@@ -346,26 +372,27 @@ impl TransactionStart {
             require_master: false,
             version: types::ExpectedVersion::Any,
             creds_opt: None,
+            settings,
             sender,
         }
     }
 
-    pub fn require_master(self, require_master: bool) -> TransactionStart {
+    pub fn require_master(self, require_master: bool) -> TransactionStart<'a> {
         TransactionStart { require_master, ..self }
     }
 
-    pub fn version(self, version: types::ExpectedVersion) -> TransactionStart {
+    pub fn version(self, version: types::ExpectedVersion) -> TransactionStart<'a> {
         TransactionStart { version, ..self }
     }
 
-    pub fn credentials(self, value: types::Credentials) -> TransactionStart {
+    pub fn credentials(self, value: types::Credentials) -> TransactionStart<'a> {
         TransactionStart { creds_opt: Some(value), ..self }
     }
 
     pub fn execute(self) -> impl Future<Item=Transaction, Error=OperationError> {
         let cloned_creds   = self.creds_opt.clone();
         let (rcv, promise) = operations::Promise::new(1);
-        let mut op         = operations::TransactionStart::new(promise, self.creds_opt);
+        let mut op         = operations::TransactionStart::new(promise);
         let     stream     = self.stream.clone();
 
         op.set_event_stream_id(self.stream);
@@ -375,8 +402,14 @@ impl TransactionStart {
         let require_master = self.require_master;
         let version        = self.version;
         let sender         = self.sender.clone();
+        let op             = operations::OperationWrapper::new(op,
+                                                               self.creds_opt,
+                                                               self.settings.operation_retry.to_usize(),
+                                                               self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
+
+        let settings = self.settings.clone();
 
         single_value_future(rcv).map(move |id| {
             Transaction {
@@ -386,6 +419,7 @@ impl TransactionStart {
                 require_master,
                 creds: cloned_creds,
                 version,
+                settings: settings.clone(),
             }
         })
     }
@@ -396,7 +430,8 @@ pub struct Transaction {
     id: types::TransactionId,
     version: types::ExpectedVersion,
     require_master: bool,
-    sender: Sender<Msg>,
+    pub(crate) sender: Sender<Msg>,
+    settings: types::Settings,
     creds: Option<types::Credentials>,
 }
 
@@ -413,12 +448,16 @@ impl Transaction {
         where I: IntoIterator<Item=types::EventData>
     {
         let (rcv, promise) = operations::Promise::new(1);
-        let mut op = operations::TransactionWrite::new(
-            promise, self.stream.clone(), self.creds.clone());
+        let mut op = operations::TransactionWrite::new(promise, self.stream.clone());
 
         op.set_transaction_id(self.id);
         op.set_events(events);
         op.set_require_master(self.require_master);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds.clone(),
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.clone().send(Msg::new_op(op)).wait().unwrap();
 
@@ -428,11 +467,15 @@ impl Transaction {
     pub fn commit(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op =
-            operations::TransactionCommit::new(
-                promise, self.stream.clone(), self.version, self.creds.clone());
+            operations::TransactionCommit::new(promise, self.stream.clone(), self.version);
 
         op.set_transaction_id(self.id);
         op.set_require_master(self.require_master);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -446,19 +489,20 @@ impl Transaction {
     }
 }
 
-pub struct ReadStreamEvents {
+pub struct ReadStreamEvents<'a> {
     stream: Chars,
     max_count: i32,
     start: i64,
     require_master: bool,
     resolve_link_tos: bool,
     direction: types::ReadDirection,
-    sender: Sender<Msg>,
+    pub(crate) sender: Sender<Msg>,
     creds: Option<types::Credentials>,
+    settings: &'a types::Settings,
 }
 
-impl ReadStreamEvents {
-    pub fn new<S>(sender: Sender<Msg>, stream: S) -> ReadStreamEvents
+impl <'a> ReadStreamEvents<'a> {
+    pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> ReadStreamEvents
         where S: Into<Chars>
     {
         ReadStreamEvents {
@@ -470,40 +514,41 @@ impl ReadStreamEvents {
             direction: types::ReadDirection::Forward,
             sender,
             creds: None,
+            settings,
         }
     }
 
-    pub fn forward(self) -> ReadStreamEvents {
+    pub fn forward(self) -> ReadStreamEvents<'a> {
         ReadStreamEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
-    pub fn backward(self) -> ReadStreamEvents {
+    pub fn backward(self) -> ReadStreamEvents<'a> {
         ReadStreamEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
-    pub fn credentials(self, value: types::Credentials) -> ReadStreamEvents {
+    pub fn credentials(self, value: types::Credentials) -> ReadStreamEvents<'a> {
         ReadStreamEvents { creds: Some(value), ..self }
     }
 
-    pub fn max_count(self, max_count: i32) -> ReadStreamEvents {
+    pub fn max_count(self, max_count: i32) -> ReadStreamEvents<'a> {
         ReadStreamEvents { max_count, ..self }
     }
 
-    pub fn start_from(self, start: i64) -> ReadStreamEvents {
+    pub fn start_from(self, start: i64) -> ReadStreamEvents<'a> {
         ReadStreamEvents { start, ..self }
     }
 
-    pub fn require_master(self, require_master: bool) -> ReadStreamEvents {
+    pub fn require_master(self, require_master: bool) -> ReadStreamEvents<'a> {
         ReadStreamEvents { require_master, ..self }
     }
 
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadStreamEvents {
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadStreamEvents<'a> {
         ReadStreamEvents { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::ReadStreamEvents::new(promise, self.direction, self.creds);
+        let mut op             = operations::ReadStreamEvents::new(promise, self.direction);
 
         op.set_event_stream_id(self.stream);
         op.set_from_event_number(self.start);
@@ -511,24 +556,30 @@ impl ReadStreamEvents {
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
+
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
     }
 }
 
-pub struct ReadAllEvents {
+pub struct ReadAllEvents<'a> {
     max_count: i32,
     start: types::Position,
     require_master: bool,
     resolve_link_tos: bool,
     direction: types::ReadDirection,
-    sender: Sender<Msg>,
+    pub(crate) sender: Sender<Msg>,
     creds: Option<types::Credentials>,
+    settings: &'a types::Settings,
 }
 
-impl ReadAllEvents {
-    pub fn new(sender: Sender<Msg>) -> ReadAllEvents {
+impl <'a> ReadAllEvents<'a> {
+    pub(crate) fn new(sender: Sender<Msg>, settings: &types::Settings) -> ReadAllEvents {
         ReadAllEvents {
             max_count: 500,
             start: types::Position::start(),
@@ -537,45 +588,51 @@ impl ReadAllEvents {
             direction: types::ReadDirection::Forward,
             sender,
             creds: None,
+            settings,
         }
     }
 
-    pub fn forward(self) -> ReadAllEvents {
+    pub fn forward(self) -> ReadAllEvents<'a> {
         ReadAllEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
-    pub fn backward(self) -> ReadAllEvents {
+    pub fn backward(self) -> ReadAllEvents<'a> {
         ReadAllEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
-    pub fn credentials(self, value: types::Credentials) -> ReadAllEvents {
+    pub fn credentials(self, value: types::Credentials) -> ReadAllEvents<'a> {
         ReadAllEvents { creds: Some(value), ..self }
     }
 
-    pub fn max_count(self, max_count: i32) -> ReadAllEvents {
+    pub fn max_count(self, max_count: i32) -> ReadAllEvents<'a> {
         ReadAllEvents { max_count, ..self }
     }
 
-    pub fn start_from(self, start: types::Position) -> ReadAllEvents {
+    pub fn start_from(self, start: types::Position) -> ReadAllEvents<'a> {
         ReadAllEvents { start, ..self }
     }
 
-    pub fn require_master(self, require_master: bool) -> ReadAllEvents {
+    pub fn require_master(self, require_master: bool) -> ReadAllEvents<'a> {
         ReadAllEvents { require_master, ..self }
     }
 
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadAllEvents {
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadAllEvents<'a> {
         ReadAllEvents { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::AllSlice>, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::ReadAllEvents::new(promise, self.direction, self.creds);
+        let mut op             = operations::ReadAllEvents::new(promise, self.direction);
 
         op.set_from_position(self.start);
         op.set_max_count(self.max_count);
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -583,17 +640,18 @@ impl ReadAllEvents {
     }
 }
 
-pub struct DeleteStream {
+pub struct DeleteStream<'a> {
     stream: Chars,
     require_master: bool,
     version: types::ExpectedVersion,
     creds: Option<types::Credentials>,
     hard_delete: bool,
-    sender: Sender<Msg>,
+    pub(crate) sender: Sender<Msg>,
+    settings: &'a types::Settings,
 }
 
-impl DeleteStream {
-    pub fn new<S>(sender: Sender<Msg>, stream: S) -> DeleteStream
+impl <'a> DeleteStream<'a> {
+    pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> DeleteStream
         where S: Into<Chars>
     {
         DeleteStream {
@@ -603,33 +661,39 @@ impl DeleteStream {
             version: types::ExpectedVersion::Any,
             creds: None,
             sender,
+            settings,
         }
     }
 
-    pub fn require_master(self, require_master: bool) -> DeleteStream {
+    pub fn require_master(self, require_master: bool) -> DeleteStream<'a> {
         DeleteStream { require_master, ..self }
     }
 
-    pub fn expected_version(self, version: types::ExpectedVersion) -> DeleteStream {
+    pub fn expected_version(self, version: types::ExpectedVersion) -> DeleteStream<'a> {
         DeleteStream { version, ..self }
     }
 
-    pub fn credentials(self, value: types::Credentials) -> DeleteStream {
+    pub fn credentials(self, value: types::Credentials) -> DeleteStream<'a> {
         DeleteStream { creds: Some(value), ..self }
     }
 
-    pub fn hard_delete(self, hard_delete: bool) -> DeleteStream {
+    pub fn hard_delete(self, hard_delete: bool) -> DeleteStream<'a> {
         DeleteStream { hard_delete, ..self }
     }
 
     pub fn execute(self) -> impl Future<Item=types::Position, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::DeleteStream::new(promise, self.creds);
+        let mut op             = operations::DeleteStream::new(promise);
 
         op.set_event_stream_id(self.stream);
         op.set_expected_version(self.version);
         op.set_require_master(self.require_master);
         op.set_hard_delete(self.hard_delete);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -637,15 +701,16 @@ impl DeleteStream {
     }
 }
 
-pub struct SubscribeToStream {
+pub struct SubscribeToStream<'a> {
     stream_id: Chars,
-    sender: Sender<Msg>,
+    pub(crate) sender: Sender<Msg>,
     resolve_link_tos: bool,
     creds: Option<types::Credentials>,
+    settings: &'a types::Settings,
 }
 
-impl SubscribeToStream {
-    pub(crate) fn new<S>(sender: Sender<Msg>, stream_id: S)
+impl <'a> SubscribeToStream<'a> {
+    pub(crate) fn new<S>(sender: Sender<Msg>, stream_id: S, settings: &types::Settings)
         -> SubscribeToStream
         where S: Into<Chars>
     {
@@ -654,24 +719,30 @@ impl SubscribeToStream {
             resolve_link_tos: false,
             creds: None,
             sender,
+            settings,
         }
     }
 
-    pub fn credentials(self, value: types::Credentials) -> SubscribeToStream {
+    pub fn credentials(self, value: types::Credentials) -> SubscribeToStream<'a> {
         SubscribeToStream { creds: Some(value), ..self }
     }
 
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> SubscribeToStream {
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> SubscribeToStream<'a> {
         SubscribeToStream { resolve_link_tos, ..self }
     }
 
     pub fn execute(self) -> types::Subscription {
         let sender   = self.sender.clone();
         let (tx, rx) = mpsc::channel(500);
-        let mut op   = operations::SubscribeToStream::new(tx, self.creds);
+        let mut op   = operations::SubscribeToStream::new(tx, self.creds.clone());
 
         op.set_event_stream_id(self.stream_id);
         op.set_resolve_link_tos(self.resolve_link_tos);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -682,18 +753,19 @@ impl SubscribeToStream {
     }
 }
 
-pub struct RegularCatchupSubscribe {
+pub struct RegularCatchupSubscribe<'a> {
     stream_id: Chars,
     resolve_link_tos: bool,
     require_master: bool,
     batch_size: u16,
     start_pos: i64,
     creds_opt: Option<types::Credentials>,
-    sender: Sender<Msg>,
+    pub(crate) sender: Sender<Msg>,
+    settings: &'a types::Settings,
 }
 
-impl RegularCatchupSubscribe {
-    pub(crate) fn new<S: Into<Chars>>(sender: Sender<Msg>, stream: S) -> RegularCatchupSubscribe {
+impl <'a> RegularCatchupSubscribe<'a> {
+    pub(crate) fn new<S: Into<Chars>>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> RegularCatchupSubscribe {
         RegularCatchupSubscribe {
             stream_id: stream.into(),
             resolve_link_tos: false,
@@ -702,22 +774,23 @@ impl RegularCatchupSubscribe {
             start_pos: 0,
             sender,
             creds_opt: None,
+            settings,
         }
     }
 
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> RegularCatchupSubscribe {
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { resolve_link_tos, ..self }
     }
 
-    pub fn require_master(self, require_master: bool) -> RegularCatchupSubscribe {
+    pub fn require_master(self, require_master: bool) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { require_master, ..self }
     }
 
-    pub fn start_position(self, start_pos: i64) -> RegularCatchupSubscribe {
+    pub fn start_position(self, start_pos: i64) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { start_pos, ..self }
     }
 
-    pub fn credentials(self, creds: types::Credentials) -> RegularCatchupSubscribe {
+    pub fn credentials(self, creds: types::Credentials) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { creds_opt: Some(creds), ..self }
     }
 
@@ -726,11 +799,23 @@ impl RegularCatchupSubscribe {
         let (tx, rx) = mpsc::channel(500);
 
         let puller = operations::RegularStreamPull::new(
-            self.stream_id.clone(), self.resolve_link_tos, self.require_master, self.batch_size as i32, self.start_pos, self.creds_opt.clone());
-        let op = operations::CatchupSubscribe::new(
-            Some(self.stream_id), self.resolve_link_tos, tx, self.creds_opt, puller);
+            self.stream_id.clone(),
+            self.resolve_link_tos,
+            self.require_master,
+            self.batch_size as i32,
+            self.start_pos,
+            self.creds_opt.clone(),
+            self.settings);
 
-        self.sender.send(Msg::new_op(op)).wait().unwrap();
+        let op = operations::CatchupSubscribe::new(
+            Some(self.stream_id),
+            self.resolve_link_tos,
+            tx,
+            self.creds_opt,
+            puller,
+            self.settings.clone());
+
+//        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         types::Subscription {
             receiver: rx,

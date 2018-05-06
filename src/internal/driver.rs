@@ -12,7 +12,7 @@ use discovery::{ Endpoint, Discovery };
 use internal::command::Cmd;
 use internal::connection::Connection;
 use internal::messaging::Msg;
-use internal::operations::Exchange;
+use internal::operations::OperationWrapper;
 use internal::package::Pkg;
 use internal::registry::Registry;
 use types::{ Credentials, Settings };
@@ -140,7 +140,7 @@ enum Phase {
 
 struct Attempt {
     started: Instant,
-    tries: u32,
+    tries: usize,
 }
 
 impl Attempt {
@@ -153,12 +153,12 @@ impl Attempt {
 }
 
 #[derive(PartialEq, Eq)]
-pub enum Report {
+pub(crate) enum Report {
     Continue,
     Quit,
 }
 
-pub struct Driver {
+pub(crate) struct Driver {
     handle: Handle,
     registry: Registry,
     candidate: Option<Connection>,
@@ -173,17 +173,17 @@ pub struct Driver {
     operation_timeout: Duration,
     init_req_opt: Option<InitReq>,
     reconnect_delay: Duration,
-    max_reconnect: u32,
+    max_reconnect: usize,
     sender: Sender<Msg>,
     operation_check_period: Duration,
     last_operation_check: Instant,
 }
 
 impl Driver {
-    pub fn new(setts: Settings, disc: Box<Discovery>, sender: Sender<Msg>, handle: Handle) -> Driver {
+    pub(crate) fn new(setts: &Settings, disc: Box<Discovery>, sender: Sender<Msg>, handle: Handle) -> Driver {
         Driver {
             handle: handle,
-            registry: Registry::new(&setts),
+            registry: Registry::new(),
             candidate: None,
             tracker: HealthTracker::new(&setts),
             attempt_opt: None,
@@ -191,19 +191,19 @@ impl Driver {
             phase: Phase::Reconnecting,
             last_endpoint: None,
             discovery: disc,
-            connection_name: setts.connection_name,
-            default_user: setts.default_user,
+            connection_name: setts.connection_name.clone(),
+            default_user: setts.default_user.clone(),
             operation_timeout: setts.operation_timeout,
             init_req_opt: None,
             reconnect_delay: Duration::from_secs(3),
-            max_reconnect: setts.connection_retry.to_u32(),
+            max_reconnect: setts.connection_retry.to_usize(),
             sender: sender,
             operation_check_period: setts.operation_check_period,
             last_operation_check: Instant::now(),
         }
     }
 
-    pub fn start(&mut self) {
+    pub(crate) fn start(&mut self) {
         self.attempt_opt = Some(Attempt::new());
         self.state       = ConnectionState::Connecting;
         self.phase       = Phase::Reconnecting;
@@ -234,7 +234,7 @@ impl Driver {
         }
     }
 
-    pub fn on_establish(&mut self, endpoint: Endpoint) {
+    pub(crate) fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
             self.phase         = Phase::Establishing;
             self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr, self.handle.clone()));
@@ -268,7 +268,7 @@ impl Driver {
         }
     }
 
-    pub fn on_established(&mut self, id: Uuid) {
+    pub(crate) fn on_established(&mut self, id: Uuid) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
             let same_connection =
                 match self.candidate {
@@ -295,7 +295,7 @@ impl Driver {
         }
     }
 
-    pub fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
+    pub(crate) fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
         if self.is_same_connection(&conn_id) {
             println!("CloseConnection: {}.", error);
             self.tcp_connection_close(&conn_id, error);
@@ -321,7 +321,7 @@ impl Driver {
         }
     }
 
-    pub fn on_package_arrived(&mut self, pkg: Pkg) {
+    pub(crate) fn on_package_arrived(&mut self, pkg: Pkg) {
         self.tracker.incr_pkg_num();
 
         if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
@@ -372,7 +372,7 @@ impl Driver {
         }
     }
 
-    pub fn on_new_op(&mut self, operation: Exchange) {
+    pub(crate) fn on_new_op(&mut self, operation: OperationWrapper) {
         let conn_opt = {
             if self.state.is_connected() {
                 // Will be always 'Some' when connected.
@@ -412,7 +412,7 @@ impl Driver {
         }
     }
 
-    pub fn close_connection(&mut self) {
+    pub(crate) fn close_connection(&mut self) {
         self.state = ConnectionState::Closed;
     }
 
@@ -434,7 +434,7 @@ impl Driver {
         }
     }
 
-    pub fn on_tick(&mut self) -> Report {
+    pub(crate) fn on_tick(&mut self) -> Report {
 
         if self.state == ConnectionState::Init || self.state == ConnectionState::Closed {
             return Report::Continue;
@@ -480,7 +480,7 @@ impl Driver {
         Report::Continue
     }
 
-    pub fn on_send_pkg(&mut self, pkg: Pkg) {
+    pub(crate) fn on_send_pkg(&mut self, pkg: Pkg) {
         if self.state == ConnectionState::Connected {
             if let Some(ref conn) = self.candidate {
                 conn.enqueue(pkg);

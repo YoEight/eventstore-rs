@@ -298,6 +298,6 @@ fn all_round_operation_test() {
     test_read_stream_events(&client);
     test_read_all_stream(&client);
     test_delete_stream(&client);
-    test_volatile_subscription(&client);
-    test_catchup_subscription(&client);
+//    test_volatile_subscription(&client);
+//    test_catchup_subscription(&client);
 }

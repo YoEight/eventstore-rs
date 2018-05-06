@@ -19,13 +19,13 @@ use internal::package::Pkg;
 #[derive(Copy, Clone)]
 pub enum Retry {
     Undefinately,
-    Only(u32),
+    Only(usize),
 }
 
 impl Retry {
-    pub fn to_u32(&self) -> u32 {
+    pub fn to_usize(&self) -> usize {
         match *self {
-            Retry::Undefinately => u32::max_value(),
+            Retry::Undefinately => usize::max_value(),
             Retry::Only(x)      => x,
         }
     }
@@ -83,6 +83,7 @@ impl Credentials {
     }
 }
 
+#[derive(Clone)]
 pub struct Settings {
     pub heartbeat_delay: Duration,
     pub heartbeat_timeout: Duration,
