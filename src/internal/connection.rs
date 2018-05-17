@@ -4,6 +4,7 @@ use std::net::{ SocketAddr, SocketAddrV4 };
 use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
+use futures::stream::iter_ok;
 use tokio_io::AsyncRead;
 use tokio_io::codec::{ Decoder, Encoder };
 use tokio_core::net::TcpStream;
@@ -15,8 +16,8 @@ use internal::messaging::Msg;
 use internal::package::Pkg;
 use types::Credentials;
 
-pub struct Connection {
-    pub id:     Uuid,
+pub(crate) struct Connection {
+    pub(crate) id:     Uuid,
     sender: Sender<Pkg>,
     handle: Handle,
 }
@@ -67,7 +68,7 @@ impl Decoder for PkgCodec {
         }
 
         let pkg = {
-            let mut cursor            = Cursor::new(&src[0..self.frame_size]);
+            let mut cursor            = Cursor::new(&src);
             let     cmd               = Cmd::from_u8(cursor.get_u8());
             let     auth_flag         = cursor.get_u8();
             let mut correlation_bytes = [0; 16];
@@ -78,7 +79,7 @@ impl Decoder for PkgCodec {
 
             // Client-wise, the server doesn't send back authentication
             // information. For a matter of consistency, we still implement
-            // `Credentials` parsing, even if it will never be use at the client
+            // `Credentials` parsing, even if it will never be used at the client
             // level.
             let creds_opt = {
                 if auth_flag == 0x01 {
@@ -161,7 +162,7 @@ fn io_error_only<A>(res: Result<A, ConnErr>) -> io::Result<()> {
 }
 
 impl Connection {
-    pub fn new(bus: Sender<Msg>, addr: SocketAddrV4, handle: Handle) -> Connection {
+    pub(crate) fn new(bus: Sender<Msg>, addr: SocketAddrV4, handle: Handle) -> Connection {
         let (sender, recv) = channel(500);
         let id             = Uuid::new_v4();
         let cloned_handle  = handle.clone();
@@ -233,5 +234,9 @@ impl Connection {
 
     pub fn enqueue(&self, pkg: Pkg) {
         self.handle.spawn(self.sender.clone().send(pkg).then(|_| Ok(())))
+    }
+
+    pub fn enqueue_all(&self, pkgs: Vec<Pkg>) {
+        self.handle.spawn(self.sender.clone().send_all(iter_ok(pkgs)).then(|_| Ok(())))
     }
 }
