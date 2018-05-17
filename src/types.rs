@@ -5,6 +5,7 @@ use std::time::Duration;
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Receiver, Sender };
+use futures::sync::oneshot;
 use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
@@ -678,10 +679,12 @@ pub(crate) enum SubEvent {
     },
 
     EventAppeared(ResolvedEvent),
+    HasBeenConfirmed(oneshot::Sender<()>),
     Dropped
 }
 
 pub struct Subscription {
+    pub(crate) inner: Sender<SubEvent>,
     pub(crate) receiver: Receiver<SubEvent>,
     pub(crate) sender: Sender<Msg>,
 }
@@ -696,19 +699,43 @@ impl Subscription {
     pub fn consume_async<C>(self, init: C) -> impl Future<Item=C, Error=()>
         where C: SubscriptionConsumer
     {
+        struct State<A: SubscriptionConsumer> {
+            consumer: A,
+            confirmed: bool,
+            confirmation_requests: Vec<oneshot::Sender<()>>,
+        }
+
+        impl <A: SubscriptionConsumer> State<A> {
+            fn new(consumer: A) -> State<A> {
+                State {
+                    consumer,
+                    confirmed: false,
+                    confirmation_requests: Vec::new(),
+                }
+            }
+
+            fn drain_requests(&mut self) {
+                for req in self.confirmation_requests.drain(..) {
+                    let _ = req.send(());
+                }
+            }
+        }
+
+
         let mut sub_id_opt = None;
         let     sender     = self.sender.clone();
 
-        self.receiver.fold(init, move |mut consumer, event| {
+        self.receiver.fold(State::new(init), move |mut state, event| {
             match event {
                 SubEvent::Confirmed { id, last_commit_position, last_event_number } => {
                     sub_id_opt = Some(id);
 
-                    consumer.when_confirmed(id, last_commit_position, last_event_number);
+                    state.drain_requests();
+                    state.consumer.when_confirmed(id, last_commit_position, last_event_number);
                 },
 
                 SubEvent::EventAppeared(evt) => {
-                    if let OnEventAppeared::Drop = consumer.when_event_appeared(evt) {
+                    if let OnEventAppeared::Drop = state.consumer.when_event_appeared(evt) {
                         let id  = sub_id_opt.take().expect("impossible situation when dropping subscription");
                         let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
 
@@ -717,12 +744,32 @@ impl Subscription {
                 },
 
                 SubEvent::Dropped => {
-                    consumer.when_dropped();
+                    state.consumer.when_dropped();
+                    state.drain_requests();
+                },
+
+                SubEvent::HasBeenConfirmed(req) => {
+                    if state.confirmed {
+                        let _ = req.send(());
+                    } else {
+                        state.confirmation_requests.push(req);
+                    }
                 },
             }
 
-            Ok::<C, ()>(consumer)
-        })
+            Ok::<State<C>, ()>(state)
+        }).map(|state| state.consumer)
+    }
+
+    /// You shouldn't have to use that function as it makes no sense to
+    /// wait for a confirmation from the server. However, for testing
+    /// purpose or weirdos, we expose that function. It will block your
+    /// current thread until the confirmation receives confirmation
+    /// from the server.
+    pub fn wait_confirmation(&self) {
+        let (tx, rcv) = oneshot::channel();
+        let _         = self.inner.clone().send(SubEvent::HasBeenConfirmed(tx)).wait();
+        let _         = rcv.wait();
     }
 }
 

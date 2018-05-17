@@ -1247,17 +1247,15 @@ enum SubState {
 pub struct SubscribeToStream {
     sub_bus: mpsc::Sender<types::SubEvent>,
     inner: messages::SubscribeToStream,
-    _creds: Option<types::Credentials>,
     state: SubState,
 }
 
 impl SubscribeToStream {
-    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>, _creds: Option<types::Credentials>)
+    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>)
         -> SubscribeToStream
     {
         SubscribeToStream {
             sub_bus,
-            _creds,
             inner: messages::SubscribeToStream::new(),
             state: SubState::Requesting,
         }
@@ -1627,7 +1625,7 @@ impl <P: StreamPull> CatchupSubscribe<P> {
     }
 
     fn prepare_sub_request(&mut self, dest: &mut BytesMut) -> Decision {
-        let mut sub       = SubscribeToStream::new(self.sub_bus.clone(), self.creds_opt.clone());
+        let mut sub       = SubscribeToStream::new(self.sub_bus.clone());
         let     stream_id = self.stream_id_opt.clone().unwrap_or_default();
 
         sub.set_event_stream_id(stream_id);

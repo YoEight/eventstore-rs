@@ -734,7 +734,8 @@ impl <'a> SubscribeToStream<'a> {
     pub fn execute(self) -> types::Subscription {
         let sender   = self.sender.clone();
         let (tx, rx) = mpsc::channel(500);
-        let mut op   = operations::SubscribeToStream::new(tx, self.creds.clone());
+        let tx_dup   = tx.clone();
+        let mut op   = operations::SubscribeToStream::new(tx);
 
         op.set_event_stream_id(self.stream_id);
         op.set_resolve_link_tos(self.resolve_link_tos);
@@ -747,6 +748,7 @@ impl <'a> SubscribeToStream<'a> {
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         types::Subscription {
+            inner: tx_dup,
             receiver: rx,
             sender,
         }
@@ -797,6 +799,7 @@ impl <'a> RegularCatchupSubscribe<'a> {
     pub fn execute(self) -> types::Subscription {
         let sender   = self.sender.clone();
         let (tx, rx) = mpsc::channel(500);
+        let tx_dup   = tx.clone();
 
         let puller = operations::RegularStreamPull::new(
             self.stream_id.clone(),
@@ -818,6 +821,7 @@ impl <'a> RegularCatchupSubscribe<'a> {
 //        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         types::Subscription {
+            inner: tx_dup,
             receiver: rx,
             sender,
         }
