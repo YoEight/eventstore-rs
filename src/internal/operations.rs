@@ -234,8 +234,13 @@ impl OperationWrapper {
                     let res = self.inner.respond(pkg)?;
 
                     match res {
-                        ImplResult::Retry    => self.retry(dest, corr_id),
-                        ImplResult::Continue => self.send_req(dest, None),
+                        ImplResult::Retry => self.retry(dest, corr_id),
+
+                        ImplResult::Continue => {
+                            self.trackers.remove(&corr_id);
+                            self.send_req(dest, None)
+                        },
+
                         ImplResult::Done     => op_done(),
                         ImplResult::Awaiting => {
                             let tracker = OperationWrapper::tracker_must_exist_mut(&mut self.trackers, corr_id)?;

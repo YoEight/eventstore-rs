@@ -763,13 +763,13 @@ impl Subscription {
 
     /// You shouldn't have to use that function as it makes no sense to
     /// wait for a confirmation from the server. However, for testing
-    /// purpose or weirdos, we expose that function. It will block your
-    /// current thread until the confirmation receives confirmation
-    /// from the server.
-    pub fn wait_confirmation(&self) {
+    /// purpose or weirdos, we expose that function. it returns will a
+    /// a future waiting the subscription to be confirmed by the server.
+    pub fn confirmation(&self) -> impl Future<Item=(), Error=()> {
         let (tx, rcv) = oneshot::channel();
         let _         = self.inner.clone().send(SubEvent::HasBeenConfirmed(tx)).wait();
-        let _         = rcv.wait();
+
+        rcv.map_err(|_| ())
     }
 }
 
