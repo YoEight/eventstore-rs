@@ -67,6 +67,12 @@ impl Builder {
     }
 }
 
+// Using `Duration::subsec_millis` forces nigthly rustc usage at this time.
+// This function will be deleted once `Duration::subsec_millis` lands on
+// stable.
+const NANOS_PER_MILLI: u32 = 1_000_000;
+fn duration_subsec_millis(duration: &Duration) -> u32 { duration.subsec_nanos() / NANOS_PER_MILLI }
+
 impl Timespan {
     fn from_ticks(ticks: u64) -> Timespan {
         Timespan {
@@ -78,7 +84,7 @@ impl Timespan {
         let mut builder = Timespan::builder();
 
         builder.seconds(duration.as_secs())
-               .milliseconds(duration.subsec_millis() as u64)
+               .milliseconds(duration_subsec_millis(&duration) as u64)
                .build()
     }
 

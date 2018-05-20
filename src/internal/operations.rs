@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::ops::Deref;
 use std::time::{ Duration, Instant };
 
 use bytes::{ BufMut, BytesMut };
-use futures::{ Future, Stream };
+use futures::{ Future, Stream, Sink };
+use futures::stream::iter_ok;
 use futures::sync::mpsc;
 use protobuf::{ Chars, RepeatedField };
 use uuid::Uuid;
@@ -15,7 +15,7 @@ use types::{ self, Slice };
 
 use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OperationError {
     WrongExpectedVersion(Chars, types::ExpectedVersion),
     StreamDeleted(Chars),
@@ -27,14 +27,16 @@ pub enum OperationError {
     StreamNotFound(Chars),
     AuthenticationRequired,
     Aborted,
-    WrongClientImpl(Cmd),
+    WrongClientImpl(Option<Cmd>),
 }
 
 impl OperationError {
-    fn to_io_error(self) -> ::std::io::Error {
-        let msg = format!("internal operation error: {:?}", self);
+    fn wrong_client_impl() -> OperationError {
+        OperationError::WrongClientImpl(None)
+    }
 
-        ::std::io::Error::new(::std::io::ErrorKind::Other, msg)
+    fn wrong_client_impl_on_cmd(cmd: Cmd) -> OperationError {
+        OperationError::WrongClientImpl(Some(cmd))
     }
 }
 
@@ -51,14 +53,6 @@ impl Outcome {
         }
     }
 
-    pub fn is_continuing(&self) -> bool {
-        if let Outcome::Continue(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
     pub fn is_done(&self) -> bool {
         match *self {
             Outcome::Done => true,
@@ -68,13 +62,6 @@ impl Outcome {
 }
 
 pub type Decision = ::std::io::Result<Outcome>;
-
-fn decision_is_continuing(value: &Decision) -> bool {
-    match *value {
-        Ok(ref outcome) => outcome.is_continuing(),
-        _               => false,
-    }
-}
 
 fn decision_is_done(value: &Decision) -> bool {
     match *value {
@@ -138,25 +125,76 @@ pub(crate) struct OperationWrapper {
     timeout: Duration,
     inner: Box<OperationImpl + Sync + Send>,
     creds: Option<types::Credentials>,
-    trackers: HashMap<Uuid, Tracking>,
 }
 
-struct Tracking {
+pub(crate) struct Tracking {
     id: Uuid,
+    cmd: Cmd,
     attempts: usize,
     started: Instant,
     lasting: bool,
 }
 
-impl Default for Tracking {
-    fn default() -> Tracking {
+impl Tracking {
+    pub(crate) fn new(cmd: Cmd) -> Tracking {
         Tracking {
+            cmd,
             id: Uuid::new_v4(),
             attempts: 0,
             started: Instant::now(),
             lasting: false,
         }
     }
+
+    pub(crate) fn get_id(&self) -> Uuid {
+        self.id
+    }
+}
+
+pub(crate) trait ReqBuffer {
+    fn push_req(&mut self, req: Request) -> ::std::io::Result<()>;
+}
+
+/// Used to allow an operation to support multiple exchanges at the same time
+/// with the server.
+struct VecReqBuffer<'a, A: 'a + Session> {
+    session: &'a mut A,
+    dest: &'a mut BytesMut,
+    creds: Option<types::Credentials>,
+    pkgs: Vec<Pkg>,
+}
+
+impl<'a, A: Session> VecReqBuffer<'a, A> {
+    fn new(session: &'a mut A, dest: &'a mut BytesMut, creds: Option<types::Credentials>)
+        -> VecReqBuffer<'a, A>
+    {
+        VecReqBuffer {
+            session,
+            dest,
+            creds,
+            pkgs: Vec::new(),
+        }
+    }
+}
+
+impl<'a, A: Session> ReqBuffer for VecReqBuffer<'a, A> {
+    fn push_req(&mut self, req: Request) -> ::std::io::Result<()> {
+        let id  = self.session.new_request(req.cmd);
+        let pkg = req.produce_pkg(id, self.creds.clone(), self.dest)?;
+
+        self.pkgs.push(pkg);
+
+        Ok(())
+    }
+}
+
+pub(crate) trait Session {
+    fn new_request(&mut self, Cmd) -> Uuid;
+    fn pop(&mut self, &Uuid) -> ::std::io::Result<Tracking>;
+    fn reuse(&mut self, Tracking);
+    fn using(&mut self, &Uuid) -> ::std::io::Result<&mut Tracking>;
+    fn requests(&self) -> Vec<&Tracking>;
+    fn terminate(&mut self);
 }
 
 impl OperationWrapper {
@@ -170,63 +208,35 @@ impl OperationWrapper {
         OperationWrapper {
             id: OperationId::new(),
             inner: Box::new(op),
-            trackers: HashMap::new(),
             creds,
             max_retry,
             timeout,
         }
     }
 
-    pub(crate) fn is_completed(&self) -> bool {
-        self.trackers.is_empty()
-    }
-
-    fn send_req(&mut self, dest: &mut BytesMut, prev_tracker: Option<Tracking>) -> Decision {
-        let mut tracker     = prev_tracker.unwrap_or_default();
-        let     new_req_id  = Uuid::new_v4();
-        let     prev_req_id = {
-            if tracker.attempts > 0 {
-                Some(tracker.id)
-            } else {
-                None
-            }
-        };
-
-        let is_new_req = prev_req_id.is_none();
-        let req        = self.inner.request(prev_req_id, new_req_id);
-
-        if is_new_req {
-            tracker.id = new_req_id;
-        }
-
-        tracker.attempts += 1;
-
-        self.trackers.insert(new_req_id, tracker);
-
-        req.send(new_req_id, self.creds.clone(), dest)
-    }
-
-    fn tracker_must_exist_mut<'a>(trackers: &'a mut HashMap<Uuid, Tracking>, id: Uuid)
-        -> ::std::io::Result<&'a mut Tracking>
+    pub(crate) fn send<A: Session>(&mut self, dest: &mut BytesMut, session: A)
+        -> Decision
     {
-        let error = ::std::io::Error::new(::std::io::ErrorKind::Other, "Tracker must exists");
-
-        trackers.get_mut(&id).ok_or(error)
+        self.poll(dest, session, None)
     }
 
-    fn tracker_must_exist(&mut self, id: Uuid)
-        -> ::std::io::Result<Tracking>
+    pub(crate) fn receive<A: Session>(&mut self, dest: &mut BytesMut, session: A, pkg: Pkg)
+        -> Decision
     {
-        let error = ::std::io::Error::new(::std::io::ErrorKind::Other, "Tracker must exists");
-
-        self.trackers.remove(&id).ok_or(error)
+        self.poll(dest, session, Some(pkg))
     }
 
-    pub(crate) fn poll(&mut self, dest: &mut BytesMut, input: Option<Pkg>) -> Decision {
+    fn poll<A: Session>(&mut self, dest: &mut BytesMut, mut session: A, input: Option<Pkg>) -> Decision {
         match input {
             // It means this operation was newly created and has to issue its
             // first package to the server.
-            None => self.send_req(dest, None),
+            None => {
+                let req      = self.inner.initial_request();
+                let id       = session.new_request(req.cmd);
+                let decision = req.send(id, self.creds.clone(), dest);
+
+                decision
+            },
 
             // At this point, it means this operation send a package to
             // the server already.
@@ -234,31 +244,38 @@ impl OperationWrapper {
                 let corr_id = pkg.correlation;
 
                 if self.inner.is_valid_response(pkg.cmd) {
-                    let res = self.inner.respond(pkg)?;
+                    let (pkgs, result) = {
+                        let mut buffer = VecReqBuffer::new(&mut session, dest, self.creds.clone());
+                        let     result = self.inner.respond(&mut buffer, pkg)?;
 
-                    match res {
-                        ImplResult::Retry => self.retry(dest, corr_id),
+                        (buffer.pkgs, result)
+                    };
 
-                        ImplResult::Continue => {
-                            self.trackers.remove(&corr_id);
-                            self.send_req(dest, None)
+                    match result {
+                        ImplResult::Retry => {
+                            return self.retry(dest, &mut session, corr_id)
                         },
 
                         ImplResult::Done => {
-                            self.trackers.remove(&corr_id);
-                            op_done()
+                            session.pop(&corr_id)?;
                         },
 
                         ImplResult::Awaiting => {
-                            let tracker = OperationWrapper::tracker_must_exist_mut(&mut self.trackers, corr_id)?;
+                            let tracker = session.using(&corr_id)?;
 
                             tracker.lasting = true;
-
-                            op_continue()
                         },
-                    }
+
+                        ImplResult::Terminate => {
+                            session.terminate();
+
+                            return op_done();
+                        },
+                    };
+
+                    op_send_pkgs(pkgs)
                 } else {
-                    self.failed(OperationError::WrongClientImpl(pkg.cmd));
+                    self.failed(OperationError::wrong_client_impl_on_cmd(pkg.cmd));
 
                     op_done()
                 }
@@ -270,25 +287,33 @@ impl OperationWrapper {
         self.inner.report_operation_error(error);
     }
 
-    pub(crate) fn retry(&mut self, dest: &mut BytesMut, id: Uuid) -> Decision {
-        let tracker = self.tracker_must_exist(id)?;
+    pub(crate) fn retry<A: Session>(&mut self, dest: &mut BytesMut, session: &mut A, id: Uuid) -> Decision {
+        let mut tracker = session.pop(&id)?;
 
         if tracker.attempts + 1 >= self.max_retry {
             self.failed(OperationError::Aborted);
-            self.trackers.clear();
+            session.terminate();
 
             return op_done();
         }
 
-        self.send_req(dest, Some(tracker))
+        tracker.attempts += 1;
+        tracker.id       = Uuid::new_v4();
+
+        let req      = self.inner.retry(tracker.cmd);
+        let decision = req.send(tracker.id, self.creds.clone(), dest);
+
+        session.reuse(tracker);
+
+        decision
     }
 
-    pub(crate) fn check_and_retry(&mut self, dest: &mut BytesMut) -> Decision {
+    pub(crate) fn check_and_retry<A: Session>(&mut self, dest: &mut BytesMut, mut session: A) -> Decision {
         let mut to_retry = Vec::new();
 
-        for (key, tracker) in &self.trackers {
+        for tracker in session.requests() {
             if !tracker.lasting && tracker.started.elapsed() >= self.timeout {
-                to_retry.push(*key);
+                to_retry.push(tracker.id);
             }
         }
 
@@ -298,7 +323,7 @@ impl OperationWrapper {
             let mut pkgs = Vec::new();
 
             for key in to_retry {
-                let decision = self.retry(dest, key);
+                let decision = self.retry(dest, &mut session, key);
 
                 if decision_is_done(&decision) {
                     return decision;
@@ -320,7 +345,9 @@ pub(crate) struct Request<'a> {
 }
 
 impl <'a> Request<'a> {
-    fn send(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut) -> Decision {
+    fn produce_pkg(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut)
+        -> ::std::io::Result<Pkg>
+    {
         dest.reserve(self.msg.compute_size() as usize);
 
         self.msg.write_to_writer(&mut dest.writer())?;
@@ -332,15 +359,23 @@ impl <'a> Request<'a> {
             payload: dest.take().freeze(),
         };
 
+        Ok(pkg)
+    }
+
+    fn send(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut)
+        -> Decision
+    {
+        let pkg = self.produce_pkg(id, creds, dest)?;
+
         op_send(pkg)
     }
 }
 
 pub(crate) enum ImplResult {
     Retry,
-    Continue,
     Awaiting,
     Done,
+    Terminate,
 }
 
 impl ImplResult {
@@ -352,12 +387,19 @@ impl ImplResult {
         Ok(ImplResult::Awaiting)
     }
 
-    fn continuing() -> ::std::io::Result<ImplResult> {
-        Ok(ImplResult::Continue)
-    }
-
     fn done() -> ::std::io::Result<ImplResult> {
         Ok(ImplResult::Done)
+    }
+
+    fn terminate() -> ::std::io::Result<ImplResult> {
+        Ok(ImplResult::Terminate)
+    }
+
+    fn is_done(&self) -> bool {
+        match *self {
+            ImplResult::Done => true,
+            _                => false,
+        }
     }
 }
 
@@ -372,10 +414,14 @@ pub(crate) trait OperationImpl {
     ///
     /// 'new_id' indicates the correlation id that will be used for that new
     /// request.
-    fn request(&mut self, prev_id: Option<Uuid>, new_id: Uuid) -> Request;
+    fn initial_request(&self) -> Request;
     fn is_valid_response(&self, cmd: Cmd) -> bool;
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult>;
+    fn respond(&mut self, buffer: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult>;
     fn report_operation_error(&mut self, error: OperationError);
+
+    fn retry(&self, _: Cmd) -> Request {
+        self.initial_request()
+    }
 }
 
 pub struct WriteEvents {
@@ -415,7 +461,7 @@ impl WriteEvents {
 }
 
 impl OperationImpl for WriteEvents {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::WriteEvents,
             msg: &self.inner,
@@ -426,7 +472,7 @@ impl OperationImpl for WriteEvents {
         Cmd::WriteEventsCompleted == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::WriteEventsCompleted =
                 pkg.to_message()?;
 
@@ -547,7 +593,7 @@ impl TransactionStart {
 }
 
 impl OperationImpl for ReadEvent {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::ReadEvent,
             msg: &self.inner,
@@ -558,7 +604,7 @@ impl OperationImpl for ReadEvent {
         Cmd::ReadEventCompleted == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let mut response: messages::ReadEventCompleted =
                 pkg.to_message()?;
 
@@ -618,7 +664,7 @@ impl OperationImpl for ReadEvent {
 
 
 impl OperationImpl for TransactionStart {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::TransactionStart,
             msg: &self.inner,
@@ -629,7 +675,7 @@ impl OperationImpl for TransactionStart {
         Cmd::TransactionStartCompleted == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::TransactionStartCompleted =
                  pkg.to_message()?;
 
@@ -721,7 +767,7 @@ impl TransactionWrite {
 }
 
 impl OperationImpl for TransactionWrite {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::TransactionWrite,
             msg: &self.inner,
@@ -732,7 +778,7 @@ impl OperationImpl for TransactionWrite {
         Cmd::TransactionWriteCompleted == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::TransactionWriteCompleted =
                 pkg.to_message()?;
 
@@ -811,7 +857,7 @@ impl TransactionCommit {
 }
 
 impl OperationImpl for TransactionCommit {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::TransactionCommit,
             msg: &self.inner,
@@ -822,7 +868,7 @@ impl OperationImpl for TransactionCommit {
         Cmd::TransactionCommitCompleted == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::TransactionCommitCompleted =
                 pkg.to_message()?;
 
@@ -942,7 +988,7 @@ impl ReadStreamEvents {
 }
 
 impl OperationImpl for ReadStreamEvents {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: self.request_cmd,
             msg: &self.inner,
@@ -953,7 +999,7 @@ impl OperationImpl for ReadStreamEvents {
         self.response_cmd == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let mut response: messages::ReadStreamEventsCompleted =
                 pkg.to_message()?;
 
@@ -1079,7 +1125,7 @@ impl ReadAllEvents {
 }
 
 impl OperationImpl for ReadAllEvents {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: self.request_cmd,
             msg: &self.inner,
@@ -1090,7 +1136,7 @@ impl OperationImpl for ReadAllEvents {
         self.response_cmd == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let mut response: messages::ReadAllEventsCompleted =
                 pkg.to_message()?;
 
@@ -1182,7 +1228,7 @@ impl DeleteStream {
 }
 
 impl OperationImpl for DeleteStream {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::DeleteStream,
             msg: &self.inner,
@@ -1193,7 +1239,7 @@ impl OperationImpl for DeleteStream {
         Cmd::DeleteStreamCompleted == cmd
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::DeleteStreamCompleted =
                 pkg.to_message()?;
 
@@ -1290,7 +1336,7 @@ impl SubscribeToStream {
 }
 
 impl OperationImpl for SubscribeToStream {
-    fn request(&mut self, _: Option<Uuid>, _: Uuid) -> Request {
+    fn initial_request(&self) -> Request {
         Request {
             cmd: Cmd::SubscribeToStream,
             msg: &self.inner,
@@ -1308,7 +1354,7 @@ impl OperationImpl for SubscribeToStream {
         }
     }
 
-    fn respond(&mut self, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         match pkg.cmd {
             Cmd::SubscriptionConfirmed => {
                 let response: messages::SubscriptionConfirmation =
@@ -1356,48 +1402,8 @@ impl OperationImpl for SubscribeToStream {
         }
     }
 
-    fn report_operation_error(&mut self, error: OperationError) {
+    fn report_operation_error(&mut self, _: OperationError) {
         self.publish(types::SubEvent::Dropped);
-    }
-}
-
-pub(crate) trait StreamPull {
-    fn pull(&mut self, buf: &mut BytesMut, dest: &mut PullDest, pkg: Option<Pkg>) -> Decision;
-}
-
-enum PullState {
-    Prepare,
-    Await,
-}
-
-enum PullStatus {
-    Success(Option<i64>),
-    Failed,
-}
-
-struct PullProcess {
-    receiver: Receiver<types::ReadStreamStatus<types::StreamSlice>>,
-    inner: OperationWrapper,
-}
-
-pub(crate) struct PullDest {
-    buffer_opt: Option<Vec<types::ResolvedEvent>>,
-    error_opt: Option<types::ReadStreamError>,
-}
-
-fn blocking_pull_error(error: &types::ReadStreamError) -> bool {
-    match *error {
-        types::ReadStreamError::NoStream(_) => false,
-        _                                   => true,
-    }
-}
-
-impl PullDest {
-    fn new() -> PullDest {
-        PullDest {
-            buffer_opt: None,
-            error_opt: None,
-        }
     }
 }
 
@@ -1412,325 +1418,316 @@ fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationEr
     })
 }
 
-pub(crate) struct RegularStreamPull {
-    stream_id: Chars,
-    process_opt: Option<PullProcess>,
-    pos: i64,
+struct OperationExtractor<A, O: OperationImpl> {
+    recv: mpsc::Receiver<Result<A, OperationError>>,
+    inner: O,
+}
+
+impl <A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
+    fn initial_request(&self) -> Request {
+        self.inner.initial_request()
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        self.inner.is_valid_response(cmd)
+    }
+
+    fn respond(&mut self, buffer: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+        self.inner.respond(buffer, pkg)
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.inner.report_operation_error(error)
+    }
+
+    fn retry(&self, cmd: Cmd) -> Request {
+        self.inner.retry(cmd)
+    }
+}
+
+impl <A, O: OperationImpl> OperationExtractor<A, O> {
+    fn new<F>(maker: F) -> OperationExtractor<A, O>
+        where F: FnOnce(Promise<A>) -> O
+    {
+        let (recv, promise) = Promise::new(500);
+
+        OperationExtractor {
+            recv,
+            inner: maker(promise),
+        }
+    }
+
+    fn get_result(self) -> Result<A, OperationError> {
+        single_value_future(self.recv).wait()
+    }
+}
+
+pub(crate) struct Catchup {
+    puller: Option<OperationExtractor<types::ReadStreamStatus<types::StreamSlice>, ReadStreamEvents>>,
+    recv: mpsc::Receiver<types::SubEvent>,
+    sender: mpsc::Sender<types::SubEvent>,
+    sub: SubscribeToStream,
     resolve_link_tos: bool,
     require_master: bool,
-    batch_size: i32,
-    creds_opt: Option<types::Credentials>,
-    state: PullState,
-    operation_retry: usize,
-    operation_timeout: Duration,
+    stream_id: Chars,
+    event_number: i64,
+    max_count: i32,
+    // Number of events the subscription received already.
+    flying_event_count: usize,
+    has_caught_up: bool,
+    last_position: Option<types::Position>,
+    last_event_number: Option<i64>,
 }
 
-impl RegularStreamPull {
+impl Catchup {
     pub(crate) fn new(
         stream_id: Chars,
-        resolve_link_tos: bool,
+        from: i64,
+        max_count: i32,
         require_master: bool,
-        batch_size: i32,
-        start_from: i64,
-        creds_opt: Option<types::Credentials>,
-        settings: &types::Settings) -> RegularStreamPull
-    {
-        RegularStreamPull {
-            stream_id,
-            resolve_link_tos,
-            require_master,
-            batch_size,
-            process_opt: None,
-            pos: start_from,
-            creds_opt,
-            state: PullState::Prepare,
-            operation_retry: settings.operation_retry.to_usize(),
-            operation_timeout: settings.operation_timeout,
-        }
-    }
-
-    fn prepare(&mut self, dest: &mut BytesMut) -> Decision {
-        let (receiver, sender) = Promise::new(1);
-        let mut inner          = ReadStreamEvents::new(sender, types::ReadDirection::Forward);
-
-        inner.set_event_stream_id(self.stream_id.clone());
-        inner.set_from_event_number(self.pos);
-        inner.set_max_count(self.batch_size);
-        inner.set_require_master(self.require_master);
-        inner.set_resolve_link_tos(self.resolve_link_tos);
-
-        let mut inner = OperationWrapper::new(inner,
-                                              self.creds_opt.clone(),
-                                              self.operation_retry,
-                                              self.operation_timeout);
-
-        let pkg     = inner.poll(dest, None);
-        let process = PullProcess {
-            receiver,
-            inner,
-        };
-
-        self.process_opt = Some(process);
-
-        pkg
-    }
-
-    fn accept_response(&mut self, buf: &mut BytesMut, dest: &mut PullDest, pkg: Pkg) -> Decision {
-        if let Some(mut process) = self.process_opt.take() {
-            let outcome = process.inner.poll(buf, Some(pkg))?;
-
-            let fut = single_value_future(process.receiver).map(|status| {
-                match status {
-                    types::ReadStreamStatus::Success(slice) => {
-                        let events = slice.events();
-
-                        if let types::LocatedEvents::Events { events, next } = events {
-                            dest.buffer_opt = Some(events);
-
-                            PullStatus::Success(next)
-                        } else {
-                            PullStatus::Success(None)
-                        }
-                    },
-
-                    types::ReadStreamStatus::Error(error) => {
-                        if blocking_pull_error(&error) {
-                            dest.error_opt = Some(error);
-                        }
-
-                        PullStatus::Failed
-                    },
-                }
-            });
-
-            match fut.wait() {
-                Ok(status) => {
-                    match status {
-                        PullStatus::Success(next_pos) => {
-                            if let Some(pos) = next_pos {
-                                self.pos = pos;
-
-                                op_done()
-                            } else {
-                                op_continue()
-                            }
-                        },
-
-                        PullStatus::Failed => {
-                            op_done()
-                        }
-                    }
-                },
-
-                Err(op_error) => {
-                    Err(op_error.to_io_error())
-                },
-            }
-        } else {
-            op_done()
-        }
-    }
-}
-
-impl StreamPull for RegularStreamPull {
-    fn pull(&mut self, buf: &mut BytesMut, dest: &mut PullDest, pkg_opt: Option<Pkg>) -> Decision {
-        match self.state {
-            PullState::Prepare => {
-                self.state = PullState::Await;
-
-                self.prepare(buf)
-            },
-
-            PullState::Await => {
-                match pkg_opt {
-                    Some(pkg) => {
-                        let corr_id  = pkg.correlation;
-                        let decision = self.accept_response(buf, dest, pkg);
-
-                        if decision_is_continuing(&decision) {
-                            self.state = PullState::Prepare;
-                            return self.pull(buf, dest, None);
-                        }
-
-                        decision
-                    },
-
-                    None => {
-                        op_done()
-                    },
-                }
-            },
-        }
-    }
-}
-
-pub(crate) struct CatchupSubscribe<P: StreamPull> {
-    stream_id_opt: Option<Chars>, // If `None`, it means we target $all stream.
-    resolve_link_tos: bool,
-    sub_bus: mpsc::Sender<types::SubEvent>,
-    puller: P,
-    dest: PullDest,
-    creds_opt: Option<types::Credentials>,
-    sub_opt: Option<OperationWrapper>,
-    state: CatchupState,
-    settings: types::Settings,
-}
-
-fn max_unprocessed_events_limit_error_reached() -> ::std::io::Error {
-    let msg = format!("Max unprocessed events limit reached!");
-
-    ::std::io::Error::new(::std::io::ErrorKind::Other, msg)
-}
-
-impl <P: StreamPull> CatchupSubscribe<P> {
-    pub(crate) fn new(
-        stream_id_opt: Option<Chars>,
         resolve_link_tos: bool,
-        sub_bus: mpsc::Sender<types::SubEvent>,
-        creds_opt: Option<types::Credentials>,
-        puller: P,
-        settings: types::Settings) -> CatchupSubscribe<P>
+        sender: mpsc::Sender<types::SubEvent>) -> Catchup
     {
-        CatchupSubscribe {
-            stream_id_opt,
+        let (tx, recv) = mpsc::channel(500);
+        let mut sub    = SubscribeToStream::new(tx);
+
+        sub.set_event_stream_id(stream_id.clone());
+        sub.set_resolve_link_tos(resolve_link_tos);
+
+        Catchup {
+            puller: None,
+            sub,
+            stream_id,
+            event_number: from,
+            max_count,
+            sender,
+            recv,
+            require_master,
             resolve_link_tos,
-            sub_bus,
-            puller,
-            dest: PullDest::new(),
-            sub_opt: None,
-            creds_opt,
-            state: CatchupState::CatchingUp,
-            settings,
+            flying_event_count: 0,
+            has_caught_up: false,
+            last_position: None,
+            last_event_number: None,
         }
     }
 
-    fn notify_sub(&mut self, msg: types::SubEvent) -> ::std::io::Result<()> {
-        if let Err(_) = self.sub_bus.try_send(msg) {
-            Err(max_unprocessed_events_limit_error_reached())
-        } else {
-            Ok(())
+    fn propagate_events(&mut self) {
+        use std::mem;
+
+        let mut events = Vec::new();
+
+        // We need to move `self.recv` for a very small amount of time.
+        // It would not be possible to do it without tricking the
+        // Rust move semantic.
+        unsafe {
+            let mut recv = mem::replace(&mut self.recv, mem::uninitialized());
+            let mut cpt  = 0;
+
+            while cpt < self.flying_event_count {
+                let (evt_opt, next) = recv.into_future().wait().ok().unwrap();
+                let evt             = evt_opt.unwrap();
+
+                recv =  next;
+                cpt  += 1;
+
+                let can_be_dispatched = match evt.event_appeared() {
+                    Some(event) => {
+                        let can_be_dispatched = match event.get_original_event() {
+                            Some(event) => match self.last_event_number {
+                                Some(ref old) => old < &event.event_number,
+                                None          => true,
+                            },
+
+                            None => unreachable!(),
+                        };
+
+                        // We update catchup tracking state if we can dispatch
+                        // that event.
+                        if can_be_dispatched {
+                            self.last_position     = event.position;
+                            self.last_event_number = event.get_original_event().map(|e| e.event_number);
+                        }
+
+                        can_be_dispatched
+                    },
+
+                    None => true,
+                };
+
+                if can_be_dispatched {
+                    events.push(evt);
+                }
+            }
+
+            mem::forget(mem::replace(&mut self.recv, recv));
+        }
+
+        self.flying_event_count = 0;
+
+        if !events.is_empty() {
+            self.sender.clone().send_all(iter_ok(events)).wait().unwrap();
         }
     }
 
-    fn notify_sub_drop(&mut self) -> ::std::io::Result<()> {
-        self.notify_sub(types::SubEvent::Dropped)
-    }
-
-    fn notify_event_appeared(&mut self, event: types::ResolvedEvent)
+    fn pull(&mut self, buffer: &mut ReqBuffer)
         -> ::std::io::Result<()>
     {
-        let msg = types::SubEvent::EventAppeared(event);
+        let stream_id        = self.stream_id.clone();
+        let event_number     = self.event_number;
+        let max_count        = self.max_count;
+        let require_master   = self.require_master;
+        let resolve_link_tos = self.resolve_link_tos;
 
-        self.notify_sub(msg)
-    }
+        let extractor = OperationExtractor::new(|promise| {
+            let mut op = ReadStreamEvents::new(promise, types::ReadDirection::Forward);
 
-    fn notify_events_appeared(&mut self, events: Vec<types::ResolvedEvent>)
-        -> ::std::io::Result<()>
-    {
-        // Initially, we used `send_all` but considering it might block the
-        // driver if we reach the maximum capacity of the queue. Besides,
-        // `Sender` is the sink that does nothing regarding to flushing,
-        for event in events {
-            self.notify_event_appeared(event)?;
-        }
+            op.set_event_stream_id(stream_id);
+            op.set_from_event_number(event_number);
+            op.set_max_count(max_count);
+            op.set_require_master(require_master);
+            op.set_resolve_link_tos(resolve_link_tos);
+
+            op
+        });
+
+        buffer.push_req(extractor.initial_request())?;
+        self.puller = Some(extractor);
 
         Ok(())
     }
 
-    fn prepare_sub_request(&mut self, dest: &mut BytesMut) -> Decision {
-        let mut sub       = SubscribeToStream::new(self.sub_bus.clone());
-        let     stream_id = self.stream_id_opt.clone().unwrap_or_default();
+    fn is_sub_pkg(&self, cmd: Cmd) -> bool {
+        match cmd {
+            Cmd::SubscriptionDropped | Cmd::StreamEventAppeared | Cmd::SubscriptionConfirmed
+                => true,
 
-        sub.set_event_stream_id(stream_id);
-        sub.set_resolve_link_tos(self.resolve_link_tos);
-
-        let mut sub = OperationWrapper::new(sub,
-                                            self.creds_opt.clone(),
-                                            self.settings.operation_retry.to_usize(),
-                                            self.settings.operation_timeout);
-
-        let pkg = sub.poll(dest, None);
-        self.sub_opt = Some(sub);
-
-        pkg
+            _ => false,
+        }
     }
 }
 
-#[derive(Copy, Clone)]
-enum CatchupState {
-    CatchingUp,
-    Subscribe,
-    Live,
-}
+impl OperationImpl for Catchup {
+    fn initial_request(&self) -> Request {
+        self.sub.initial_request()
+    }
 
-pub(crate) trait Operation {
-    fn poll(&mut self, dest: &mut BytesMut, input: Option<Pkg>) -> Decision;
-    fn failed(&mut self, error: OperationError);
-    fn retry(&mut self, id: Uuid);
-}
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        let valid_for_puller = self.puller.as_ref().map_or(false, |p| p.is_valid_response(cmd));
 
-impl <P: StreamPull> Operation for CatchupSubscribe<P> {
-    fn poll(&mut self, dest: &mut BytesMut, input: Option<Pkg>) -> Decision {
-        match self.state {
-            CatchupState::CatchingUp => {
-                let outcome = self.puller.pull(dest, &mut self.dest, input)?;
+        self.sub.is_valid_response(cmd) || valid_for_puller
+    }
 
-                // Safe because if we shouldn't expect events or something went
-                // wrong, it will be a `None`.
-                if let Some(events) = self.dest.buffer_opt.take() {
-                    self.notify_events_appeared(events)?;
+    fn respond(&mut self, buffer: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+        if self.is_sub_pkg(pkg.cmd) {
+            let cmd    = pkg.cmd;
+            let result = self.sub.respond(buffer, pkg)?;
+
+            self.flying_event_count += 1;
+
+            // Once we receive our subscription confirmation, we can start
+            // reading the stream through.
+            if cmd == Cmd::SubscriptionConfirmed {
+                self.propagate_events();
+                self.pull(buffer)?;
+            } else {
+                // We propagate live event only if we already caugh up the head of
+                // the stream. Otherwise, we accumulate.
+                if self.has_caught_up {
+                    self.propagate_events();
                 }
+            }
 
-                if outcome.is_done() {
-                    if let None = self.dest.error_opt.take() {
-                        self.state = CatchupState::Subscribe;
+            return Ok(result);
+        }
 
-                        self.poll(dest, None)
-                    } else {
-                        self.notify_sub_drop()?;
+        if let Some(mut puller) = self.puller.take() {
+            let outcome = puller.respond(buffer, pkg)?;
 
-                        Ok(outcome)
-                    }
-                } else {
-                    Ok(outcome)
+            if outcome.is_done() {
+                match puller.get_result() {
+                    Err(error) => {
+                        self.report_operation_error(error);
+
+                        ImplResult::terminate()
+                    },
+
+                    Ok(read_result) => match read_result {
+                        types::ReadStreamStatus::Error(error) =>  match error {
+                            types::ReadStreamError::NoStream(_) | types::ReadStreamError::NotModified(_) => {
+                                self.has_caught_up = true;
+                                self.propagate_events();
+
+                                ImplResult::done()
+                            },
+
+                            types::ReadStreamError::StreamDeleted(stream) => {
+                                self.report_operation_error(OperationError::StreamDeleted(stream));
+
+                                ImplResult::terminate()
+                            },
+
+                            types::ReadStreamError::AccessDenied(stream) => {
+                                self.report_operation_error(OperationError::AccessDenied(stream));
+
+                                ImplResult::terminate()
+                            },
+
+                            types::ReadStreamError::Error(msg) => {
+                                self.report_operation_error(OperationError::ServerError(Some(msg)));
+
+                                ImplResult::terminate()
+                            },
+                        },
+
+                        types::ReadStreamStatus::Success(slice) => match slice.events() {
+                            types::LocatedEvents::EndOfStream => {
+                                self.has_caught_up = true;
+                                self.propagate_events();
+
+                                ImplResult::done()
+                            },
+
+                            types::LocatedEvents::Events { events, next } => {
+                                for event in &events {
+                                    self.last_position     = event.position;
+                                    self.last_event_number = event.get_original_event()
+                                                                  .map(|e| e.event_number);
+                                }
+
+                                let stream = iter_ok(events).map(types::SubEvent::EventAppeared);
+                                let _      = self.sender.clone().send_all(stream).wait();
+
+                                if let Some(next) = next {
+                                    self.event_number = next;
+                                    self.pull(buffer)?;
+                                } else {
+                                    self.has_caught_up = true;
+                                    self.propagate_events();
+                                }
+
+                                ImplResult::done()
+                            },
+                        }
+                    },
                 }
-            },
+            } else {
+                Ok(outcome)
+            }
+        } else {
+            warn!("Catchup subscription is in wrong state. \
+                  Submit an issue in https://github.com/YoEight/eventstore-rs");
 
-            CatchupState::Subscribe => {
-                // When we have to send the subscription request.
-                if input.is_none() {
-                    self.prepare_sub_request(dest)
-                } else {
-                    // If everything went smootly, we should receive a confirmation
-                    // response.
-                    self.state = CatchupState::Live;
-                    let sub = self.sub_opt.as_mut().expect("Sub reference must be available on confirmation");
+            self.report_operation_error(OperationError::wrong_client_impl());
 
-                    // If things didn't go well, `sub` will ask to drop the
-                    // transaction with the server for us.
-                    sub.poll(dest, input)
-                }
-            },
-
-            CatchupState::Live => {
-                // At this point we let the subcription driving the transaction
-                // with the server for us.
-                let sub = self.sub_opt.as_mut().expect("Sub reference must be available when live");
-
-                sub.poll(dest, input)
-            },
+            ImplResult::done()
         }
     }
 
-    fn failed(&mut self, _: OperationError) {
-        // It would mean either the catching up phase or our subscription
-        // request was invalid. All we can do is notify the user the
-        // subscription has been dropped.
-        let _ = self.notify_sub_drop();
-    }
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.sub.report_operation_error(error.clone());
 
-    fn retry(&mut self, _: Uuid) {
-        // Nothing to do. Everything will be handle properly by `poll`
-        // as we didn't update `CatchupSubscribe` stage state.
+        if let Some(mut puller) = self.puller.take() {
+            puller.report_operation_error(error);
+        }
     }
 }
