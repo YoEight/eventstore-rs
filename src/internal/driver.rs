@@ -89,7 +89,7 @@ impl HealthTracker {
                     Heartbeat::Valid
                 } else {
                     if start.elapsed() >= self.heartbeat_timeout {
-                        println!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
+                        error!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
 
                         Heartbeat::Failure
                     } else {
@@ -277,7 +277,7 @@ impl Driver {
                 };
 
             if same_connection {
-                println!("Connection established: {}.", id);
+                info!("Connection established: {}.", id);
                 self.tracker.reset();
 
                 match self.default_user.clone() {
@@ -297,13 +297,13 @@ impl Driver {
 
     pub(crate) fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
         if self.is_same_connection(&conn_id) {
-            println!("CloseConnection: {}.", error);
+            info!("CloseConnection: {}.", error);
             self.tcp_connection_close(&conn_id, error);
         }
     }
 
     fn tcp_connection_close(&mut self, conn_id: &Uuid, err: Error) {
-        println!("Connection [{}] error. Cause: {}.", conn_id, err);
+        info!("Connection [{}] error. Cause: {}.", conn_id, err);
 
         match self.state {
             ConnectionState::Connected => {
@@ -328,7 +328,7 @@ impl Driver {
             if let Some(req) = self.init_req_opt.take() {
                 if req.correlation == pkg.correlation {
                     if let Some(ref conn) = self.candidate {
-                        println!("Connection identified: {}.", conn.id);
+                        info!("Connection identified: {}.", conn.id);
                     }
 
                     self.attempt_opt          = None;
@@ -340,7 +340,7 @@ impl Driver {
             if let Some(req) = self.init_req_opt.take(){
                 if req.correlation == pkg.correlation {
                     if pkg.cmd == Cmd::NotAuthenticated {
-                        println!("Not authenticated.");
+                        warn!("Not authenticated.");
                     }
 
                     self.identify_client();
@@ -451,7 +451,7 @@ impl Driver {
                 }
             } else if self.phase == Phase::Authentication {
                 if self.has_init_req_timeout() {
-                    println!("Authentication has timeout.");
+                    warn!("Authentication has timeout.");
 
                     self.identify_client();
                 }

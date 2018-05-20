@@ -16,7 +16,7 @@ enum OperationResult
 
 message NewEvent {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-  option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required bytes event_id = 1;
 	required string event_type = 2;
@@ -28,7 +28,7 @@ message NewEvent {
 
 message EventRecord {
 	option (rustproto.carllerche_bytes_for_bytes) = true;
-    option (rustproto.carllerche_bytes_for_string) = true;
+        option (rustproto.carllerche_bytes_for_string) = true;
 
 	required string event_stream_id = 1;
 	required int64 event_number = 2;

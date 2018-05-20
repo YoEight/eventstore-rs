@@ -177,6 +177,10 @@ impl OperationWrapper {
         }
     }
 
+    pub(crate) fn is_completed(&self) -> bool {
+        self.trackers.is_empty()
+    }
+
     fn send_req(&mut self, dest: &mut BytesMut, prev_tracker: Option<Tracking>) -> Decision {
         let mut tracker     = prev_tracker.unwrap_or_default();
         let     new_req_id  = Uuid::new_v4();
@@ -217,7 +221,6 @@ impl OperationWrapper {
 
         self.trackers.remove(&id).ok_or(error)
     }
-
 
     pub(crate) fn poll(&mut self, dest: &mut BytesMut, input: Option<Pkg>) -> Decision {
         match input {
@@ -268,6 +271,7 @@ impl OperationWrapper {
 
         if tracker.attempts + 1 >= self.max_retry {
             self.failed(OperationError::Aborted);
+            self.trackers.clear();
 
             return op_done();
         }
@@ -1276,7 +1280,7 @@ impl SubscribeToStream {
 
     fn publish(&mut self, event: types::SubEvent) {
         if let Err(_) = self.sub_bus.try_send(event) {
-            print!("ERROR: Max unprocessed events limit reached!");
+            error!("ERROR: Max unprocessed events limit reached!");
         }
     }
 }
@@ -1348,7 +1352,8 @@ impl OperationImpl for SubscribeToStream {
         }
     }
 
-    fn report_operation_error(&mut self, _: OperationError) {
+    fn report_operation_error(&mut self, error: OperationError) {
+        info!("Error has been reported in regular subscription: reason {:?}", error);
         self.publish(types::SubEvent::Dropped);
     }
 }

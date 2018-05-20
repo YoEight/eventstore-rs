@@ -39,7 +39,7 @@ impl Client {
                     },
 
                     Msg::Shutdown => {
-                        println!("Shutting down...");
+                        info!("Shutting down...");
                         return Err(());
                     },
 

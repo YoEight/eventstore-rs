@@ -17,8 +17,8 @@ extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
 
-// #[macro_use]
-// extern crate log;
+#[macro_use]
+extern crate log;
 
 mod internal;
 pub mod discovery;

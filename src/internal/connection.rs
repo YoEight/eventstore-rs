@@ -68,7 +68,7 @@ impl Decoder for PkgCodec {
         }
 
         let pkg = {
-            let mut cursor            = Cursor::new(&src);
+            let mut cursor            = Cursor::new(&src[0..self.frame_size]);
             let     cmd               = Cmd::from_u8(cursor.get_u8());
             let     auth_flag         = cursor.get_u8();
             let mut correlation_bytes = [0; 16];

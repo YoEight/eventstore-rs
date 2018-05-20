@@ -30,14 +30,12 @@ impl Checking {
 
 struct Session {
     op: OperationWrapper,
-    requests: Vec<Uuid>,
 }
 
 impl Session {
     fn new(op: OperationWrapper) -> Session {
         Session {
             op,
-            requests: Vec::new(),
         }
     }
 
@@ -45,22 +43,8 @@ impl Session {
         self.op.poll(buffer, None).map(|outcome| outcome.produced_pkgs())
     }
 
-    fn insert_request(&mut self, req_id: Uuid) {
-        self.requests.push(req_id);
-    }
-
-    fn remove_request(&mut self, req_id: &Uuid) {
-        if let Ok(id) = self.requests.binary_search(req_id) {
-            self.requests.remove(id);
-        }
-    }
-
     fn report_error(&mut self, error: OperationError) {
         self.op.failed(error);
-    }
-
-    fn has_running_requests(&mut self) -> bool {
-        self.requests.is_empty()
     }
 
     fn accept_pkg(&mut self, buffer: &mut BytesMut, pkg: Pkg) -> ::std::io::Result<Outcome> {
@@ -94,8 +78,8 @@ impl Sessions {
         for pkg in &pkgs {
             let req = Request::new(session.op.id, conn);
 
-            session.insert_request(pkg.correlation);
             requests.insert(pkg.correlation, req);
+            info!("Request issued: {} cmd: {:?}", pkg.correlation, pkg.cmd);
         }
 
         conn.enqueue_all(pkgs)
@@ -110,10 +94,11 @@ impl Sessions {
         let pkg_cmd = pkg.cmd;
 
         if let Some(req) = self.requests.remove(&pkg.correlation) {
-            println!("Package [{}] received: command [{}].", pkg_id, pkg_cmd.to_u8());
+            debug!("Package [{}] received: command [{}].", pkg_id, pkg_cmd.to_u8());
+            info!("Response received: {} cmd: {:?}", pkg.correlation, pkg.cmd);
 
             let session_id = req.session;
-            let session_has_running_requests = {
+            let session_completed = {
                 let session = Sessions::get_session_mut(&mut self.assocs, &session_id);
 
                 // We notified the operation we've received a 'Pkg' from the server
@@ -124,17 +109,16 @@ impl Sessions {
                             let pkgs = outcome.produced_pkgs();
 
                             if pkgs.is_empty() {
+                                info!("Operation is continuing on id: {}", pkg_id);
                                 // This operation wants to keep its old correlation
                                 // id, so we insert the request back.
                                 self.requests.insert(pkg_id, req);
                             } else {
+                                info!("Operation has been terminated on id: {}, cmd: {:?}", pkg_id, pkg_cmd);
                                 // This operation issued a new transaction requests
                                 // with the server,
-                                session.remove_request(&pkg_id);
                                 Sessions::send_pkgs(&mut self.requests, session, conn, pkgs);
                             }
-                        } else {
-                            session.remove_request(&pkg_id);
                         }
                     },
 
@@ -145,28 +129,26 @@ impl Sessions {
                     },
                 };
 
-                session.has_running_requests()
+                session.op.is_completed()
             };
 
-            if !session_has_running_requests {
+            if session_completed {
+                info!("Session related to {} has been closed", pkg_id);
                 // The given operation has no longer opened requests, so we can
                 // drop it safely.
                 let _ = self.assocs.remove(&session_id);
             }
         } else {
-            println!("Package [{}] not handled: command [{}].", pkg_id, pkg_cmd.to_u8());
+            warn!("Package [{}] not handled: cmd {:?}.", pkg_id, pkg_cmd);
         }
     }
 
     fn terminate_session(&mut self, session: &mut Session) {
-        for req_id in &session.requests {
-            let _ = self.requests.remove(req_id);
-        }
-
         session.report_error(OperationError::Aborted);
     }
 
     fn check_and_retry(&mut self, conn: &Connection) {
+        info!("Enter check_and_retry");
         let mut process_later = Vec::new();
 
         for (key, req) in &self.requests {
@@ -192,7 +174,6 @@ impl Sessions {
                                     if pkgs.is_empty() {
                                         self.requests.insert(status.key, req);
                                     } else {
-                                        session.remove_request(&status.key);
                                         Sessions::send_pkgs(&mut self.requests, session, conn, pkgs);
                                     }
 
@@ -201,7 +182,7 @@ impl Sessions {
                             },
 
                             Err(e) => {
-                                println!("Exception raised when checking out operation: {}", e);
+                                error!("Exception raised when checking out operation: {}", e);
                                 Some(req.session)
                             },
                         }
@@ -218,6 +199,8 @@ impl Sessions {
                 }
             }
         }
+
+        info!("Exit check_and_retry")
     }
 }
 
@@ -263,7 +246,7 @@ impl Registry {
                 // because the session never got the chance to be
                 // inserted in the session maps and having running
                 // requests.
-                println!("Error occured when issuing requests: {}", e);
+                error!("Exception occured when issuing requests: {}", e);
             },
         };
     }

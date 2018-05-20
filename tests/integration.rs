@@ -1,7 +1,10 @@
 extern crate eventstore;
 extern crate futures;
 #[macro_use]
+extern crate log;
+#[macro_use]
 extern crate serde_json;
+extern crate simple_logger;
 extern crate uuid;
 
 use std::time::Duration;
@@ -28,6 +31,7 @@ impl types::SubscriptionConsumer for TestSub {
         self.count += 1;
 
         if self.count == self.max {
+            info!("Subscription decided to stop: count {}, max {}", self.count, self.max);
             types::OnEventAppeared::Drop
         } else {
             types::OnEventAppeared::Continue
@@ -230,10 +234,13 @@ fn test_volatile_subscription(client: &Client) {
     let stream_id = fresh_stream_id("volatile");
     let sub       = client.subcribe_to_stream(stream_id.as_str()).execute();
     let events    = generate_events("volatile-test", 3);
+    let confirmation = sub.confirmation();
 
     let handle = spawn(move || {
         sub.consume(TestSub { count: 0, max: 3 })
     });
+
+    let _ = confirmation.wait();
 
     let _ = client.write_events(stream_id)
                   .append_events(events)
@@ -281,6 +288,8 @@ fn test_catchup_subscription(client: &Client) {
 
 #[test]
 fn all_round_operation_test() {
+    simple_logger::init_with_level(log::Level::Info).unwrap();
+
     let mut settings = Settings::default();
     let login        = "admin";
     let password     = "changeit";
@@ -291,13 +300,13 @@ fn all_round_operation_test() {
 
     client.start();
 
-    test_write_events(&client);
-    test_read_event(&client);
-    test_write_and_read_stream_metadata(&client);
-    test_transaction(&client);
-    test_read_stream_events(&client);
-    test_read_all_stream(&client);
-    test_delete_stream(&client);
-//    test_volatile_subscription(&client);
-//    test_catchup_subscription(&client);
+//  test_write_events(&client);
+//  test_read_event(&client);
+//  test_write_and_read_stream_metadata(&client);
+//  test_transaction(&client);
+//  test_read_stream_events(&client);
+//  test_read_all_stream(&client);
+//  test_delete_stream(&client);
+    test_volatile_subscription(&client);
+//  test_catchup_subscription(&client);
 }
