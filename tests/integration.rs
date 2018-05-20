@@ -21,17 +21,16 @@ struct TestSub {
 
 impl types::SubscriptionConsumer for TestSub {
     fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
-        println!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
+        debug!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
             id, last_commit_position, last_event_number);
     }
 
     fn when_event_appeared(&mut self, event: types::ResolvedEvent) -> types::OnEventAppeared {
-        println!("Event appeared: {:?}", event);
+        debug!("Event appeared: {:?}", event);
 
         self.count += 1;
 
         if self.count == self.max {
-            info!("Subscription decided to stop: count {}, max {}", self.count, self.max);
             types::OnEventAppeared::Drop
         } else {
             types::OnEventAppeared::Continue
@@ -39,7 +38,7 @@ impl types::SubscriptionConsumer for TestSub {
     }
 
     fn when_dropped(&mut self) {
-        println!("Subscription dropped!");
+        debug!("Subscription dropped!");
     }
 }
 
@@ -79,7 +78,7 @@ fn test_write_events(client: &Client) {
                        .wait()
                        .unwrap();
 
-    println!("Write response: {:?}", result);
+    debug!("Write response: {:?}", result);
 }
 
 // We write an event into a stream then try to read it back.
@@ -97,14 +96,14 @@ fn test_read_event(client: &Client) {
                        .wait()
                        .unwrap();
 
-    println!("Read response: {:?}", result);
+    debug!("Read response: {:?}", result);
 
     match result {
         types::ReadEventStatus::Success(ref result) => {
             let event = result.event.get_original_event().unwrap();
             let value: serde_json::Value = serde_json::from_slice(&event.data).unwrap();
 
-            println!("Payload as JSON {:?}", value);
+            debug!("Payload as JSON {:?}", value);
         },
 
         _ => panic!("Something went wrong when reading stream {}", stream_id),
@@ -129,7 +128,7 @@ fn test_write_and_read_stream_metadata(client: &Client) {
               .wait()
               .unwrap();
 
-    println!("Write stream metadata {:?}", result);
+    debug!("Write stream metadata {:?}", result);
 
     let result =
         client.read_stream_metadata(stream_id.as_str())
@@ -137,7 +136,7 @@ fn test_write_and_read_stream_metadata(client: &Client) {
               .wait()
               .unwrap();
 
-    println!("Read stream metadata {:?}", result);
+    debug!("Read stream metadata {:?}", result);
 
     match result {
         types::StreamMetadataResult::Success { metadata,.. } => {
@@ -170,7 +169,7 @@ fn test_transaction(client: &Client) {
                    .wait()
                    .unwrap();
 
-    println!("Transaction commit result {:?}", result);
+    debug!("Transaction commit result {:?}", result);
 }
 
 // We read stream events by batch.
@@ -190,7 +189,7 @@ fn test_read_stream_events(client: &Client) {
               .wait()
               .unwrap();
 
-    println!("Read stream events result {:?}", result);
+    debug!("Read stream events result {:?}", result);
 }
 
 // We read $all system stream. We cannot write on $all stream. It's very
@@ -204,7 +203,7 @@ fn test_read_all_stream(client: &Client) {
               .wait()
               .unwrap();
 
-    println!("Read $all events result {:?}", result);
+    debug!("Read $all events result {:?}", result);
 }
 
 // We write an event into a stream then delete that stream.
@@ -224,7 +223,7 @@ fn test_delete_stream(client: &Client) {
                        .wait()
                        .unwrap();
 
-    println!("Delete stream [{}] result: {:?}", stream_id, result);
+    debug!("Delete stream [{}] result: {:?}", stream_id, result);
 }
 
 // We create a volatile subscription on a stream then write events into that
@@ -300,13 +299,13 @@ fn all_round_operation_test() {
 
     client.start();
 
-//  test_write_events(&client);
-//  test_read_event(&client);
-//  test_write_and_read_stream_metadata(&client);
-//  test_transaction(&client);
-//  test_read_stream_events(&client);
-//  test_read_all_stream(&client);
-//  test_delete_stream(&client);
+    test_write_events(&client);
+    test_read_event(&client);
+    test_write_and_read_stream_metadata(&client);
+    test_transaction(&client);
+    test_read_stream_events(&client);
+    test_read_all_stream(&client);
+    test_delete_stream(&client);
     test_volatile_subscription(&client);
 //  test_catchup_subscription(&client);
 }

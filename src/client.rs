@@ -39,7 +39,9 @@ impl Client {
                     },
 
                     Msg::Shutdown => {
-                        info!("Shutting down...");
+                        debug!("Client is shutting down...");
+                        // TODO - Implement graceful exit but handling all the
+                        // reponses we got so far.
                         return Err(());
                     },
 
@@ -78,7 +80,9 @@ impl Client {
             });
 
             // TODO - Handle more gracefully when the driver quits.
-            core.run(worker).unwrap();
+            let _ = core.run(worker);
+
+            info!("Client is closed");
         });
 
         Client {

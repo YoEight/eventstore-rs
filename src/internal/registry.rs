@@ -79,7 +79,7 @@ impl Sessions {
             let req = Request::new(session.op.id, conn);
 
             requests.insert(pkg.correlation, req);
-            info!("Request issued: {} cmd: {:?}", pkg.correlation, pkg.cmd);
+            debug!("Request issued: {} cmd: {:?}", pkg.correlation, pkg.cmd);
         }
 
         conn.enqueue_all(pkgs)
@@ -94,8 +94,7 @@ impl Sessions {
         let pkg_cmd = pkg.cmd;
 
         if let Some(req) = self.requests.remove(&pkg.correlation) {
-            debug!("Package [{}] received: command [{}].", pkg_id, pkg_cmd.to_u8());
-            info!("Response received: {} cmd: {:?}", pkg.correlation, pkg.cmd);
+            debug!("Package [{}] received: command {:?}.", pkg_id, pkg_cmd.to_u8());
 
             let session_id = req.session;
             let session_completed = {
@@ -109,12 +108,12 @@ impl Sessions {
                             let pkgs = outcome.produced_pkgs();
 
                             if pkgs.is_empty() {
-                                info!("Operation is continuing on id: {}", pkg_id);
+                                debug!("Operation is continuing on id: {}", pkg_id);
                                 // This operation wants to keep its old correlation
                                 // id, so we insert the request back.
                                 self.requests.insert(pkg_id, req);
                             } else {
-                                info!("Operation has been terminated on id: {}, cmd: {:?}", pkg_id, pkg_cmd);
+                                debug!("Operation has been terminated on id: {}, cmd: {:?}", pkg_id, pkg_cmd);
                                 // This operation issued a new transaction requests
                                 // with the server,
                                 Sessions::send_pkgs(&mut self.requests, session, conn, pkgs);
@@ -133,7 +132,7 @@ impl Sessions {
             };
 
             if session_completed {
-                info!("Session related to {} has been closed", pkg_id);
+                debug!("Session related to {} has been closed", pkg_id);
                 // The given operation has no longer opened requests, so we can
                 // drop it safely.
                 let _ = self.assocs.remove(&session_id);
@@ -148,7 +147,6 @@ impl Sessions {
     }
 
     fn check_and_retry(&mut self, conn: &Connection) {
-        info!("Enter check_and_retry");
         let mut process_later = Vec::new();
 
         for (key, req) in &self.requests {
@@ -199,8 +197,6 @@ impl Sessions {
                 }
             }
         }
-
-        info!("Exit check_and_retry")
     }
 }
 

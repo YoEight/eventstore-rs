@@ -1357,7 +1357,6 @@ impl OperationImpl for SubscribeToStream {
     }
 
     fn report_operation_error(&mut self, error: OperationError) {
-        info!("Error has been reported in regular subscription: reason {:?}", error);
         self.publish(types::SubEvent::Dropped);
     }
 }
