@@ -244,7 +244,11 @@ impl OperationWrapper {
                             self.send_req(dest, None)
                         },
 
-                        ImplResult::Done     => op_done(),
+                        ImplResult::Done => {
+                            self.trackers.remove(&corr_id);
+                            op_done()
+                        },
+
                         ImplResult::Awaiting => {
                             let tracker = OperationWrapper::tracker_must_exist_mut(&mut self.trackers, corr_id)?;
 
