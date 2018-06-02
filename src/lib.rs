@@ -1,5 +1,3 @@
-// #![feature(duration_extras)]
-
 extern crate core;
 extern crate bytes;
 extern crate uuid;
