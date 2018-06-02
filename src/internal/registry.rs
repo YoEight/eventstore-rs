@@ -8,38 +8,15 @@ use internal::connection::Connection;
 use internal::operations::{ OperationError, OperationWrapper, OperationId, Tracking, Session };
 use internal::package::Pkg;
 
-struct Checking {
-    key: Uuid,
-    is_checking: bool,
-}
-
-impl Checking {
-    fn delete(id: Uuid) -> Checking {
-        Checking {
-            key: id,
-            is_checking: false,
-        }
-    }
-
-    fn check(id: Uuid) -> Checking {
-        Checking {
-            key: id,
-            is_checking: true,
-        }
-    }
-}
-
 struct Request {
     session: OperationId,
-    conn_id: Uuid,
     tracker: Tracking,
 }
 
 impl Request {
-    fn new(session: OperationId, cmd: Cmd, conn_id: Uuid) -> Request {
+    fn new(session: OperationId, cmd: Cmd) -> Request {
         Request {
             session,
-            conn_id,
             tracker: Tracking::new(cmd),
         }
     }
@@ -80,7 +57,7 @@ fn terminate(assocs: &mut HashMap<Uuid, Request>, runnings: Vec<Uuid>) {
 
 impl<'a> Session for SessionImpl<'a> {
     fn new_request(&mut self, cmd: Cmd) -> Uuid {
-        let req = Request::new(self.id, cmd, self.conn.id);
+        let req = Request::new(self.id, cmd);
         let id  = req.get_id();
 
         self.assocs.insert(id, req);
@@ -112,7 +89,6 @@ impl<'a> Session for SessionImpl<'a> {
         let id  = tracker.get_id();
         let req = Request {
             session: self.id,
-            conn_id: self.conn.id,
             tracker,
         };
 
@@ -248,80 +224,56 @@ impl Requests {
     }
 
     fn check_and_retry(&mut self, conn: &Connection) {
-        let mut process_later = Vec::new();
+        let mut sessions_to_delete = Vec::new();
 
-        for (key, req) in &self.assocs {
-            if req.conn_id != conn.id {
-                process_later.push(Checking::delete(*key));
-            } else {
-                process_later.push(Checking::check(*key));
+        for op in self.sessions.values_mut() {
+            let runnings = self
+                    .session_request_ids
+                    .get_mut(&op.id)
+                    .expect("No session associated to requests");
+
+            let result = {
+                let session = SessionImpl::new(
+                    op.id, &mut self.assocs, conn, runnings);
+
+                op.check_and_retry(&mut self.buffer, session)
+            };
+
+            match result {
+                Ok(outcome) => {
+                    if outcome.is_done() {
+                        for id in runnings.drain(..) {
+                            self.assocs.remove(&id);
+                        }
+
+                        sessions_to_delete.push(op.id);
+                    } else {
+                        let pkgs = outcome.produced_pkgs();
+
+                        if !pkgs.is_empty() {
+                            conn.enqueue_all(pkgs);
+                        }
+                    }
+                },
+
+                Err(e) => {
+                    error!("Exception raised when checking out operation: {}", e);
+                    let msg = format!("Exception raised: {}", e);
+
+                    op.failed(OperationError::InvalidOperation(msg));
+
+                    for id in runnings.drain(..) {
+                        self.assocs.remove(&id);
+                    }
+
+                    sessions_to_delete.push(op.id);
+                },
             }
         }
 
-        for status in process_later {
-            if let Some(mut req) = self.assocs.remove(&status.key) {
-
-                if status.is_checking {
-                    let terminated_requests = {
-                        let op = self.sessions
-                                     .get_mut(&req.session)
-                                     .expect("No session associated to request");
-
-                        let runnings = self.session_request_ids
-                                           .get_mut(&req.session)
-                                           .expect("No session attached to request");
-
-                        let result = {
-                            let session =
-                                SessionImpl::new(
-                                    req.session, &mut self.assocs, conn, runnings);
-
-                            op.check_and_retry(&mut self.buffer, session)
-                        };
-
-                        match result {
-                            Ok(outcome) => {
-                                if outcome.is_done() {
-                                    runnings.drain(..).collect()
-                                } else {
-                                    let pkgs = outcome.produced_pkgs();
-
-                                    if !pkgs.is_empty() {
-                                        conn.enqueue_all(pkgs);
-                                    }
-
-                                    Vec::new()
-                                }
-                            },
-
-                            Err(e) => {
-                                error!("Exception raised when checking out operation: {}", e);
-                                let msg = format!("Exception raised: {}", e);
-
-                                op.failed(OperationError::InvalidOperation(msg));
-                                runnings.drain(..).collect()
-                            },
-                        }
-                    };
-
-                    if !terminated_requests.is_empty() {
-                        terminate(&mut self.assocs, terminated_requests);
-                        self.sessions.remove(&req.session);
-                        self.session_request_ids.remove(&req.session);
-                    }
-                } else {
-                    let mut op = self.sessions
-                                     .remove(&req.session)
-                                     .expect("No session associated with request!");
-
-                    let runnings = self.session_request_ids
-                                       .remove(&req.session)
-                                       .expect("No session attached to request");
-
-                    op.failed(OperationError::Aborted);
-                    terminate(&mut self.assocs, runnings);
-                }
-            }
+        for session_id in sessions_to_delete {
+            self.sessions.remove(&session_id);
+            self.session_request_ids.remove(&session_id);
         }
     }
 }

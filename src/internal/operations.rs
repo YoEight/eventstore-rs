@@ -28,6 +28,7 @@ pub enum OperationError {
     AuthenticationRequired,
     Aborted,
     WrongClientImpl(Option<Cmd>),
+    ConnectionHasDropped,
 }
 
 impl OperationError {
@@ -337,6 +338,30 @@ impl OperationWrapper {
             op_send_pkgs(pkgs)
         }
     }
+
+    pub(crate) fn connection_has_dropped<A>(
+        &mut self,
+        dest: &mut BytesMut,
+        mut session: A
+    ) -> Decision
+    where
+        A: Session
+    {
+        let pkgs = {
+            let mut buffer = VecReqBuffer::new(
+                &mut session, dest, self.creds.clone());
+
+            self.inner.connection_has_dropped(&mut buffer)?;
+
+            buffer.pkgs
+        };
+
+        if pkgs.is_empty() {
+            op_done()
+        } else {
+            op_send_pkgs(pkgs)
+        }
+    }
 }
 
 pub(crate) struct Request<'a> {
@@ -421,6 +446,16 @@ pub(crate) trait OperationImpl {
 
     fn retry(&self, _: Cmd) -> Request {
         self.initial_request()
+    }
+
+    fn connection_has_dropped(
+        &mut self,
+        _: &mut ReqBuffer
+    ) -> ::std::io::Result<()>
+    {
+        self.report_operation_error(OperationError::ConnectionHasDropped);
+
+        Ok(())
     }
 }
 
