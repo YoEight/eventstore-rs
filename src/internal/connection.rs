@@ -130,7 +130,7 @@ impl Encoder for PkgCodec {
             }
         };
 
-        dst.put_u32::<LittleEndian>(size as u32);
+        dst.put_u32_le(size as u32);
         dst.put_u8(item.cmd.to_u8());
         dst.put_u8(auth_flag);
         dst.put_slice(item.correlation.as_bytes());

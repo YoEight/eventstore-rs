@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
 use std::time::Duration;
@@ -139,7 +140,7 @@ impl ExpectedVersion {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Position {
     pub commit:  i64,
     pub prepare: i64,
@@ -158,6 +159,18 @@ impl Position {
             commit: -1,
             prepare: -1,
         }
+    }
+}
+
+impl PartialOrd for Position {
+    fn partial_cmp(&self, other: &Position) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Position {
+    fn cmp(&self, other: &Position) -> Ordering {
+        self.commit.cmp(&other.commit).then(self.prepare.cmp(&other.prepare))
     }
 }
 
@@ -681,6 +694,15 @@ pub(crate) enum SubEvent {
     EventAppeared(ResolvedEvent),
     HasBeenConfirmed(oneshot::Sender<()>),
     Dropped
+}
+
+impl SubEvent {
+    pub(crate) fn event_appeared(&self) -> Option<&ResolvedEvent> {
+        match self {
+            SubEvent::EventAppeared(ref event) => Some(event),
+            _                                  => None,
+        }
+    }
 }
 
 pub struct Subscription {

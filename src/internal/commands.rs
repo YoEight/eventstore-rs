@@ -797,28 +797,22 @@ impl <'a> RegularCatchupSubscribe<'a> {
     }
 
     pub fn execute(self) -> types::Subscription {
-        let sender   = self.sender.clone();
-        let (tx, rx) = mpsc::channel(500);
-        let tx_dup   = tx.clone();
+        let sender     = self.sender.clone();
+        let (tx, rx)   = mpsc::channel(500);
+        let tx_dup     = tx.clone();
+        let op         = operations::Catchup::new(self.stream_id,
+                                                  self.start_pos,
+                                                  self.batch_size as i32,
+                                                  self.require_master,
+                                                  self.resolve_link_tos,
+                                                  tx);
 
-        let puller = operations::RegularStreamPull::new(
-            self.stream_id.clone(),
-            self.resolve_link_tos,
-            self.require_master,
-            self.batch_size as i32,
-            self.start_pos,
-            self.creds_opt.clone(),
-            self.settings);
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds_opt,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
 
-        let op = operations::CatchupSubscribe::new(
-            Some(self.stream_id),
-            self.resolve_link_tos,
-            tx,
-            self.creds_opt,
-            puller,
-            self.settings.clone());
-
-//        self.sender.send(Msg::new_op(op)).wait().unwrap();
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         types::Subscription {
             inner: tx_dup,
