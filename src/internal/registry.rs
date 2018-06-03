@@ -14,10 +14,10 @@ struct Request {
 }
 
 impl Request {
-    fn new(session: OperationId, cmd: Cmd) -> Request {
+    fn new(session: OperationId, cmd: Cmd, conn_id: Uuid) -> Request {
         Request {
             session,
-            tracker: Tracking::new(cmd),
+            tracker: Tracking::new(cmd, conn_id),
         }
     }
 
@@ -57,7 +57,7 @@ fn terminate(assocs: &mut HashMap<Uuid, Request>, runnings: Vec<Uuid>) {
 
 impl<'a> Session for SessionImpl<'a> {
     fn new_request(&mut self, cmd: Cmd) -> Uuid {
-        let req = Request::new(self.id, cmd);
+        let req = Request::new(self.id, cmd, self.conn.id);
         let id  = req.get_id();
 
         self.assocs.insert(id, req);
@@ -112,6 +112,14 @@ impl<'a> Session for SessionImpl<'a> {
 
     fn terminate(&mut self) {
         terminate(self.assocs, self.runnings.drain(..).collect());
+    }
+
+    fn connection_id(&self) -> Uuid {
+        self.conn.id
+    }
+
+    fn has_running_requests(&self) -> bool {
+        !self.runnings.is_empty()
     }
 }
 

@@ -64,13 +64,6 @@ impl Outcome {
 
 pub type Decision = ::std::io::Result<Outcome>;
 
-fn decision_is_done(value: &Decision) -> bool {
-    match *value {
-        Ok(ref outcome) => outcome.is_done(),
-        _               => false,
-    }
-}
-
 pub struct Promise<A> {
     inner: mpsc::Sender<Result<A, OperationError>>,
 }
@@ -96,10 +89,6 @@ impl <A> Promise<A> {
 
 fn op_done() -> Decision {
     Ok(Outcome::Done)
-}
-
-fn op_continue() -> Decision {
-    Ok(Outcome::Continue(Vec::new()))
 }
 
 fn op_send(pkg: Pkg) -> Decision {
@@ -134,21 +123,27 @@ pub(crate) struct Tracking {
     attempts: usize,
     started: Instant,
     lasting: bool,
+    conn_id: Uuid,
 }
 
 impl Tracking {
-    pub(crate) fn new(cmd: Cmd) -> Tracking {
+    pub(crate) fn new(cmd: Cmd, conn_id: Uuid) -> Tracking {
         Tracking {
             cmd,
             id: Uuid::new_v4(),
             attempts: 0,
             started: Instant::now(),
             lasting: false,
+            conn_id,
         }
     }
 
     pub(crate) fn get_id(&self) -> Uuid {
         self.id
+    }
+
+    pub(crate) fn has_timeout(&self, timeout: Duration) -> bool {
+        !self.lasting && self.started.elapsed() >= timeout
     }
 }
 
@@ -196,6 +191,8 @@ pub(crate) trait Session {
     fn using(&mut self, &Uuid) -> ::std::io::Result<&mut Tracking>;
     fn requests(&self) -> Vec<&Tracking>;
     fn terminate(&mut self);
+    fn connection_id(&self) -> Uuid;
+    fn has_running_requests(&self) -> bool;
 }
 
 impl OperationWrapper {
@@ -309,37 +306,7 @@ impl OperationWrapper {
         decision
     }
 
-    pub(crate) fn check_and_retry<A: Session>(&mut self, dest: &mut BytesMut, mut session: A) -> Decision {
-        let mut to_retry = Vec::new();
-
-        for tracker in session.requests() {
-            if !tracker.lasting && tracker.started.elapsed() >= self.timeout {
-                to_retry.push(tracker.id);
-            }
-        }
-
-        if to_retry.is_empty() {
-            op_continue()
-        } else {
-            let mut pkgs = Vec::new();
-
-            for key in to_retry {
-                let decision = self.retry(dest, &mut session, key);
-
-                if decision_is_done(&decision) {
-                    return decision;
-                } else {
-                    let outcome = decision?;
-
-                    pkgs.append(&mut outcome.produced_pkgs());
-                }
-            }
-
-            op_send_pkgs(pkgs)
-        }
-    }
-
-    pub(crate) fn connection_has_dropped<A>(
+    pub(crate) fn check_and_retry<A>(
         &mut self,
         dest: &mut BytesMut,
         mut session: A
@@ -347,19 +314,53 @@ impl OperationWrapper {
     where
         A: Session
     {
-        let pkgs = {
-            let mut buffer = VecReqBuffer::new(
-                &mut session, dest, self.creds.clone());
+        enum State {
+            HasDropped(Uuid),
+            Retry(Uuid),
+        }
 
-            self.inner.connection_has_dropped(&mut buffer)?;
+        let mut process = Vec::new();
+        let mut pkgs    = Vec::new();
 
-            buffer.pkgs
-        };
+        for tracker in session.requests() {
+            if tracker.conn_id != session.connection_id() {
+                process.push(State::HasDropped(tracker.id));
+            } else if tracker.has_timeout(self.timeout) {
+                process.push(State::Retry(tracker.id));
+            }
+        }
 
-        if pkgs.is_empty() {
-            op_done()
-        } else {
+        for state in process {
+            match state {
+                State::HasDropped(id) => {
+                    let tracker = session.pop(&id)?;
+
+                    let mut buffer = VecReqBuffer::new(
+                        &mut session,
+                        dest,
+                        self.creds.clone()
+                    );
+
+                    self.inner.connection_has_dropped(
+                        &mut buffer,
+                        tracker.cmd
+                    )?;
+
+                    pkgs.append(&mut buffer.pkgs);
+                },
+
+                State::Retry(id) => {
+                    let outcome = self.retry(dest, &mut session, id)?;
+
+                    pkgs.append(&mut outcome.produced_pkgs());
+                },
+            };
+        }
+
+        if session.has_running_requests() {
             op_send_pkgs(pkgs)
+        } else {
+            op_done()
         }
     }
 }
@@ -450,7 +451,8 @@ pub(crate) trait OperationImpl {
 
     fn connection_has_dropped(
         &mut self,
-        _: &mut ReqBuffer
+        _: &mut ReqBuffer,
+        _: Cmd
     ) -> ::std::io::Result<()>
     {
         self.report_operation_error(OperationError::ConnectionHasDropped);
