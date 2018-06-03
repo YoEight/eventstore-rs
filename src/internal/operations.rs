@@ -1767,4 +1767,21 @@ impl OperationImpl for Catchup {
             puller.report_operation_error(error);
         }
     }
+
+    fn connection_has_dropped(
+        &mut self,
+        buffer: &mut ReqBuffer,
+        _: Cmd
+    ) -> ::std::io::Result<()>
+    {
+        // When the connection has dropped, we proceed like we are starting
+        // this operation from scratch. The only state we don't update is
+        // the current `event_number` this catchup subscription is at.
+        self.has_caught_up      = false;
+        self.flying_event_count = 0;
+
+        let _ = buffer.push_req(self.initial_request())?;
+
+        Ok(())
+    }
 }
