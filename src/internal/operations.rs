@@ -1455,7 +1455,7 @@ fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationEr
     })
 }
 
-struct OperationExtractor<A, O: OperationImpl> {
+pub(crate) struct OperationExtractor<A, O: OperationImpl> {
     recv: mpsc::Receiver<Result<A, OperationError>>,
     inner: O,
 }
@@ -1499,52 +1499,42 @@ impl <A, O: OperationImpl> OperationExtractor<A, O> {
     }
 }
 
-pub(crate) struct Catchup {
-    puller: Option<OperationExtractor<types::ReadStreamStatus<types::StreamSlice>, ReadStreamEvents>>,
+pub(crate) struct CatchupWrapper<A: Catchup> {
+    inner: A,
+    checkpoint: Checkpoint,
+    puller: Option<OperationExtractor<A::Item, A::Puller>>,
     recv: mpsc::Receiver<types::SubEvent>,
     sender: mpsc::Sender<types::SubEvent>,
     sub: SubscribeToStream,
-    resolve_link_tos: bool,
-    require_master: bool,
-    stream_id: Chars,
-    event_number: i64,
-    max_count: i32,
     // Number of events the subscription received already.
     flying_event_count: usize,
     has_caught_up: bool,
-    last_position: Option<types::Position>,
-    last_event_number: Option<i64>,
 }
 
-impl Catchup {
+impl<A: Catchup> CatchupWrapper<A> {
     pub(crate) fn new(
+        inner: A,
         stream_id: Chars,
-        from: i64,
-        max_count: i32,
-        require_master: bool,
         resolve_link_tos: bool,
-        sender: mpsc::Sender<types::SubEvent>) -> Catchup
+        sender: mpsc::Sender<types::SubEvent>
+    ) -> CatchupWrapper<A>
     {
         let (tx, recv) = mpsc::channel(500);
         let mut sub    = SubscribeToStream::new(tx);
+        let checkpoint = inner.starting_checkpoint();
 
         sub.set_event_stream_id(stream_id.clone());
         sub.set_resolve_link_tos(resolve_link_tos);
 
-        Catchup {
+        CatchupWrapper {
+            inner,
+            checkpoint,
             puller: None,
             sub,
-            stream_id,
-            event_number: from,
-            max_count,
             sender,
             recv,
-            require_master,
-            resolve_link_tos,
             flying_event_count: 0,
             has_caught_up: false,
-            last_position: None,
-            last_event_number: None,
         }
     }
 
@@ -1569,20 +1559,22 @@ impl Catchup {
 
                 let can_be_dispatched = match evt.event_appeared() {
                     Some(event) => {
-                        let can_be_dispatched = match event.get_original_event() {
-                            Some(event) => match self.last_event_number {
-                                Some(ref old) => old < &event.event_number,
-                                None          => true,
-                            },
-
-                            None => unreachable!(),
-                        };
+                        let can_be_dispatched = self.inner.can_be_dispatched(
+                            &self.checkpoint,
+                            &event,
+                        );
 
                         // We update catchup tracking state if we can dispatch
                         // that event.
                         if can_be_dispatched {
-                            self.last_position     = event.position;
-                            self.last_event_number = event.get_original_event().map(|e| e.event_number);
+                            self.checkpoint.position = event
+                                .position
+                                .unwrap_or(types::Position::start());
+
+                            self.checkpoint.event_number = event
+                                .get_original_event()
+                                .map(|e| e.event_number)
+                                .unwrap();
                         }
 
                         can_be_dispatched
@@ -1609,23 +1601,7 @@ impl Catchup {
     fn pull(&mut self, buffer: &mut ReqBuffer)
         -> ::std::io::Result<()>
     {
-        let stream_id        = self.stream_id.clone();
-        let event_number     = self.event_number;
-        let max_count        = self.max_count;
-        let require_master   = self.require_master;
-        let resolve_link_tos = self.resolve_link_tos;
-
-        let extractor = OperationExtractor::new(|promise| {
-            let mut op = ReadStreamEvents::new(promise, types::ReadDirection::Forward);
-
-            op.set_event_stream_id(stream_id);
-            op.set_from_event_number(event_number);
-            op.set_max_count(max_count);
-            op.set_require_master(require_master);
-            op.set_resolve_link_tos(resolve_link_tos);
-
-            op
-        });
+        let extractor = self.inner.create_next_puller(&self.checkpoint);
 
         buffer.push_req(extractor.initial_request())?;
         self.puller = Some(extractor);
@@ -1643,7 +1619,172 @@ impl Catchup {
     }
 }
 
-impl OperationImpl for Catchup {
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct Checkpoint {
+    event_number: i64,
+    position: types::Position,
+}
+
+impl Checkpoint {
+    fn from_event_number(event_number: i64) -> Checkpoint {
+        Checkpoint {
+            event_number,
+            position: types::Position::start(),
+        }
+    }
+
+    fn from_position(position: types::Position) -> Checkpoint {
+        Checkpoint {
+            event_number: -1,
+            position,
+        }
+    }
+}
+
+pub(crate) enum Pull {
+    Success(Vec<types::ResolvedEvent>, bool),
+    Fail(OperationError),
+}
+
+pub(crate) trait Catchup {
+    type Puller: OperationImpl;
+    type Item;
+
+    fn starting_checkpoint(&self) -> Checkpoint;
+
+    fn create_next_puller(
+        &self,
+        &Checkpoint
+    ) -> OperationExtractor<Self::Item, Self::Puller>;
+
+    fn can_be_dispatched(&self, &Checkpoint, &types::ResolvedEvent) -> bool;
+
+    fn handle_pulled_item(&self, &mut Checkpoint, Self::Item) -> Pull;
+}
+
+pub(crate) struct RegularCatchup {
+    stream_id: Chars,
+    start_event_number: i64,
+    require_master: bool,
+    resolve_link_tos: bool,
+    max_count: u16,
+}
+
+impl RegularCatchup {
+    pub(crate) fn new(
+        stream_id: Chars,
+        start_event_number: i64,
+        require_master: bool,
+        resolve_link_tos: bool,
+        max_count: u16,
+    ) -> RegularCatchup
+    {
+        RegularCatchup {
+            stream_id,
+            start_event_number,
+            require_master,
+            resolve_link_tos,
+            max_count,
+        }
+    }
+}
+
+impl Catchup for RegularCatchup {
+    type Puller = ReadStreamEvents;
+    type Item   = types::ReadStreamStatus<types::StreamSlice>;
+
+    fn starting_checkpoint(&self) -> Checkpoint {
+        Checkpoint::from_event_number(self.start_event_number)
+    }
+
+    fn create_next_puller(
+        &self,
+        checkpoint: &Checkpoint,
+    ) -> OperationExtractor<types::ReadStreamStatus<types::StreamSlice>, ReadStreamEvents>
+    {
+        let stream_id        = self.stream_id.clone();
+        let event_number     = checkpoint.event_number;
+        let max_count        = self.max_count;
+        let require_master   = self.require_master;
+        let resolve_link_tos = self.resolve_link_tos;
+
+        OperationExtractor::new(|promise| {
+            let mut op = ReadStreamEvents::new(promise, types::ReadDirection::Forward);
+
+            op.set_event_stream_id(stream_id);
+            op.set_from_event_number(event_number);
+            op.set_max_count(max_count as i32);
+            op.set_require_master(require_master);
+            op.set_resolve_link_tos(resolve_link_tos);
+
+            op
+        })
+    }
+
+    fn can_be_dispatched(
+        &self,
+        checkpoint: &Checkpoint,
+        event: &types::ResolvedEvent
+    ) -> bool
+    {
+        match event.get_original_event() {
+            Some(event) => checkpoint.event_number < event.event_number,
+            None        => unreachable!(),
+        }
+    }
+
+    fn handle_pulled_item(
+        &self,
+        checkpoint: &mut Checkpoint,
+        item: types::ReadStreamStatus<types::StreamSlice>
+    ) -> Pull
+    {
+        match item {
+            types::ReadStreamStatus::Error(error) =>  match error {
+                types::ReadStreamError::NoStream(_) | types::ReadStreamError::NotModified(_) => {
+                    Pull::Success(Vec::new(), true)
+                },
+
+                types::ReadStreamError::StreamDeleted(stream) => {
+                    Pull::Fail(OperationError::StreamDeleted(stream))
+                },
+
+                types::ReadStreamError::AccessDenied(stream) => {
+                    Pull::Fail(OperationError::AccessDenied(stream))
+                },
+
+                types::ReadStreamError::Error(msg) => {
+                    Pull::Fail(OperationError::ServerError(Some(msg)))
+                },
+            },
+
+            types::ReadStreamStatus::Success(slice) => match slice.events() {
+                types::LocatedEvents::EndOfStream => {
+                    Pull::Success(Vec::new(), true)
+                },
+
+                types::LocatedEvents::Events { events, next } => {
+                    if let Some(ref next) = next {
+                        // TODO - There probably a chance I'm skipping an event
+                        // by looking directly to the next event number.
+                        checkpoint.event_number = *next;
+                    } else {
+                        let event = events.last().unwrap();
+
+                        checkpoint.event_number = event
+                            .get_original_event()
+                            .map(|e| e.event_number)
+                            .unwrap();
+                    }
+
+                    Pull::Success(events, next.is_none())
+                },
+            }
+        }
+    }
+}
+
+impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
     fn initial_request(&self) -> Request {
         self.sub.initial_request()
     }
@@ -1688,61 +1829,30 @@ impl OperationImpl for Catchup {
                         ImplResult::terminate()
                     },
 
-                    Ok(read_result) => match read_result {
-                        types::ReadStreamStatus::Error(error) =>  match error {
-                            types::ReadStreamError::NoStream(_) | types::ReadStreamError::NotModified(_) => {
-                                self.has_caught_up = true;
-                                self.propagate_events();
+                    Ok(item) => {
+                        let result = {
+                            self.inner.handle_pulled_item(&mut self.checkpoint, item)
+                        };
 
-                                ImplResult::done()
-                            },
-
-                            types::ReadStreamError::StreamDeleted(stream) => {
-                                self.report_operation_error(OperationError::StreamDeleted(stream));
-
-                                ImplResult::terminate()
-                            },
-
-                            types::ReadStreamError::AccessDenied(stream) => {
-                                self.report_operation_error(OperationError::AccessDenied(stream));
-
-                                ImplResult::terminate()
-                            },
-
-                            types::ReadStreamError::Error(msg) => {
-                                self.report_operation_error(OperationError::ServerError(Some(msg)));
-
-                                ImplResult::terminate()
-                            },
-                        },
-
-                        types::ReadStreamStatus::Success(slice) => match slice.events() {
-                            types::LocatedEvents::EndOfStream => {
-                                self.has_caught_up = true;
-                                self.propagate_events();
-
-                                ImplResult::done()
-                            },
-
-                            types::LocatedEvents::Events { events, next } => {
-                                for event in &events {
-                                    self.last_position     = event.position;
-                                    self.last_event_number = event.get_original_event()
-                                                                  .map(|e| e.event_number);
-                                }
-
+                        match result {
+                            Pull::Success(events, end_of_stream) => {
                                 let stream = iter_ok(events).map(types::SubEvent::EventAppeared);
                                 let _      = self.sender.clone().send_all(stream).wait();
 
-                                if let Some(next) = next {
-                                    self.event_number = next;
-                                    self.pull(buffer)?;
-                                } else {
+                                if end_of_stream {
                                     self.has_caught_up = true;
                                     self.propagate_events();
+                                } else {
+                                    self.pull(buffer)?;
                                 }
 
                                 ImplResult::done()
+                            },
+
+                            Pull::Fail(error) => {
+                                self.report_operation_error(error);
+
+                                ImplResult::terminate()
                             },
                         }
                     },

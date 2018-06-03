@@ -800,17 +800,28 @@ impl <'a> RegularCatchupSubscribe<'a> {
         let sender     = self.sender.clone();
         let (tx, rx)   = mpsc::channel(500);
         let tx_dup     = tx.clone();
-        let op         = operations::Catchup::new(self.stream_id,
-                                                  self.start_pos,
-                                                  self.batch_size as i32,
-                                                  self.require_master,
-                                                  self.resolve_link_tos,
-                                                  tx);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds_opt,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let inner = operations::RegularCatchup::new(
+            self.stream_id.clone(),
+            self.start_pos,
+            self.require_master,
+            self.resolve_link_tos,
+            self.batch_size,
+        );
+
+        let op = operations::CatchupWrapper::new(
+            inner,
+            self.stream_id,
+            self.resolve_link_tos,
+            tx
+        );
+
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds_opt,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
