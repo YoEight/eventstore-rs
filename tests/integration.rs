@@ -285,6 +285,18 @@ fn test_catchup_subscription(client: &Client) {
     assert_eq!(test_sub.count, 6, "We are testing proper state after catchup subscription: got {} expected {}.", test_sub.count, 3);
 }
 
+// $all stream being a special system stream, we can not test as precisely as
+// we did in `test_catchup_subscription`
+fn test_catchup_all_subscription(client: &Client) {
+    let sub = client.subscribe_to_all_from().execute();
+    let tmp = sub.consume(TestSub { count: 0, max: 10 });
+
+    assert_eq!(
+        tmp.count,
+        10,
+        "We are testing proper state after $all catchup");
+}
+
 #[test]
 fn all_round_operation_test() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
@@ -308,4 +320,5 @@ fn all_round_operation_test() {
     test_delete_stream(&client);
     test_volatile_subscription(&client);
     test_catchup_subscription(&client);
+    test_catchup_all_subscription(&client);
 }

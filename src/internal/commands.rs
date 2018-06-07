@@ -832,3 +832,79 @@ impl <'a> RegularCatchupSubscribe<'a> {
         }
     }
 }
+
+pub struct AllCatchupSubscribe<'a> {
+    resolve_link_tos: bool,
+    require_master: bool,
+    batch_size: u16,
+    start_pos: types::Position,
+    creds_opt: Option<types::Credentials>,
+    pub(crate) sender: Sender<Msg>,
+    settings: &'a types::Settings,
+}
+
+impl <'a> AllCatchupSubscribe<'a> {
+    pub(crate) fn new(sender: Sender<Msg>, settings: &types::Settings) -> AllCatchupSubscribe {
+        AllCatchupSubscribe {
+            resolve_link_tos: false,
+            require_master: false,
+            batch_size: 500,
+            start_pos: types::Position::start(),
+            sender,
+            creds_opt: None,
+            settings,
+        }
+    }
+
+    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> AllCatchupSubscribe<'a> {
+        AllCatchupSubscribe { resolve_link_tos, ..self }
+    }
+
+    pub fn require_master(self, require_master: bool) -> AllCatchupSubscribe<'a> {
+        AllCatchupSubscribe { require_master, ..self }
+    }
+
+    pub fn start_position(self, start_pos: types::Position) -> AllCatchupSubscribe<'a> {
+        AllCatchupSubscribe { start_pos, ..self }
+    }
+
+    pub fn credentials(self, creds: types::Credentials) -> AllCatchupSubscribe<'a> {
+        AllCatchupSubscribe { creds_opt: Some(creds), ..self }
+    }
+
+    pub fn execute(self) -> types::Subscription {
+        let sender     = self.sender.clone();
+        let (tx, rx)   = mpsc::channel(500);
+        let tx_dup     = tx.clone();
+
+        let inner = operations::AllCatchup::new(
+            self.start_pos,
+            self.require_master,
+            self.resolve_link_tos,
+            self.batch_size,
+        );
+
+        let op = operations::CatchupWrapper::new(
+            inner,
+            "".into(),
+            self.resolve_link_tos,
+            tx
+        );
+
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds_opt,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout
+        );
+
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
+
+        types::Subscription {
+            inner: tx_dup,
+            receiver: rx,
+            sender,
+        }
+    }
+}
+

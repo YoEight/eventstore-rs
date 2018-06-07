@@ -155,6 +155,11 @@ impl Client {
         commands::RegularCatchupSubscribe::new(self.sender.clone(), stream, &self.settings)
     }
 
+    pub fn subscribe_to_all_from(&self) -> commands::AllCatchupSubscribe
+    {
+        commands::AllCatchupSubscribe::new(self.sender.clone(), &self.settings)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }

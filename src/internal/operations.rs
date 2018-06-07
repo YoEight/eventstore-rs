@@ -1784,6 +1784,117 @@ impl Catchup for RegularCatchup {
     }
 }
 
+pub(crate) struct AllCatchup {
+    start_position: types::Position,
+    require_master: bool,
+    resolve_link_tos: bool,
+    max_count: u16,
+}
+
+impl AllCatchup {
+    pub(crate) fn new(
+        start_position: types::Position,
+        require_master: bool,
+        resolve_link_tos: bool,
+        max_count: u16,
+    ) -> AllCatchup
+    {
+        AllCatchup {
+            start_position,
+            require_master,
+            resolve_link_tos,
+            max_count,
+        }
+    }
+}
+
+impl Catchup for AllCatchup {
+    type Puller = ReadAllEvents;
+    type Item   = types::ReadStreamStatus<types::AllSlice>;
+
+    fn starting_checkpoint(&self) -> Checkpoint {
+        Checkpoint::from_position(self.start_position)
+    }
+
+    fn create_next_puller(
+        &self,
+        checkpoint: &Checkpoint,
+    ) -> OperationExtractor<types::ReadStreamStatus<types::AllSlice>, ReadAllEvents>
+    {
+        let position = checkpoint.position;
+        let max_count = self.max_count;
+        let require_master = self.require_master;
+        let resolve_link_tos = self.resolve_link_tos;
+
+        OperationExtractor::new(|promise| {
+            let mut op = ReadAllEvents::new(promise, types::ReadDirection::Forward);
+
+            op.set_from_position(position);
+            op.set_max_count(max_count as i32);
+            op.set_require_master(require_master);
+            op.set_resolve_link_tos(resolve_link_tos);
+
+            op
+        })
+    }
+
+    fn can_be_dispatched(
+        &self,
+        checkpoint: &Checkpoint,
+        event: &types::ResolvedEvent,
+    ) -> bool
+    {
+        let current = event.position.expect("Position must be defined for $all stream");
+
+        checkpoint.position < current
+    }
+
+    fn handle_pulled_item(
+        &self,
+        checkpoint: &mut Checkpoint,
+        item: types::ReadStreamStatus<types::AllSlice>,
+    ) -> Pull
+    {
+        match item {
+            types::ReadStreamStatus::Error(error) => match error {
+                types::ReadStreamError::AccessDenied(stream) => {
+                    Pull::Fail(OperationError::AccessDenied(stream))
+                },
+
+                types::ReadStreamError::Error(msg) => {
+                    Pull::Fail(OperationError::ServerError(Some(msg)))
+                },
+
+                types::ReadStreamError::NotModified(_) => {
+                    Pull::Success(Vec::new(), true)
+                },
+
+                _ => unreachable!(),
+            },
+
+            types::ReadStreamStatus::Success(slice) => match slice.events() {
+                types::LocatedEvents::EndOfStream => {
+                    Pull::Success(Vec::new(), true)
+                },
+
+                types::LocatedEvents::Events { events, next } => {
+                    if let Some(ref next) = next {
+                        checkpoint.position = *next;
+                    } else {
+                        let event = events.last().unwrap();
+
+                        checkpoint.position = event
+                            .position
+                            .expect("Position must be available for $all stream");
+                    }
+
+                    Pull::Success(events, next.is_none())
+                },
+            },
+        }
+    }
+}
+
 impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
     fn initial_request(&self) -> Request {
         self.sub.initial_request()
