@@ -733,7 +733,7 @@ impl <'a> SubscribeToStream<'a> {
 
     pub fn execute(self) -> types::Subscription {
         let sender   = self.sender.clone();
-        let (tx, rx) = mpsc::channel(500);
+        let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
         let tx_dup   = tx.clone();
         let mut op   = operations::SubscribeToStream::new(tx);
 
@@ -798,7 +798,7 @@ impl <'a> RegularCatchupSubscribe<'a> {
 
     pub fn execute(self) -> types::Subscription {
         let sender     = self.sender.clone();
-        let (tx, rx)   = mpsc::channel(500);
+        let (tx, rx)   = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
         let tx_dup     = tx.clone();
 
         let inner = operations::RegularCatchup::new(
@@ -874,7 +874,7 @@ impl <'a> AllCatchupSubscribe<'a> {
 
     pub fn execute(self) -> types::Subscription {
         let sender     = self.sender.clone();
-        let (tx, rx)   = mpsc::channel(500);
+        let (tx, rx)   = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
         let tx_dup     = tx.clone();
 
         let inner = operations::AllCatchup::new(

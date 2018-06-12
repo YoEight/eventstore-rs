@@ -1365,9 +1365,20 @@ impl SubscribeToStream {
         self.inner.set_resolve_link_tos(value);
     }
 
-    fn publish(&mut self, event: types::SubEvent) {
-        if let Err(_) = self.sub_bus.try_send(event) {
-            error!("ERROR: Max unprocessed events limit reached!");
+    fn publish(
+        &mut self,
+        event: types::SubEvent
+    ) -> ::std::io::Result<ImplResult>
+    {
+        let result = self.sub_bus
+            .clone()
+            .send(event)
+            .wait();
+
+        if result.is_ok() {
+            ImplResult::awaiting()
+        } else {
+            ImplResult::done()
         }
     }
 }
@@ -1407,9 +1418,7 @@ impl OperationImpl for SubscribeToStream {
                 };
 
                 self.state = SubState::Confirmed;
-                self.publish(confirmed);
-
-                ImplResult::awaiting()
+                self.publish(confirmed)
             },
 
             Cmd::StreamEventAppeared => {
@@ -1419,14 +1428,11 @@ impl OperationImpl for SubscribeToStream {
                 let event    = types::ResolvedEvent::new(response.take_event())?;
                 let appeared = types::SubEvent::EventAppeared(event);
 
-                self.publish(appeared);
-
-                ImplResult::awaiting()
+                self.publish(appeared)
             }
 
             Cmd::SubscriptionDropped => {
-                self.publish(types::SubEvent::Dropped);
-
+                let _ = self.publish(types::SubEvent::Dropped)?;
                 ImplResult::done()
             },
 
@@ -1440,7 +1446,7 @@ impl OperationImpl for SubscribeToStream {
     }
 
     fn report_operation_error(&mut self, _: OperationError) {
-        self.publish(types::SubEvent::Dropped);
+        let _ = self.publish(types::SubEvent::Dropped);
     }
 }
 
@@ -1482,11 +1488,13 @@ impl <A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
     }
 }
 
+pub const DEFAULT_BOUNDED_SIZE: usize = 500;
+
 impl <A, O: OperationImpl> OperationExtractor<A, O> {
     fn new<F>(maker: F) -> OperationExtractor<A, O>
         where F: FnOnce(Promise<A>) -> O
     {
-        let (recv, promise) = Promise::new(500);
+        let (recv, promise) = Promise::new(DEFAULT_BOUNDED_SIZE);
 
         OperationExtractor {
             recv,
@@ -1519,7 +1527,7 @@ impl<A: Catchup> CatchupWrapper<A> {
         sender: mpsc::Sender<types::SubEvent>
     ) -> CatchupWrapper<A>
     {
-        let (tx, recv) = mpsc::channel(500);
+        let (tx, recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
         let mut sub    = SubscribeToStream::new(tx);
         let checkpoint = inner.starting_checkpoint();
 
@@ -1538,7 +1546,9 @@ impl<A: Catchup> CatchupWrapper<A> {
         }
     }
 
-    fn propagate_events(&mut self) {
+    fn propagate_events(&mut self)
+        -> Result<(), mpsc::SendError<types::SubEvent>>
+    {
         use std::mem;
 
         let mut events = Vec::new();
@@ -1594,7 +1604,9 @@ impl<A: Catchup> CatchupWrapper<A> {
         self.flying_event_count = 0;
 
         if !events.is_empty() {
-            self.sender.clone().send_all(iter_ok(events)).wait().unwrap();
+            self.sender.clone().send_all(iter_ok(events)).wait().map(|_| ())
+        } else {
+            Ok(())
         }
     }
 
@@ -1916,13 +1928,22 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
             // Once we receive our subscription confirmation, we can start
             // reading the stream through.
             if cmd == Cmd::SubscriptionConfirmed {
-                self.propagate_events();
-                self.pull(buffer)?;
+                let result = self.propagate_events();
+
+                if result.is_ok() {
+                    self.pull(buffer)?;
+                } else {
+                    return ImplResult::terminate();
+                }
             } else {
                 // We propagate live event only if we already caugh up the head of
                 // the stream. Otherwise, we accumulate.
                 if self.has_caught_up {
-                    self.propagate_events();
+                    let result = self.propagate_events();
+
+                    if result.is_err() {
+                        return ImplResult::terminate();
+                    }
                 }
             }
 
@@ -1948,16 +1969,28 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
                         match result {
                             Pull::Success(events, end_of_stream) => {
                                 let stream = iter_ok(events).map(types::SubEvent::EventAppeared);
-                                let _      = self.sender.clone().send_all(stream).wait();
+                                let result = self.sender.clone().send_all(stream).wait();
 
-                                if end_of_stream {
-                                    self.has_caught_up = true;
-                                    self.propagate_events();
+                                // The subscription consumer might have asked
+                                // to close the subscription. If it's the
+                                // case, it means the `sender` is no longer
+                                // available.
+                                if result.is_ok() {
+                                    if end_of_stream {
+                                        self.has_caught_up = true;
+                                        let result = self.propagate_events();
+
+                                        if result.is_err() {
+                                            return ImplResult::terminate();
+                                        }
+                                    } else {
+                                        self.pull(buffer)?;
+                                    }
+
+                                    ImplResult::done()
                                 } else {
-                                    self.pull(buffer)?;
+                                    ImplResult::terminate()
                                 }
-
-                                ImplResult::done()
                             },
 
                             Pull::Fail(error) => {

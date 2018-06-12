@@ -711,75 +711,117 @@ pub struct Subscription {
     pub(crate) sender: Sender<Msg>,
 }
 
+struct State<A: SubscriptionConsumer> {
+    consumer: A,
+    confirmation_id: Option<Uuid>,
+    confirmation_requests: Vec<oneshot::Sender<()>>,
+}
+
+impl <A: SubscriptionConsumer> State<A> {
+    fn new(consumer: A) -> State<A> {
+        State {
+            consumer,
+            confirmation_id: None,
+            confirmation_requests: Vec::new(),
+        }
+    }
+
+    fn drain_requests(&mut self) {
+        for req in self.confirmation_requests.drain(..) {
+            let _ = req.send(());
+        }
+    }
+}
+
+enum OnEvent {
+    Continue,
+    Stop,
+}
+
+impl OnEvent {
+    fn is_stop(&self) -> bool {
+        match *self {
+            OnEvent::Continue => false,
+            OnEvent::Stop     => true,
+        }
+    }
+}
+
+fn on_event<C>(
+    sender: &Sender<Msg>,
+    state: &mut State<C>,
+    event: SubEvent
+) -> OnEvent
+    where
+        C: SubscriptionConsumer
+{
+    match event {
+        SubEvent::Confirmed { id, last_commit_position, last_event_number } => {
+            state.confirmation_id = Some(id);
+            state.drain_requests();
+            state.consumer.when_confirmed(id, last_commit_position, last_event_number);
+        },
+
+        SubEvent::EventAppeared(evt) => {
+            if let OnEventAppeared::Drop = state.consumer.when_event_appeared(evt) {
+                let id  = state.confirmation_id.expect("impossible situation when dropping subscription");
+                let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
+
+                sender.clone().send(Msg::Send(pkg)).wait().unwrap();
+                return OnEvent::Stop;
+            }
+        },
+
+        SubEvent::Dropped => {
+            state.consumer.when_dropped();
+            state.drain_requests();
+        },
+
+        SubEvent::HasBeenConfirmed(req) => {
+            if state.confirmation_id.is_some() {
+                let _ = req.send(());
+            } else {
+                state.confirmation_requests.push(req);
+            }
+        },
+    };
+
+    OnEvent::Continue
+}
+
+
 impl Subscription {
     pub fn consume<C>(self, consumer: C) -> C
         where C: SubscriptionConsumer
     {
-        self.consume_async(consumer).wait().unwrap()
+        let mut state = State::new(consumer);
+
+        for event in self.receiver.wait() {
+            if let Ok(event) = event {
+                let decision = on_event(&self.sender, &mut state, event);
+
+                if decision.is_stop() {
+                    break;
+                }
+            } else {
+                // It means the queue has been closed by the operation.
+                break;
+            }
+        }
+
+        state.consumer
     }
 
     pub fn consume_async<C>(self, init: C) -> impl Future<Item=C, Error=()>
         where C: SubscriptionConsumer
     {
-        struct State<A: SubscriptionConsumer> {
-            consumer: A,
-            confirmed: bool,
-            confirmation_requests: Vec<oneshot::Sender<()>>,
-        }
-
-        impl <A: SubscriptionConsumer> State<A> {
-            fn new(consumer: A) -> State<A> {
-                State {
-                    consumer,
-                    confirmed: false,
-                    confirmation_requests: Vec::new(),
-                }
-            }
-
-            fn drain_requests(&mut self) {
-                for req in self.confirmation_requests.drain(..) {
-                    let _ = req.send(());
-                }
-            }
-        }
-
-
-        let mut sub_id_opt = None;
-        let     sender     = self.sender.clone();
+        let sender = self.sender.clone();
 
         self.receiver.fold(State::new(init), move |mut state, event| {
-            match event {
-                SubEvent::Confirmed { id, last_commit_position, last_event_number } => {
-                    sub_id_opt = Some(id);
-
-                    state.drain_requests();
-                    state.consumer.when_confirmed(id, last_commit_position, last_event_number);
-                },
-
-                SubEvent::EventAppeared(evt) => {
-                    if let OnEventAppeared::Drop = state.consumer.when_event_appeared(evt) {
-                        let id  = sub_id_opt.take().expect("impossible situation when dropping subscription");
-                        let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
-
-                        sender.clone().send(Msg::Send(pkg)).wait().unwrap();
-                    }
-                },
-
-                SubEvent::Dropped => {
-                    state.consumer.when_dropped();
-                    state.drain_requests();
-                },
-
-                SubEvent::HasBeenConfirmed(req) => {
-                    if state.confirmed {
-                        let _ = req.send(());
-                    } else {
-                        state.confirmation_requests.push(req);
-                    }
-                },
+            match on_event(&sender, &mut state, event) {
+                OnEvent::Continue => Ok::<State<C>, ()>(state),
+                OnEvent::Stop     => Err(()),
             }
-
-            Ok::<State<C>, ()>(state)
         }).map(|state| state.consumer)
     }
 
