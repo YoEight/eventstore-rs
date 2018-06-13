@@ -347,6 +347,34 @@ fn test_update_persistent_subscription(client: &Client) {
     );
 }
 
+// We test we can successfully delete a persistent subscription.
+fn test_delete_persistent_subscription(client: &Client) {
+    let stream_id = fresh_stream_id("delete_persistent_sub");
+    let result = client
+        .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
+        .execute()
+        .wait()
+        .unwrap();
+
+    assert_eq!(
+        result,
+        types::PersistActionResult::Success,
+        "We expect create a persistent subscription to succeed",
+    );
+
+    let result = client
+        .delete_persistent_subscription(stream_id, "a_group_name".to_string())
+        .execute()
+        .wait()
+        .unwrap();
+
+    assert_eq!(
+        result,
+        types::PersistActionResult::Success,
+        "We expect deleting a persistent subscription to succeed",
+    );
+}
+
 #[test]
 fn all_round_operation_test() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
@@ -373,4 +401,5 @@ fn all_round_operation_test() {
     test_catchup_all_subscription(&client);
     test_create_persistent_subscription(&client);
     test_update_persistent_subscription(&client);
+    test_delete_persistent_subscription(&client);
 }

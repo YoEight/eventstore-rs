@@ -1042,3 +1042,58 @@ impl<'a> UpdatePersistentSubscription<'a> {
         single_value_future(rcv)
     }
 }
+
+pub struct DeletePersistentSubscription<'a> {
+    stream_id: Chars,
+    group_name: Chars,
+    settings: &'a types::Settings,
+    creds: Option<types::Credentials>,
+    pub(crate) sender: Sender<Msg>,
+}
+
+impl<'a> DeletePersistentSubscription<'a> {
+    pub(crate)
+    fn new<S>(
+        stream_id: S,
+        group_name: S,
+        sender: Sender<Msg>,
+        settings: &'a types::Settings,
+    ) -> DeletePersistentSubscription
+        where S: Into<Chars>
+    {
+        DeletePersistentSubscription {
+            stream_id: stream_id.into(),
+            group_name: group_name.into(),
+            sender,
+            settings,
+            creds: None,
+        }
+    }
+
+    pub fn credentials(
+        self,
+        creds: types::Credentials,
+        ) -> DeletePersistentSubscription<'a>
+    {
+        DeletePersistentSubscription { creds: Some(creds), ..self }
+    }
+
+    pub fn execute(self)
+        -> impl Future<Item=types::PersistActionResult, Error=OperationError>
+    {
+        let     (rcv, promise) = operations::Promise::new(1);
+        let mut op             = operations::DeletePersistentSubscription::new(promise);
+
+        op.set_subscription_group_name(self.group_name);
+        op.set_event_stream_id(self.stream_id);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
+
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
+
+        single_value_future(rcv)
+    }
+}

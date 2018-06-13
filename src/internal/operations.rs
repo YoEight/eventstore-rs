@@ -14,7 +14,7 @@ use internal::package::Pkg;
 use internal::timespan;
 use types::{ self, Slice };
 
-use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult, UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult };
+use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult, UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult, DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult };
 
 #[derive(Debug, Clone)]
 pub enum OperationError {
@@ -2207,6 +2207,76 @@ impl OperationImpl for UpdatePersistentSubscription {
             },
 
             UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::AccessDenied => {
+                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+            },
+        };
+
+        self.promise.accept(result);
+
+        ImplResult::done()
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+}
+
+pub struct DeletePersistentSubscription {
+    inner: messages::DeletePersistentSubscription,
+    promise: Promise<types::PersistActionResult>,
+}
+
+impl DeletePersistentSubscription {
+    pub fn new(promise: Promise<types::PersistActionResult>)
+        -> DeletePersistentSubscription
+    {
+        DeletePersistentSubscription {
+            inner: messages::DeletePersistentSubscription::new(),
+            promise,
+        }
+    }
+
+    pub fn set_subscription_group_name(&mut self, name: Chars) {
+        self.inner.set_subscription_group_name(name);
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+}
+
+impl OperationImpl for DeletePersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::DeletePersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        Cmd::DeletePersistentSubscriptionCompleted == cmd
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        let response: messages::DeletePersistentSubscriptionCompleted =
+            pkg.to_message()?;
+
+        let result = match response.get_result() {
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Success => {
+                types::PersistActionResult::Success
+            },
+
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::DoesNotExist => {
+                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
+            },
+
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Fail => {
+                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+            },
+
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::AccessDenied => {
                 types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
             },
         };

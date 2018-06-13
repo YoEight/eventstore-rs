@@ -172,6 +172,12 @@ impl Client {
         commands::UpdatePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
     }
 
+    pub fn delete_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::DeletePersistentSubscription
+        where S: Into<Chars>
+    {
+        commands::DeletePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
+    }
+
     pub fn shutdown(&self) {
         self.sender.clone().send(Msg::Shutdown).wait().unwrap();
     }
