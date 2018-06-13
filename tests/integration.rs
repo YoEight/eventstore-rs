@@ -314,6 +314,39 @@ fn test_create_persistent_subscription(client: &Client) {
     );
 }
 
+// We test we can successfully update a persistent subscription.
+fn test_update_persistent_subscription(client: &Client) {
+    let stream_id = fresh_stream_id("update_persistent_sub");
+    let result = client
+        .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
+        .execute()
+        .wait()
+        .unwrap();
+
+    assert_eq!(
+        result,
+        types::PersistActionResult::Success,
+        "We expect create a persistent subscription to succeed",
+    );
+
+    let mut setts = types::PersistentSubscriptionSettings::default();
+
+    setts.max_retry_count = 1000;
+
+    let result = client
+        .update_persistent_subscription(stream_id, "a_group_name".to_string())
+        .settings(setts)
+        .execute()
+        .wait()
+        .unwrap();
+
+    assert_eq!(
+        result,
+        types::PersistActionResult::Success,
+        "We expect updating a persistent subscription to succeed",
+    );
+}
+
 #[test]
 fn all_round_operation_test() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
@@ -339,4 +372,5 @@ fn all_round_operation_test() {
     test_catchup_subscription(&client);
     test_catchup_all_subscription(&client);
     test_create_persistent_subscription(&client);
+    test_update_persistent_subscription(&client);
 }

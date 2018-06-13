@@ -14,7 +14,7 @@ use internal::package::Pkg;
 use internal::timespan;
 use types::{ self, Slice };
 
-use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult };
+use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult, UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult };
 
 #[derive(Debug, Clone)]
 pub enum OperationError {
@@ -2120,6 +2120,93 @@ impl OperationImpl for CreatePersistentSubscription {
             },
 
             CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AccessDenied => {
+                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+            },
+        };
+
+        self.promise.accept(result);
+
+        ImplResult::done()
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+}
+
+pub struct UpdatePersistentSubscription {
+    inner: messages::UpdatePersistentSubscription,
+    promise: Promise<types::PersistActionResult>,
+}
+
+impl UpdatePersistentSubscription {
+    pub fn new(promise: Promise<types::PersistActionResult>)
+        -> UpdatePersistentSubscription
+    {
+        UpdatePersistentSubscription {
+            inner: messages::UpdatePersistentSubscription::new(),
+            promise,
+        }
+    }
+
+    pub fn set_subscription_group_name(&mut self, name: Chars) {
+        self.inner.set_subscription_group_name(name);
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub fn set_settings(&mut self, settings: types::PersistentSubscriptionSettings) {
+        self.inner.set_resolve_link_tos(settings.resolve_link_tos);
+        self.inner.set_start_from(settings.start_from);
+        self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+        self.inner.set_record_statistics(settings.extra_stats);
+        self.inner.set_live_buffer_size(settings.live_buf_size as i32);
+        self.inner.set_read_batch_size(settings.read_batch_size as i32);
+        self.inner.set_buffer_size(settings.history_buf_size as i32);
+        self.inner.set_max_retry_count(settings.max_retry_count as i32);
+        self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
+        self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+        self.inner.set_checkpoint_max_count(settings.max_checkpoint_count as i32);
+        self.inner.set_checkpoint_min_count(settings.min_checkpoint_count as i32);
+        self.inner.set_subscriber_max_count(settings.max_subs_count as i32);
+        self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
+    }
+}
+
+impl OperationImpl for UpdatePersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::UpdatePersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        Cmd::UpdatePersistentSubscriptionCompleted == cmd
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        let response: messages::UpdatePersistentSubscriptionCompleted =
+            pkg.to_message()?;
+
+        let result = match response.get_result() {
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Success => {
+                types::PersistActionResult::Success
+            },
+
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::DoesNotExist => {
+                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
+            },
+
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Fail => {
+                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+            },
+
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::AccessDenied => {
                 types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
             },
         };
