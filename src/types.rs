@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
 use futures::{ Future, Stream, Sink };
+use futures::stream::iter_ok;
 use futures::sync::mpsc::{ Receiver, Sender };
 use futures::sync::oneshot;
 use protobuf::Chars;
@@ -688,10 +689,16 @@ pub(crate) enum SubEvent {
     Confirmed {
         id: Uuid,
         last_commit_position: i64,
-        last_event_number: i64
+        last_event_number: i64,
+        // If defined, it means we are in a persistent subscription.
+        persistent_id: Option<Chars>,
     },
 
-    EventAppeared(ResolvedEvent),
+    EventAppeared {
+        event: ResolvedEvent,
+        retry_count: usize,
+    },
+
     HasBeenConfirmed(oneshot::Sender<()>),
     Dropped
 }
@@ -699,8 +706,15 @@ pub(crate) enum SubEvent {
 impl SubEvent {
     pub(crate) fn event_appeared(&self) -> Option<&ResolvedEvent> {
         match self {
-            SubEvent::EventAppeared(ref event) => Some(event),
-            _                                  => None,
+            SubEvent::EventAppeared{ ref event, .. } => Some(event),
+            _                                        => None,
+        }
+    }
+
+    pub(crate) fn new_event_appeared(event: ResolvedEvent) -> SubEvent {
+        SubEvent::EventAppeared {
+            event,
+            retry_count: 0,
         }
     }
 }
@@ -714,7 +728,9 @@ pub struct Subscription {
 struct State<A: SubscriptionConsumer> {
     consumer: A,
     confirmation_id: Option<Uuid>,
+    persistent_id: Option<Chars>,
     confirmation_requests: Vec<oneshot::Sender<()>>,
+    buffer: BytesMut,
 }
 
 impl <A: SubscriptionConsumer> State<A> {
@@ -722,7 +738,9 @@ impl <A: SubscriptionConsumer> State<A> {
         State {
             consumer,
             confirmation_id: None,
+            persistent_id: None,
             confirmation_requests: Vec::new(),
+            buffer: BytesMut::new(),
         }
     }
 
@@ -747,6 +765,29 @@ impl OnEvent {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum NakAction {
+    Unknown,
+    Park,
+    Retry,
+    Skip,
+    Stop,
+}
+
+impl NakAction {
+    fn to_internal_nak_action(self)
+        -> messages::PersistentSubscriptionNakEvents_NakAction
+    {
+        match self {
+            NakAction::Unknown => messages::PersistentSubscriptionNakEvents_NakAction::Unknown,
+            NakAction::Retry   => messages::PersistentSubscriptionNakEvents_NakAction::Retry,
+            NakAction::Skip    => messages::PersistentSubscriptionNakEvents_NakAction::Skip,
+            NakAction::Park    => messages::PersistentSubscriptionNakEvents_NakAction::Park,
+            NakAction::Stop    => messages::PersistentSubscriptionNakEvents_NakAction::Stop,
+        }
+    }
+}
+
 fn on_event<C>(
     sender: &Sender<Msg>,
     state: &mut State<C>,
@@ -756,14 +797,90 @@ fn on_event<C>(
         C: SubscriptionConsumer
 {
     match event {
-        SubEvent::Confirmed { id, last_commit_position, last_event_number } => {
+        SubEvent::Confirmed { id, last_commit_position, last_event_number, persistent_id } => {
             state.confirmation_id = Some(id);
+            state.persistent_id = persistent_id;
             state.drain_requests();
             state.consumer.when_confirmed(id, last_commit_position, last_event_number);
         },
 
-        SubEvent::EventAppeared(evt) => {
-            if let OnEventAppeared::Drop = state.consumer.when_event_appeared(evt) {
+        SubEvent::EventAppeared { event, retry_count } => {
+            let decision = match state.persistent_id.as_ref() {
+                Some(sub_id) => {
+                    let mut env  = PersistentSubscriptionEnv::new(retry_count);
+                    let decision = state.consumer.when_event_appeared(&mut env, event);
+
+                    let acks = env.acks;
+
+                    if !acks.is_empty() {
+                        let mut msg = messages::PersistentSubscriptionAckEvents::new();
+
+                        msg.set_subscription_id(sub_id.clone());
+
+                        for id in acks {
+                            // Reserves enough to store an UUID (which is 16 bytes long).
+                            state.buffer.reserve(16);
+                            state.buffer.put_slice(id.as_bytes());
+
+                            let bytes = state.buffer.take().freeze();
+                            msg.mut_processed_event_ids().push(bytes);
+                        }
+
+                        let pkg = Pkg::from_message(
+                            Cmd::PersistentSubscriptionAckEvents,
+                            None,
+                            &msg
+                        ).unwrap();
+
+                        sender.clone().send(Msg::Send(pkg)).wait().unwrap();
+                    }
+
+                    let naks     = env.naks;
+                    let mut pkgs = Vec::new();
+
+                    if !naks.is_empty() {
+                        for naked in naks {
+                            let mut msg       = messages::PersistentSubscriptionNakEvents::new();
+                            let mut bytes_vec = Vec::with_capacity(naked.ids.len());
+
+                            msg.set_subscription_id(sub_id.clone());
+
+                            for id in naked.ids {
+                                // Reserves enough to store an UUID (which is 16 bytes long).
+                                state.buffer.reserve(16);
+                                state.buffer.put_slice(id.as_bytes());
+
+                                let bytes = state.buffer.take().freeze();
+                                bytes_vec.push(bytes);
+                            }
+
+                            msg.set_processed_event_ids(bytes_vec);
+                            msg.set_message(naked.message);
+                            msg.set_action(naked.action.to_internal_nak_action());
+
+                            let pkg = Pkg::from_message(
+                                Cmd::PersistentSubscriptionAckEvents,
+                                None,
+                                &msg
+                            ).unwrap();
+
+                            pkgs.push(pkg);
+                        }
+
+                        let pkgs = pkgs.into_iter().map(Msg::Send);
+
+                        sender.clone().send_all(iter_ok(pkgs)).wait().unwrap();
+                    }
+
+                    decision
+                },
+
+                None => {
+                   state.consumer.when_event_appeared(&mut NoopSubscriptionEnv, event)
+                },
+            };
+
+            if let OnEventAppeared::Drop = decision {
                 let id  = state.confirmation_id.expect("impossible situation when dropping subscription");
                 let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
 
@@ -837,14 +954,78 @@ impl Subscription {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum OnEventAppeared {
     Continue,
     Drop,
 }
 
+struct NakedEvents {
+    ids: Vec<Uuid>,
+    action: NakAction,
+    message: Chars,
+}
+
+pub trait SubscriptionEnv {
+    fn push_ack(&mut self, Uuid);
+    fn push_nak_with_message<S: Into<Chars>>(&mut self, Vec<Uuid>, NakAction, S);
+    fn current_event_retry_count(&self) -> usize;
+
+    fn push_nak(&mut self, ids: Vec<Uuid>, action: NakAction) {
+        self.push_nak_with_message(ids, action, "");
+    }
+}
+
+struct NoopSubscriptionEnv;
+
+impl SubscriptionEnv for NoopSubscriptionEnv {
+    fn push_ack(&mut self, _: Uuid) {}
+    fn push_nak_with_message<S: Into<Chars>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S) {}
+    fn current_event_retry_count(&self) -> usize { 0 }
+}
+
+struct PersistentSubscriptionEnv {
+    acks: Vec<Uuid>,
+    naks: Vec<NakedEvents>,
+    retry_count: usize,
+}
+
+impl PersistentSubscriptionEnv {
+    fn new(retry_count: usize) -> PersistentSubscriptionEnv {
+        PersistentSubscriptionEnv {
+            acks: Vec::new(),
+            naks: Vec::new(),
+            retry_count,
+        }
+    }
+}
+
+impl SubscriptionEnv for PersistentSubscriptionEnv {
+    fn push_ack(&mut self, id: Uuid) {
+        self.acks.push(id);
+    }
+
+    fn push_nak_with_message<S: Into<Chars>>(&mut self, ids: Vec<Uuid>, action: NakAction, message: S) {
+        let naked = NakedEvents {
+            ids,
+            action,
+            message: message.into(),
+        };
+
+        self.naks.push(naked);
+    }
+
+    fn current_event_retry_count(&self) -> usize {
+        self.retry_count
+    }
+}
+
 pub trait SubscriptionConsumer {
-    fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64);
-    fn when_event_appeared(&mut self, event: ResolvedEvent) -> OnEventAppeared;
+    fn when_confirmed(&mut self, Uuid, i64, i64);
+
+    fn when_event_appeared<E>(&mut self, &mut E, ResolvedEvent) -> OnEventAppeared
+        where E: SubscriptionEnv;
+
     fn when_dropped(&mut self);
 }
 

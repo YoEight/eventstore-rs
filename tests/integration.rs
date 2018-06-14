@@ -11,7 +11,7 @@ use std::time::Duration;
 use std::thread::spawn;
 use futures::Future;
 use eventstore::client::Client;
-use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata };
+use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata, SubscriptionEnv };
 use uuid::Uuid;
 
 struct TestSub {
@@ -25,10 +25,48 @@ impl types::SubscriptionConsumer for TestSub {
             id, last_commit_position, last_event_number);
     }
 
-    fn when_event_appeared(&mut self, event: types::ResolvedEvent) -> types::OnEventAppeared {
+    fn when_event_appeared<E>(&mut self, _: &mut E, event: types::ResolvedEvent)
+        -> types::OnEventAppeared
+        where E: SubscriptionEnv
+    {
         debug!("Event appeared: {:?}", event);
 
         self.count += 1;
+
+        if self.count == self.max {
+            types::OnEventAppeared::Drop
+        } else {
+            types::OnEventAppeared::Continue
+        }
+    }
+
+    fn when_dropped(&mut self) {
+        debug!("Subscription dropped!");
+    }
+}
+
+struct PersistentTestSub {
+    count: usize,
+    max: usize,
+}
+
+impl types::SubscriptionConsumer for PersistentTestSub {
+    fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
+        debug!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
+            id, last_commit_position, last_event_number);
+    }
+
+    fn when_event_appeared<E>(&mut self, env: &mut E, event: types::ResolvedEvent)
+        -> types::OnEventAppeared
+        where E: SubscriptionEnv
+    {
+        debug!("Event appeared: {:?}", event);
+
+        self.count += 1;
+
+        let event = event.get_original_event().unwrap();
+
+        env.push_ack(event.event_id);
 
         if self.count == self.max {
             types::OnEventAppeared::Drop
@@ -375,6 +413,34 @@ fn test_delete_persistent_subscription(client: &Client) {
     );
 }
 
+fn test_persistent_subscription(client: &Client) {
+    let stream_id = fresh_stream_id("persistent_subscription");
+    let events    = generate_events("persistent_subscription_test", 5);
+
+    let _ = client
+        .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
+        .execute()
+        .wait()
+        .unwrap();
+
+    let _ = client.write_events(stream_id.clone())
+                  .append_events(events)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+    let sub = client.connect_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
+                    .execute();
+
+    let test_sub = sub.consume(PersistentTestSub { count: 0, max: 5 });
+
+    assert_eq!(
+        test_sub.count,
+        5,
+        "We are testing proper state after persistent subscription: got {} expected {}", test_sub.count, 5
+    );
+}
+
 #[test]
 fn all_round_operation_test() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
@@ -402,4 +468,5 @@ fn all_round_operation_test() {
     test_create_persistent_subscription(&client);
     test_update_persistent_subscription(&client);
     test_delete_persistent_subscription(&client);
+    test_persistent_subscription(&client);
 }

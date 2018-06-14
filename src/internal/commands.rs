@@ -1097,3 +1097,69 @@ impl<'a> DeletePersistentSubscription<'a> {
         single_value_future(rcv)
     }
 }
+
+pub struct ConnectToPersistentSubscription<'a> {
+    stream_id: Chars,
+    group_name: Chars,
+    settings: &'a types::Settings,
+    batch_size: u16,
+    creds: Option<types::Credentials>,
+    pub(crate) sender: Sender<Msg>,
+}
+
+impl<'a> ConnectToPersistentSubscription<'a> {
+    pub(crate) fn new<S>(
+        stream_id: S,
+        group_name: S,
+        sender: Sender<Msg>,
+        settings: &'a types::Settings,
+    ) -> ConnectToPersistentSubscription
+        where S: Into<Chars>
+    {
+        ConnectToPersistentSubscription {
+            stream_id: stream_id.into(),
+            group_name: group_name.into(),
+            sender,
+            settings,
+            batch_size: 10,
+            creds: None,
+        }
+    }
+
+    pub fn credentials(self, creds: types::Credentials)
+        -> ConnectToPersistentSubscription<'a>
+    {
+        ConnectToPersistentSubscription { creds: Some(creds), ..self }
+    }
+
+    pub fn batch_size(self, batch_size: u16)
+        -> ConnectToPersistentSubscription<'a>
+    {
+        ConnectToPersistentSubscription { batch_size, ..self }
+    }
+
+    pub fn execute(self) -> types::Subscription {
+        let sender   = self.sender.clone();
+        let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
+        let tx_dup   = tx.clone();
+        let mut op   = operations::ConnectToPersistentSubscription::new(tx);
+
+        op.set_event_stream_id(self.stream_id);
+        op.set_group_name(self.group_name);
+        op.set_buffer_size(self.batch_size);
+
+        let op = operations::OperationWrapper::new(op,
+                                                   self.creds,
+                                                   self.settings.operation_retry.to_usize(),
+                                                   self.settings.operation_timeout);
+
+        self.sender.send(Msg::new_op(op)).wait().unwrap();
+
+        types::Subscription {
+            inner: tx_dup,
+            receiver: rx,
+            sender,
+        }
+    }
+
+}

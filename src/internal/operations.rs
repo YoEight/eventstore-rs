@@ -1416,6 +1416,7 @@ impl OperationImpl for SubscribeToStream {
                     id: pkg.correlation,
                     last_commit_position,
                     last_event_number,
+                    persistent_id: None,
                 };
 
                 self.state = SubState::Confirmed;
@@ -1427,7 +1428,10 @@ impl OperationImpl for SubscribeToStream {
                     pkg.to_message()?;
 
                 let event    = types::ResolvedEvent::new(response.take_event())?;
-                let appeared = types::SubEvent::EventAppeared(event);
+                let appeared = types::SubEvent::EventAppeared {
+                    event,
+                    retry_count: 0,
+                };
 
                 self.publish(appeared)
             }
@@ -1969,7 +1973,7 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
 
                         match result {
                             Pull::Success(events, end_of_stream) => {
-                                let stream = iter_ok(events).map(types::SubEvent::EventAppeared);
+                                let stream = iter_ok(events).map(types::SubEvent::new_event_appeared);
                                 let result = self.sender.clone().send_all(stream).wait();
 
                                 // The subscription consumer might have asked
@@ -2288,5 +2292,117 @@ impl OperationImpl for DeletePersistentSubscription {
 
     fn report_operation_error(&mut self, error: OperationError) {
         self.promise.reject(error);
+    }
+}
+
+pub(crate) struct ConnectToPersistentSubscription {
+    sub_bus: mpsc::Sender<types::SubEvent>,
+    inner: messages::ConnectToPersistentSubscription,
+}
+
+impl ConnectToPersistentSubscription {
+    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>)
+        -> ConnectToPersistentSubscription
+    {
+        ConnectToPersistentSubscription {
+            sub_bus,
+            inner: messages::ConnectToPersistentSubscription::new(),
+        }
+    }
+
+    pub(crate) fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub(crate) fn set_group_name(&mut self, group_name: Chars) {
+        self.inner.set_subscription_id(group_name);
+    }
+
+    pub(crate) fn set_buffer_size(&mut self, size: u16) {
+        self.inner.set_allowed_in_flight_messages(size as i32);
+    }
+
+    fn publish(
+        &mut self,
+        event: types::SubEvent,
+    ) -> ::std::io::Result<ImplResult>
+    {
+        let result = self.sub_bus
+            .clone()
+            .send(event)
+            .wait();
+
+        if result.is_ok() {
+            ImplResult::awaiting()
+        } else {
+            ImplResult::done()
+        }
+    }
+}
+
+impl OperationImpl for ConnectToPersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::ConnectToPersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        match cmd {
+            Cmd::SubscriptionDropped                       => true,
+            Cmd::PersistentSubscriptionConfirmation        => true,
+            Cmd::PersistentSubscriptionStreamEventAppeared => true,
+            _                                              => false,
+        }
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        match pkg.cmd {
+            Cmd::PersistentSubscriptionConfirmation => {
+                let mut response: messages::PersistentSubscriptionConfirmation =
+                    pkg.to_message()?;
+
+                let last_commit_position = response.get_last_commit_position();
+                let last_event_number    = response.get_last_event_number();
+                let persistent_id        = response.take_subscription_id();
+
+                let confirmed = types::SubEvent::Confirmed {
+                    id: pkg.correlation,
+                    last_commit_position,
+                    last_event_number,
+                    persistent_id: Some(persistent_id),
+                };
+
+                self.publish(confirmed)
+            },
+
+            Cmd::PersistentSubscriptionStreamEventAppeared => {
+                let mut response: messages::PersistentSubscriptionStreamEventAppeared =
+                    pkg.to_message()?;
+
+                let event       = types::ResolvedEvent::new_from_indexed(response.take_event())?;
+                let retry_count = response.get_retryCount() as usize;
+                let appeared    = types::SubEvent::EventAppeared {
+                    event,
+                    retry_count,
+                };
+
+                self.publish(appeared)
+            },
+
+            Cmd::SubscriptionDropped => {
+                let _ = self.publish(types::SubEvent::Dropped)?;
+                ImplResult::done()
+            },
+
+            _ => unreachable!(),
+        }
+    }
+
+    fn report_operation_error(&mut self, _: OperationError) {
+        let _ = self.publish(types::SubEvent::Dropped);
     }
 }
