@@ -71,7 +71,7 @@ impl Builder {
 // This function will be deleted once `Duration::subsec_millis` lands on
 // stable.
 const NANOS_PER_MILLI: u32 = 1_000_000;
-fn duration_subsec_millis(duration: &Duration) -> u32 { duration.subsec_nanos() / NANOS_PER_MILLI }
+pub fn duration_subsec_millis(duration: &Duration) -> u32 { duration.subsec_nanos() / NANOS_PER_MILLI }
 
 impl Timespan {
     fn from_ticks(ticks: u64) -> Timespan {

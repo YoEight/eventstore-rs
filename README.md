@@ -3,7 +3,7 @@ Rust GetEventStore TCP Client.
 
 [![Talk and exchange ideas in our dedicated Discord Server!]()](https://discord.gg/x7q37jJ)
 
-## Work in Progress
+## State of implemented features
 
 - [x] Can connect to GetEventStore 4.* servers.
 - [x] Connection health tracking.
@@ -15,7 +15,7 @@ Rust GetEventStore TCP Client.
 - [x] Delete stream.
 - [x] Volatile Subscriptions.
 - [x] Catchup Subscriptions.
-- [ ] Persistent Subscriptions.
+- [x] Persistent Subscriptions.
 - [ ] Support connection to server clusters.
 - [ ] Support SSL connection.
 

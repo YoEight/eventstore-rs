@@ -11,9 +11,10 @@ use uuid::Uuid;
 use internal::command::Cmd;
 use internal::messages;
 use internal::package::Pkg;
+use internal::timespan;
 use types::{ self, Slice };
 
-use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult };
+use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult, UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult, DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult };
 
 #[derive(Debug, Clone)]
 pub enum OperationError {
@@ -1415,6 +1416,7 @@ impl OperationImpl for SubscribeToStream {
                     id: pkg.correlation,
                     last_commit_position,
                     last_event_number,
+                    persistent_id: None,
                 };
 
                 self.state = SubState::Confirmed;
@@ -1426,7 +1428,10 @@ impl OperationImpl for SubscribeToStream {
                     pkg.to_message()?;
 
                 let event    = types::ResolvedEvent::new(response.take_event())?;
-                let appeared = types::SubEvent::EventAppeared(event);
+                let appeared = types::SubEvent::EventAppeared {
+                    event,
+                    retry_count: 0,
+                };
 
                 self.publish(appeared)
             }
@@ -1968,7 +1973,7 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
 
                         match result {
                             Pull::Success(events, end_of_stream) => {
-                                let stream = iter_ok(events).map(types::SubEvent::EventAppeared);
+                                let stream = iter_ok(events).map(types::SubEvent::new_event_appeared);
                                 let result = self.sender.clone().send_all(stream).wait();
 
                                 // The subscription consumer might have asked
@@ -2037,5 +2042,367 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
         let _ = buffer.push_req(self.initial_request())?;
 
         Ok(())
+    }
+}
+
+fn duration_to_millis(duration: &::std::time::Duration) -> i32 {
+    let secs_as_millis = duration.as_secs() as i32 * 1_000;
+
+    secs_as_millis + timespan::duration_subsec_millis(duration) as i32
+}
+
+pub struct CreatePersistentSubscription {
+    inner: messages::CreatePersistentSubscription,
+    promise: Promise<types::PersistActionResult>,
+}
+
+impl CreatePersistentSubscription {
+    pub fn new(promise: Promise<types::PersistActionResult>)
+        -> CreatePersistentSubscription
+    {
+        CreatePersistentSubscription {
+            inner: messages::CreatePersistentSubscription::new(),
+            promise,
+        }
+    }
+
+    pub fn set_subscription_group_name(&mut self, name: Chars) {
+        self.inner.set_subscription_group_name(name);
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub fn set_settings(&mut self, settings: types::PersistentSubscriptionSettings) {
+        self.inner.set_resolve_link_tos(settings.resolve_link_tos);
+        self.inner.set_start_from(settings.start_from);
+        self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+        self.inner.set_record_statistics(settings.extra_stats);
+        self.inner.set_live_buffer_size(settings.live_buf_size as i32);
+        self.inner.set_read_batch_size(settings.read_batch_size as i32);
+        self.inner.set_buffer_size(settings.history_buf_size as i32);
+        self.inner.set_max_retry_count(settings.max_retry_count as i32);
+        self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
+        self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+        self.inner.set_checkpoint_max_count(settings.max_checkpoint_count as i32);
+        self.inner.set_checkpoint_min_count(settings.min_checkpoint_count as i32);
+        self.inner.set_subscriber_max_count(settings.max_subs_count as i32);
+        self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
+    }
+}
+
+impl OperationImpl for CreatePersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::CreatePersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        Cmd::CreatePersistentSubscriptionCompleted == cmd
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        let response: messages::CreatePersistentSubscriptionCompleted =
+            pkg.to_message()?;
+
+        let result = match response.get_result() {
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Success => {
+                types::PersistActionResult::Success
+            },
+
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AlreadyExists => {
+                types::PersistActionResult::Failure(types::PersistActionError::AlreadyExists)
+            },
+
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Fail => {
+                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+            },
+
+            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AccessDenied => {
+                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+            },
+        };
+
+        self.promise.accept(result);
+
+        ImplResult::done()
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+}
+
+pub struct UpdatePersistentSubscription {
+    inner: messages::UpdatePersistentSubscription,
+    promise: Promise<types::PersistActionResult>,
+}
+
+impl UpdatePersistentSubscription {
+    pub fn new(promise: Promise<types::PersistActionResult>)
+        -> UpdatePersistentSubscription
+    {
+        UpdatePersistentSubscription {
+            inner: messages::UpdatePersistentSubscription::new(),
+            promise,
+        }
+    }
+
+    pub fn set_subscription_group_name(&mut self, name: Chars) {
+        self.inner.set_subscription_group_name(name);
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub fn set_settings(&mut self, settings: types::PersistentSubscriptionSettings) {
+        self.inner.set_resolve_link_tos(settings.resolve_link_tos);
+        self.inner.set_start_from(settings.start_from);
+        self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+        self.inner.set_record_statistics(settings.extra_stats);
+        self.inner.set_live_buffer_size(settings.live_buf_size as i32);
+        self.inner.set_read_batch_size(settings.read_batch_size as i32);
+        self.inner.set_buffer_size(settings.history_buf_size as i32);
+        self.inner.set_max_retry_count(settings.max_retry_count as i32);
+        self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
+        self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+        self.inner.set_checkpoint_max_count(settings.max_checkpoint_count as i32);
+        self.inner.set_checkpoint_min_count(settings.min_checkpoint_count as i32);
+        self.inner.set_subscriber_max_count(settings.max_subs_count as i32);
+        self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
+    }
+}
+
+impl OperationImpl for UpdatePersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::UpdatePersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        Cmd::UpdatePersistentSubscriptionCompleted == cmd
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        let response: messages::UpdatePersistentSubscriptionCompleted =
+            pkg.to_message()?;
+
+        let result = match response.get_result() {
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Success => {
+                types::PersistActionResult::Success
+            },
+
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::DoesNotExist => {
+                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
+            },
+
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Fail => {
+                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+            },
+
+            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::AccessDenied => {
+                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+            },
+        };
+
+        self.promise.accept(result);
+
+        ImplResult::done()
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+}
+
+pub struct DeletePersistentSubscription {
+    inner: messages::DeletePersistentSubscription,
+    promise: Promise<types::PersistActionResult>,
+}
+
+impl DeletePersistentSubscription {
+    pub fn new(promise: Promise<types::PersistActionResult>)
+        -> DeletePersistentSubscription
+    {
+        DeletePersistentSubscription {
+            inner: messages::DeletePersistentSubscription::new(),
+            promise,
+        }
+    }
+
+    pub fn set_subscription_group_name(&mut self, name: Chars) {
+        self.inner.set_subscription_group_name(name);
+    }
+
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+}
+
+impl OperationImpl for DeletePersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::DeletePersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        Cmd::DeletePersistentSubscriptionCompleted == cmd
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        let response: messages::DeletePersistentSubscriptionCompleted =
+            pkg.to_message()?;
+
+        let result = match response.get_result() {
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Success => {
+                types::PersistActionResult::Success
+            },
+
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::DoesNotExist => {
+                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
+            },
+
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Fail => {
+                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+            },
+
+            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::AccessDenied => {
+                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+            },
+        };
+
+        self.promise.accept(result);
+
+        ImplResult::done()
+    }
+
+    fn report_operation_error(&mut self, error: OperationError) {
+        self.promise.reject(error);
+    }
+}
+
+pub(crate) struct ConnectToPersistentSubscription {
+    sub_bus: mpsc::Sender<types::SubEvent>,
+    inner: messages::ConnectToPersistentSubscription,
+}
+
+impl ConnectToPersistentSubscription {
+    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>)
+        -> ConnectToPersistentSubscription
+    {
+        ConnectToPersistentSubscription {
+            sub_bus,
+            inner: messages::ConnectToPersistentSubscription::new(),
+        }
+    }
+
+    pub(crate) fn set_event_stream_id(&mut self, stream_id: Chars) {
+        self.inner.set_event_stream_id(stream_id);
+    }
+
+    pub(crate) fn set_group_name(&mut self, group_name: Chars) {
+        self.inner.set_subscription_id(group_name);
+    }
+
+    pub(crate) fn set_buffer_size(&mut self, size: u16) {
+        self.inner.set_allowed_in_flight_messages(size as i32);
+    }
+
+    fn publish(
+        &mut self,
+        event: types::SubEvent,
+    ) -> ::std::io::Result<ImplResult>
+    {
+        let result = self.sub_bus
+            .clone()
+            .send(event)
+            .wait();
+
+        if result.is_ok() {
+            ImplResult::awaiting()
+        } else {
+            ImplResult::done()
+        }
+    }
+}
+
+impl OperationImpl for ConnectToPersistentSubscription {
+    fn initial_request(&self) -> Request {
+        Request {
+            cmd: Cmd::ConnectToPersistentSubscription,
+            msg: &self.inner,
+        }
+    }
+
+    fn is_valid_response(&self, cmd: Cmd) -> bool {
+        match cmd {
+            Cmd::SubscriptionDropped                       => true,
+            Cmd::PersistentSubscriptionConfirmation        => true,
+            Cmd::PersistentSubscriptionStreamEventAppeared => true,
+            _                                              => false,
+        }
+    }
+
+    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+        -> ::std::io::Result<ImplResult>
+    {
+        match pkg.cmd {
+            Cmd::PersistentSubscriptionConfirmation => {
+                let mut response: messages::PersistentSubscriptionConfirmation =
+                    pkg.to_message()?;
+
+                let last_commit_position = response.get_last_commit_position();
+                let last_event_number    = response.get_last_event_number();
+                let persistent_id        = response.take_subscription_id();
+
+                let confirmed = types::SubEvent::Confirmed {
+                    id: pkg.correlation,
+                    last_commit_position,
+                    last_event_number,
+                    persistent_id: Some(persistent_id),
+                };
+
+                self.publish(confirmed)
+            },
+
+            Cmd::PersistentSubscriptionStreamEventAppeared => {
+                let mut response: messages::PersistentSubscriptionStreamEventAppeared =
+                    pkg.to_message()?;
+
+                let event       = types::ResolvedEvent::new_from_indexed(response.take_event())?;
+                let retry_count = response.get_retryCount() as usize;
+                let appeared    = types::SubEvent::EventAppeared {
+                    event,
+                    retry_count,
+                };
+
+                self.publish(appeared)
+            },
+
+            Cmd::SubscriptionDropped => {
+                let _ = self.publish(types::SubEvent::Dropped)?;
+                ImplResult::done()
+            },
+
+            _ => unreachable!(),
+        }
+    }
+
+    fn report_operation_error(&mut self, _: OperationError) {
+        let _ = self.publish(types::SubEvent::Dropped);
     }
 }
