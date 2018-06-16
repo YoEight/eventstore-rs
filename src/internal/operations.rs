@@ -30,6 +30,7 @@ pub enum OperationError {
     Aborted,
     WrongClientImpl(Option<Cmd>),
     ConnectionHasDropped,
+    NotImplemented,
 }
 
 impl OperationError {
@@ -145,6 +146,10 @@ impl Tracking {
 
     pub(crate) fn has_timeout(&self, timeout: Duration) -> bool {
         !self.lasting && self.started.elapsed() >= timeout
+    }
+
+    pub(crate) fn get_cmd(&self) -> Cmd {
+        self.cmd
     }
 }
 

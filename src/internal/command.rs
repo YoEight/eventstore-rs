@@ -43,6 +43,8 @@ pub enum Cmd {
     PersistentSubscriptionStreamEventAppeared,
     PersistentSubscriptionAckEvents,
     PersistentSubscriptionNakEvents,
+    BadRequest,
+    NotHandled,
     Unknown(u8),
 }
 
@@ -100,6 +102,8 @@ impl Cmd {
             Cmd::PersistentSubscriptionStreamEventAppeared => 0xC7,
             Cmd::PersistentSubscriptionAckEvents           => 0xCC,
             Cmd::PersistentSubscriptionNakEvents           => 0xCD,
+            Cmd::BadRequest                                => 0xF0,
+            Cmd::NotHandled                                => 0xF1,
             Cmd::Unknown(cmd)                              => cmd,
         }
     }
@@ -149,6 +153,8 @@ impl Cmd {
             0xC7 => Cmd::PersistentSubscriptionStreamEventAppeared,
             0xCC => Cmd::PersistentSubscriptionAckEvents,
             0xCD => Cmd::PersistentSubscriptionNakEvents,
+            0xF0 => Cmd::BadRequest,
+            0xF1 => Cmd::NotHandled,
             _    => Cmd::Unknown(cmd),
         }
     }

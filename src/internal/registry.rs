@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use internal::command::Cmd;
 use internal::connection::Connection;
+use internal::messages;
 use internal::operations::{ OperationError, OperationWrapper, OperationId, Tracking, Session };
 use internal::package::Pkg;
 
@@ -169,13 +170,20 @@ impl Requests {
     }
 
     fn handle_pkg(&mut self, conn: &Connection, pkg: Pkg) {
+        enum Out {
+            Failed,
+            Handled,
+        }
+
         let pkg_id  = pkg.correlation;
         let pkg_cmd = pkg.cmd;
 
         if let Some(req) = self.assocs.remove(&pkg_id) {
-            debug!("Package [{}] received: command {:?}.", pkg_id, pkg_cmd.to_u8());
-
+            let original_cmd = req.tracker.get_cmd();
             let session_id   = req.session;
+
+            debug!("Package [{}]: command {:?} received {:?}.", pkg_id, original_cmd, pkg_cmd);
+
             let session_over = {
                 let runnings = self.session_request_ids
                                    .get_mut(&req.session)
@@ -189,33 +197,108 @@ impl Requests {
                 // want to keep it.
                 self.assocs.insert(pkg_id, req);
 
-                let errored = {
-                    let session =
+                let out = {
+                    let mut session =
                         SessionImpl::new(
                             session_id, &mut self.assocs, conn, runnings);
 
-                    match op.receive(&mut self.buffer, session, pkg) {
-                        Ok(outcome) => {
-                            let pkgs = outcome.produced_pkgs();
+                    match pkg.cmd {
+                        Cmd::BadRequest => {
+                            let msg = pkg.to_text();
 
-                            if !pkgs.is_empty() {
-                                conn.enqueue_all(pkgs);
-                            }
+                            error!("Bad request for command {:?}: {}.", original_cmd, msg);
 
-                            None
+                            op.failed(OperationError::ServerError(Some(msg)));
+
+                            Out::Failed
                         },
 
-                        Err(e) => {
-                            error!("An error occured when running operation: {}", e);
-                            let msg = format!("Exception raised: {}", e);
+                        Cmd::NotAuthenticated => {
+                            error!("Not authenticated for command {:?}.", original_cmd);
 
-                            Some(msg)
+                            op.failed(OperationError::AuthenticationRequired);
+
+                            Out::Failed
+                        },
+
+                        Cmd::NotHandled => {
+                            warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
+
+                            let msg: ::std::io::Result<messages::NotHandled> =
+                                pkg.to_message();
+
+                            match msg {
+                                Ok(not_handled) => {
+                                    match not_handled.get_reason() {
+                                        messages::NotHandled_NotHandledReason::NotMaster => {
+                                            warn!("Received a non master error on command {:?} id {}.
+                                                  This driver doesn't support cluster connection yet.", original_cmd, pkg_id);
+
+                                            op.failed(OperationError::NotImplemented);
+
+                                            Out::Failed
+                                        },
+
+                                        _ => {
+                                            warn!("The server has either not started or is too busy.
+                                                  Retrying command {:?} id {}.", original_cmd, pkg_id);
+
+                                            match op.retry(&mut self.buffer, &mut session, pkg_id) {
+                                                Ok(outcome) => {
+                                                    let pkgs = outcome.produced_pkgs();
+
+                                                    if !pkgs.is_empty() {
+                                                        conn.enqueue_all(pkgs);
+                                                    }
+
+                                                    Out::Handled
+                                                },
+
+                                                Err(error) => {
+                                                    error!(
+                                                        "An error occured when retrying command {:?} id {}: {}.",
+                                                        original_cmd, pkg_id, error
+                                                    );
+
+                                                    Out::Failed
+                                                },
+                                            }
+                                        },
+                                    }
+                                },
+
+                                Err(error) => {
+                                    error!("Decoding error: can't decode NotHandled message: {}.", error);
+
+                                    Out::Failed
+                                },
+                            }
+                        },
+
+                        _ => match op.receive(&mut self.buffer, session, pkg) {
+                            Ok(outcome) => {
+                                let pkgs = outcome.produced_pkgs();
+
+                                if !pkgs.is_empty() {
+                                    conn.enqueue_all(pkgs);
+                                }
+
+                                Out::Handled
+                            },
+
+                            Err(e) => {
+                                error!("An error occured when running operation: {}", e);
+                                let msg = format!("Exception raised: {}", e);
+
+                                op.failed(OperationError::InvalidOperation(msg));
+
+                                Out::Failed
+                            },
                         },
                     }
                 };
 
-                if let Some(msg) = errored {
-                    op.failed(OperationError::InvalidOperation(msg));
+                if let Out::Failed = out {
                     terminate(&mut self.assocs, runnings.drain(..).collect());
                 }
 

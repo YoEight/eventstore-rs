@@ -1,5 +1,5 @@
 use bytes::{ Bytes, BytesMut, BufMut };
-use protobuf::{ Message, MessageStatic, parse_from_carllerche_bytes };
+use protobuf::{ Message, MessageStatic, parse_from_carllerche_bytes, Chars };
 use uuid::Uuid;
 
 use internal::command::Cmd;
@@ -115,5 +115,11 @@ impl Pkg {
         where M: MessageStatic
     {
         parse_from_carllerche_bytes(&self.payload).map_err(|e| e.into())
+    }
+
+    pub fn to_text(self) -> Chars {
+        unsafe {
+            String::from_utf8_unchecked(self.payload.to_vec()).into()
+        }
     }
 }
