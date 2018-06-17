@@ -4,7 +4,7 @@ extern crate futures;
 extern crate log;
 #[macro_use]
 extern crate serde_json;
-extern crate simple_logger;
+extern crate env_logger;
 extern crate uuid;
 
 use std::time::Duration;
@@ -443,7 +443,7 @@ fn test_persistent_subscription(client: &Client) {
 
 #[test]
 fn all_round_operation_test() {
-    simple_logger::init_with_level(log::Level::Info).unwrap();
+    env_logger::init();
 
     let mut settings = Settings::default();
     let login        = "admin";

@@ -27,4 +27,4 @@ protoc-rust = "1.4"
 name = "integration"
 
 [dev-dependencies]
-simple_logger = "0.5"
+env_logger = "0.5"
