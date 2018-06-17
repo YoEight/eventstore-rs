@@ -449,15 +449,39 @@ fn test_persistent_subscription(client: &Client) {
 
 #[test]
 fn all_round_operation_test() {
+    use std::env;
+    use std::net::ToSocketAddrs;
+
     env_logger::init();
 
     let mut settings = Settings::default();
     let login        = "admin";
     let password     = "changeit";
+    let host         = env::var("EVENTSTORE_HOST").unwrap_or("127.0.0.1".to_string());
+    let conn_str     = format!("{}:1113", host);
+
+    info!("Connection string: {}", conn_str);
+    let addr = match conn_str.to_socket_addrs() {
+        Ok(mut addrs) => {
+            let addr = addrs.next();
+
+            match addr {
+                Some(addr) => addr,
+
+                None => {
+                    panic!("Can't resolve {} address.", conn_str);
+                },
+            }
+        },
+
+        Err(e) => {
+            panic!("Exception occured when parsing {}: {}.", conn_str, e);
+        },
+    };
 
     settings.default_user = Some(Credentials::new(login, password));
 
-    let client = Client::new(settings, "127.0.0.1:1113".parse().unwrap());
+    let client = Client::new(settings, addr);
 
     client.start();
 
