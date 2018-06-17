@@ -121,8 +121,13 @@ impl Encoder for PkgCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: Pkg, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let     size      = item.size();
-        let     auth_flag = {
+        use std::mem::size_of;
+
+        let size = item.size();
+
+        dst.reserve(size + size_of::<u32>());
+
+        let auth_flag = {
             if item.creds_opt.is_some() {
                 0x01
             } else {
