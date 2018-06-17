@@ -29,7 +29,11 @@ impl types::SubscriptionConsumer for TestSub {
         -> types::OnEventAppeared
         where E: SubscriptionEnv
     {
-        debug!("Event appeared: {:?}", event);
+        let event     = event.get_original_event().unwrap();
+        let num       = &event.event_number;
+        let stream_id = &event.event_stream_id;
+
+        debug!("Event appeared, stream_id {}, num {}", stream_id, num);
 
         self.count += 1;
 
@@ -60,11 +64,13 @@ impl types::SubscriptionConsumer for PersistentTestSub {
         -> types::OnEventAppeared
         where E: SubscriptionEnv
     {
-        debug!("Event appeared: {:?}", event);
+        let event     = event.get_original_event().unwrap();
+        let num       = &event.event_number;
+        let stream_id = &event.event_stream_id;
+
+        debug!("Event appeared, stream_id {}, num {}", stream_id, num);
 
         self.count += 1;
-
-        let event = event.get_original_event().unwrap();
 
         env.push_ack(event.event_id);
 
