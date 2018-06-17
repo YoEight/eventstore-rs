@@ -1750,7 +1750,7 @@ impl Catchup for RegularCatchup {
     ) -> bool
     {
         match event.get_original_event() {
-            Some(event) => checkpoint.event_number < event.event_number,
+            Some(event) => checkpoint.event_number <= event.event_number,
             None        => unreachable!(),
         }
     }
@@ -1787,8 +1787,6 @@ impl Catchup for RegularCatchup {
 
                 types::LocatedEvents::Events { events, next } => {
                     if let Some(ref next) = next {
-                        // TODO - There probably a chance I'm skipping an event
-                        // by looking directly to the next event number.
                         checkpoint.event_number = *next;
                     } else {
                         let event = events.last().unwrap();
@@ -1868,7 +1866,7 @@ impl Catchup for AllCatchup {
     {
         let current = event.position.expect("Position must be defined for $all stream");
 
-        checkpoint.position < current
+        checkpoint.position <= current
     }
 
     fn handle_pulled_item(
