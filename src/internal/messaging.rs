@@ -2,7 +2,7 @@ use std::io::Error;
 
 use uuid::Uuid;
 
-use discovery::Endpoint;
+use internal::discovery::Endpoint;
 use internal::operations;
 use internal::package::Pkg;
 

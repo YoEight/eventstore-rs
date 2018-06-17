@@ -8,7 +8,7 @@ use tokio_core::reactor::Handle;
 use tokio_timer::Timer;
 use uuid::Uuid;
 
-use discovery::{ Endpoint, Discovery };
+use internal::discovery::{ Endpoint, Discovery };
 use internal::command::Cmd;
 use internal::connection::Connection;
 use internal::messaging::Msg;

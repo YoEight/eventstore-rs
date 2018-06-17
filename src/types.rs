@@ -1,3 +1,4 @@
+//! Common types used across the library.
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
@@ -19,6 +20,8 @@ use internal::messages;
 use internal::messaging::Msg;
 use internal::package::Pkg;
 
+/// Represents a reconnection strategy when a connection has dropped or is
+/// about to be created.
 #[derive(Copy, Clone)]
 pub enum Retry {
     Undefinately,
@@ -26,7 +29,7 @@ pub enum Retry {
 }
 
 impl Retry {
-    pub fn to_usize(&self) -> usize {
+    pub(crate) fn to_usize(&self) -> usize {
         match *self {
             Retry::Undefinately => usize::max_value(),
             Retry::Only(x)      => x,
@@ -34,6 +37,7 @@ impl Retry {
     }
 }
 
+/// Holds login and password information.
 #[derive(Clone, Debug)]
 pub struct Credentials {
     login: Bytes,
@@ -41,6 +45,7 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    /// Creates a new `Credentials` instance.
     pub fn new<S>(login: S, password: S) -> Credentials
         where S: Into<Bytes>
     {
@@ -50,14 +55,14 @@ impl Credentials {
         }
     }
 
-    pub fn write_to_bytes_mut(&self, dst: &mut BytesMut) {
+    pub(crate) fn write_to_bytes_mut(&self, dst: &mut BytesMut) {
         dst.put_u8(self.login.len() as u8);
         dst.put(&self.login);
         dst.put_u8(self.password.len() as u8);
         dst.put(&self.password);
     }
 
-    pub fn parse_from_buf<B>(buf: &mut B) -> ::std::io::Result<Credentials>
+    pub(crate) fn parse_from_buf<B>(buf: &mut B) -> ::std::io::Result<Credentials>
         where B: Buf + Read
     {
         let     login_len = buf.get_u8() as usize;
@@ -81,20 +86,39 @@ impl Credentials {
         Ok(creds)
     }
 
-    pub fn network_size(&self) -> usize {
+    pub(crate) fn network_size(&self) -> usize {
         self.login.len() + self.password.len() + 2 // Including 2 length bytes.
     }
 }
 
+/// Global connection settings.
 #[derive(Clone)]
 pub struct Settings {
+    /// Maximum delay of inactivity before the client sends a heartbeat request.
     pub heartbeat_delay: Duration,
+
+    /// Maximum delay the server has to issue a heartbeat response.
     pub heartbeat_timeout: Duration,
+
+    /// Delay in which an operation will be retried if no response arrived.
     pub operation_timeout: Duration,
+
+    /// Retry strategy when an operation has timeout.
     pub operation_retry: Retry,
+
+    /// Retry strategy when failing to connect.
     pub connection_retry: Retry,
+
+    /// 'Credentials' to use if other `Credentials` are not explicitly supplied
+    /// when issuing commands.
     pub default_user: Option<Credentials>,
+
+    /// Default connection name.
     pub connection_name: Option<String>,
+
+    /// The period used to check pending command. Those checks include if the
+    /// the connection has timeout or if the command was issued with a
+    /// different connection.
     pub operation_check_period: Duration,
 }
 
@@ -113,16 +137,34 @@ impl Settings {
     }
 }
 
+/// Constants used for expected version control.
+/// The use of expected version can be a bit tricky especially when discussing
+/// assurances given by the GetEventStore server.
+///
+/// The GetEventStore server will assure idempotency for all operations using
+/// any value in `ExpectedVersion` except `ExpectedVersion::Any`. When using
+/// `ExpectedVersion::Any`, the GetEventStore server will do its best to assure
+/// idempotency but will not guarantee idempotency.
 #[derive(Copy, Clone, Debug)]
 pub enum ExpectedVersion {
+    /// This write should not conflict with anything and should always succeed.
     Any,
+
+    /// The stream should exist. If it or a metadata stream does not exist,
+    /// treats that as a concurrency problem.
     StreamExists,
+
+    /// The stream being written to should not yet exist. If it does exist,
+    /// treats that as a concurrency problem.
     NoStream,
+
+    /// States that the last event written to the stream should have an event
+    /// number matching your expected value.
     Exact(i64),
 }
 
 impl ExpectedVersion {
-    pub fn to_i64(self) -> i64 {
+    pub(crate) fn to_i64(self) -> i64 {
         match self {
             ExpectedVersion::Any          => -2,
             ExpectedVersion::StreamExists => -4,
@@ -131,7 +173,7 @@ impl ExpectedVersion {
         }
     }
 
-    pub fn from_i64(ver: i64) -> ExpectedVersion {
+    pub(crate) fn from_i64(ver: i64) -> ExpectedVersion {
         match ver {
             -2 => ExpectedVersion::Any,
             -4 => ExpectedVersion::StreamExists,
@@ -141,13 +183,19 @@ impl ExpectedVersion {
     }
 }
 
+/// A structure referring to a potential logical record position in the
+/// GetEventStore transaction file.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Position {
+    /// Commit position of the record.
     pub commit:  i64,
+
+    /// Prepare position of the record.
     pub prepare: i64,
 }
 
 impl Position {
+    /// Points to the begin of the transaction file.
     pub fn start() -> Position {
         Position {
             commit: 0,
@@ -155,6 +203,7 @@ impl Position {
         }
     }
 
+    /// Points to the end of the transaction file.
     pub fn end() -> Position {
         Position {
             commit: -1,
@@ -175,12 +224,17 @@ impl Ord for Position {
     }
 }
 
+/// Returned after writing to a stream.
 #[derive(Debug)]
 pub struct WriteResult {
+    /// Next expected version of the stream.
     pub next_expected_version: i64,
+
+    /// `Position` of the write.
     pub position: Position,
 }
 
+/// Enumeration detailing the possible outcomes of reading a stream.
 #[derive(Debug)]
 pub enum ReadEventStatus<A> {
     NotFound,
@@ -189,23 +243,49 @@ pub enum ReadEventStatus<A> {
     Success(A),
 }
 
+/// Represents the result of looking up a specific event number from a stream.
 #[derive(Debug)]
 pub struct ReadEventResult {
+    /// Stream where the event orignates from.
     pub stream_id: String,
+
+    /// Sequence number of the event.
     pub event_number: i64,
+
+    /// Event data.
     pub event: ResolvedEvent,
 }
 
+/// Represents a previously written event.
 #[derive(Debug)]
 pub struct RecordedEvent {
+    /// The event stream that events belongs to.
     pub event_stream_id: Chars,
+
+    /// Unique identifier representing this event.
     pub event_id: Uuid,
+
+    /// Number of this event in the stream.
     pub event_number: i64,
+
+    /// Type of this event.
     pub event_type: Chars,
+
+    /// Payload of this event.
     pub data: Bytes,
+
+    /// Representing the metadata associated with this event.
     pub metadata: Bytes,
+
+    /// Indicates wheter the content is internally marked as JSON.
     pub is_json: bool,
+
+    /// Representing when this event was created in the database system.
+    /// TODO - Gives back an UTC time instead.
     pub created: Option<i64>,
+
+    /// Representing when this event was created in the database system in
+    /// epoch time.
     pub created_epoch: Option<i64>,
 }
 
@@ -214,7 +294,7 @@ fn decode_parse_error(err: ParseError) -> ::std::io::Error {
 }
 
 impl RecordedEvent {
-    pub fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
+    pub(crate) fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
         let event_stream_id = event.take_event_stream_id();
         let event_id        = Uuid::from_bytes(event.get_event_id()).map_err(decode_parse_error)?;
         let event_number    = event.get_event_number();
@@ -255,6 +335,7 @@ impl RecordedEvent {
         Ok(record)
     }
 
+    /// Tries to decode this event payload as a JSON object.
     pub fn as_json<'a, T>(&'a self) -> serde_json::Result<T>
         where T: Deserialize<'a>
     {
@@ -262,15 +343,22 @@ impl RecordedEvent {
     }
 }
 
+/// A structure representing a single event or an resolved link event.
 #[derive(Debug)]
 pub struct ResolvedEvent {
+    /// The event, or the resolved link event if this `ResolvedEvent` is a link
+    /// event.
     pub event: Option<RecordedEvent>,
+
+    /// The link event if this `ResolvedEvent` is a link event.
     pub link: Option<RecordedEvent>,
+
+    /// Possible `Position` of that event in the server transaction file.
     pub position: Option<Position>,
 }
 
 impl ResolvedEvent {
-    pub fn new(mut msg: messages::ResolvedEvent) -> ::std::io::Result<ResolvedEvent> {
+    pub(crate) fn new(mut msg: messages::ResolvedEvent) -> ::std::io::Result<ResolvedEvent> {
         let event = {
             if msg.has_event() {
                 let record = RecordedEvent::new(msg.take_event())?;
@@ -305,7 +393,7 @@ impl ResolvedEvent {
         Ok(resolved)
     }
 
-    pub fn new_from_indexed(mut msg: messages::ResolvedIndexedEvent) -> ::std::io::Result<ResolvedEvent> {
+    pub(crate) fn new_from_indexed(mut msg: messages::ResolvedIndexedEvent) -> ::std::io::Result<ResolvedEvent> {
         let event = {
             if msg.has_event() {
                 let record = RecordedEvent::new(msg.take_event())?;
@@ -335,19 +423,28 @@ impl ResolvedEvent {
         Ok(resolved)
     }
 
+    /// If it's a link event with its associated resolved event.
     pub fn is_resolved(&self) -> bool {
         self.event.is_some() && self.link.is_some()
     }
 
+    /// Returns the event that was read or which triggered the subscription.
+    /// If this `ResolvedEvent` represents a link event, the link will be the
+    /// orginal event, otherwise it will be the event.
+    ///
+    /// TODO - It's impossible for `get_original_event` to be undefined.
     pub fn get_original_event(&self) -> Option<&RecordedEvent> {
         self.link.as_ref().or(self.event.as_ref())
     }
 
+    /// Returns the stream id of the original event.
     pub fn get_original_stream_id(&self) -> Option<&Chars> {
         self.get_original_event().map(|event| &event.event_stream_id)
     }
 }
 
+/// Represents stream metadata as a series of properties for system data and
+/// user-defined metadata.
 #[derive(Debug)]
 pub enum StreamMetadataResult {
     Deleted { stream: Chars },
@@ -355,28 +452,41 @@ pub enum StreamMetadataResult {
     Success { stream: Chars, version: i64, metadata: StreamMetadata },
 }
 
+/// The id of a transaction.
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub struct TransactionId(pub i64);
 
 impl TransactionId {
-    pub fn new(id: i64) -> TransactionId {
+    pub(crate) fn new(id: i64) -> TransactionId {
         TransactionId(id)
     }
 }
 
+/// Represents the direction of read operation (both from '$all' and a regular
+/// stream).
 #[derive(Copy, Clone, Debug)]
 pub enum ReadDirection {
     Forward,
     Backward,
 }
 
+/// Indicates either if we reach the end of a stream or a slice of events when
+/// reading a stream. `LocatedEvents` is polymorphic so it can be used by
+/// either '$all' stream (that requires `Position`) and regular stream that
+/// requires event sequence numer.
 #[derive(Debug)]
 pub enum LocatedEvents<A> {
+    /// Indicates the end of the stream has been reached.
     EndOfStream,
+
+    /// Gives the read events and a possible starting position for the next
+    /// batch. if `next` is `None`, it means we have reached the end of the
+    /// stream.
     Events { events: Vec<ResolvedEvent>, next: Option<A> },
 }
 
 impl <A> LocatedEvents<A> {
+    /// Indicates if we have reached the end of the stream we read.
     pub fn is_end_of_stream(&self) -> bool {
         match *self {
             LocatedEvents::EndOfStream            => true,
@@ -385,14 +495,22 @@ impl <A> LocatedEvents<A> {
     }
 }
 
+/// Gathers common slice operations.
 pub trait Slice {
+    /// What kind of location this slice supports.
     type Location;
 
+    /// Returns the starting point of that slice.
     fn from(&self) -> Self::Location;
+
+    /// Returns the read direction used to fetch that slice.
     fn direction(&self) -> ReadDirection;
+
+    /// Returns the events fetched by that slice.
     fn events(self) -> LocatedEvents<Self::Location>;
 }
 
+/// Represents the errors that can arise when reading a stream.
 #[derive(Debug)]
 pub enum ReadStreamError {
     NoStream(Chars),
@@ -402,12 +520,14 @@ pub enum ReadStreamError {
     AccessDenied(Chars),
 }
 
+/// Represents the result of reading a stream.
 #[derive(Debug)]
 pub enum ReadStreamStatus<A> {
     Success(A),
     Error(ReadStreamError),
 }
 
+/// Represents the slice returned when reading a regular stream.
 #[derive(Debug)]
 pub struct StreamSlice {
     _from: i64,
@@ -417,7 +537,7 @@ pub struct StreamSlice {
 }
 
 impl StreamSlice {
-    pub fn new(
+    pub(crate) fn new(
         direction: ReadDirection,
         from: i64,
         events: Vec<ResolvedEvent>,
@@ -462,6 +582,7 @@ impl Slice for StreamSlice {
     }
 }
 
+/// Represents a slice of the '$all' stream.
 #[derive(Debug)]
 pub struct AllSlice {
     from: Position,
@@ -471,7 +592,7 @@ pub struct AllSlice {
 }
 
 impl AllSlice {
-    pub fn new(
+    pub(crate) fn new(
         direction: ReadDirection,
         from: Position,
         events: Vec<ResolvedEvent>,
@@ -514,6 +635,7 @@ enum Payload {
     Binary(Bytes),
 }
 
+/// Holds data of event about to be sent to the server.
 pub struct EventData {
     event_type: Chars,
     payload: Payload,
@@ -522,6 +644,7 @@ pub struct EventData {
 }
 
 impl EventData {
+    /// Creates an event with a JSON payload.
     pub fn json<P, S>(event_type: S, payload: P) -> EventData
         where P: Serialize,
               S: Into<Chars>
@@ -536,6 +659,7 @@ impl EventData {
         }
     }
 
+    /// Creates an event with a raw binary payload.
     pub fn binary<S>(event_type: S, payload: Bytes) -> EventData
         where S: Into<Chars>
     {
@@ -547,10 +671,13 @@ impl EventData {
         }
     }
 
+    /// Set an id to this event. By default, the id will be generated by the
+    /// server.
     pub fn id(self, value: Uuid) -> EventData {
         EventData { id_opt: Some(value), ..self }
     }
 
+    /// Assignes a JSON metadata to this event.
     pub fn metadata_as_json<P>(self, payload: P) -> EventData
         where P: Serialize
     {
@@ -560,13 +687,14 @@ impl EventData {
         EventData { metadata_payload_opt: json_bin, ..self }
     }
 
+    /// Assignes a raw binary metadata to this event.
     pub fn metadata_as_binary(self, payload: Bytes) -> EventData {
         let content_bin = Some(Payload::Binary(payload));
 
         EventData { metadata_payload_opt: content_bin, ..self }
     }
 
-    pub fn build(self) -> messages::NewEvent {
+    pub(crate) fn build(self) -> messages::NewEvent {
         let mut new_event = messages::NewEvent::new();
         let     id        = self.id_opt.unwrap_or_else(|| Uuid::new_v4());
 
@@ -604,6 +732,7 @@ impl EventData {
     }
 }
 
+/// Used to facilitate the creation of a stream's metadata.
 #[derive(Default)]
 pub struct StreamMetadataBuilder {
     max_count: Option<u64>,
@@ -615,30 +744,37 @@ pub struct StreamMetadataBuilder {
 }
 
 impl StreamMetadataBuilder {
+    /// Creates a `StreamMetadata` initialized with default values.
     pub fn new() -> StreamMetadataBuilder {
         Default::default()
     }
 
+    /// Sets the maximum number of events allowed in the stream.
     pub fn max_count(self, value: u64) -> StreamMetadataBuilder {
         StreamMetadataBuilder { max_count: Some(value), ..self }
     }
 
+    /// Sets the maximum age of events allowed in the stream.
     pub fn max_age(self, value: Duration) -> StreamMetadataBuilder {
         StreamMetadataBuilder { max_age: Some(value), ..self }
     }
 
+    /// Sets the event number from which previous events can be scavenged.
     pub fn truncate_before(self, value: u64) -> StreamMetadataBuilder {
         StreamMetadataBuilder { truncate_before: Some(value), ..self }
     }
 
+    /// Sets the amount of time for which the stream head is cacheable.
     pub fn cache_control(self, value: Duration) -> StreamMetadataBuilder {
         StreamMetadataBuilder { cache_control: Some(value), ..self }
     }
 
+    /// Sets the ACL of a stream.
     pub fn acl(self, value: StreamAcl) -> StreamMetadataBuilder {
         StreamMetadataBuilder { acl: Some(value), ..self }
     }
 
+    /// Adds user-defined property in the stream metadata.
     pub fn insert_custom_property<V>(mut self, key: String, value: V) -> StreamMetadataBuilder
         where V: Serialize
     {
@@ -648,6 +784,7 @@ impl StreamMetadataBuilder {
         self
     }
 
+    /// Returns a properly configured `StreamMetaData`.
     pub fn build(self) -> StreamMetadata {
         StreamMetadata {
             max_count: self.max_count,
@@ -660,28 +797,54 @@ impl StreamMetadataBuilder {
     }
 }
 
+/// Represents stream metadata with strongly types properties for system values
+/// and a dictionary-like interface for custom values.
 #[derive(Debug, Default)]
 pub struct StreamMetadata {
+    /// The maximum number of events allowed in the stream.
     pub max_count: Option<u64>,
+
+    /// The maximum age of events allowed in the stream.
     pub max_age: Option<Duration>,
+
+    /// The event number from which previous events can be scavenged. This is
+    /// used to implement soft-deletion of streams.
     pub truncate_before: Option<u64>,
+
+    /// The amount of time for which the stream head is cacheable.
     pub cache_control: Option<Duration>,
+
+    /// The access control list for the stream.
     pub acl: StreamAcl,
+
+    /// An enumerable of key-value pairs of keys to JSON value for
+    /// user-provided metadata.
     pub custom_properties: HashMap<String, serde_json::Value>,
 }
 
 impl StreamMetadata {
+    /// Initializes a fresh stream metadata builder.
     pub fn builder() -> StreamMetadataBuilder {
         StreamMetadataBuilder::new()
     }
 }
 
+/// Represents an access control list for a stream.
 #[derive(Default, Debug)]
 pub struct StreamAcl {
+    /// Roles and users permitted to read the stream.
     pub read_roles: Vec<String>,
+
+    /// Roles and users permitted to write to the stream.
     pub write_roles: Vec<String>,
+
+    /// Roles and users permitted to delete to the stream.
     pub delete_roles: Vec<String>,
+
+    /// Roles and users permitted to read stream metadata.
     pub meta_read_roles: Vec<String>,
+
+    /// Roles and users permitted to write stream metadata.
     pub meta_write_roles: Vec<String>,
 }
 
@@ -717,12 +880,6 @@ impl SubEvent {
             retry_count: 0,
         }
     }
-}
-
-pub struct Subscription {
-    pub(crate) inner: Sender<SubEvent>,
-    pub(crate) receiver: Receiver<SubEvent>,
-    pub(crate) sender: Sender<Msg>,
 }
 
 struct State<A: SubscriptionConsumer> {
@@ -765,12 +922,22 @@ impl OnEvent {
     }
 }
 
+/// Gathers every possible Nak actions.
 #[derive(Debug, PartialEq, Eq)]
 pub enum NakAction {
+    /// Client unknown on action. Let server decide.
     Unknown,
+
+    /// Park message do not resend. Put on poison queue.
     Park,
+
+    /// Explicity retry the message.
     Retry,
+
+    /// Skip this message do not resend do not put in poison queue.
     Skip,
+
+    /// Stop the subscription.
     Stop,
 }
 
@@ -906,8 +1073,15 @@ fn on_event<C>(
     OnEvent::Continue
 }
 
+/// Represents the common operations supported by a subscription.
+pub struct Subscription {
+    pub(crate) inner: Sender<SubEvent>,
+    pub(crate) receiver: Receiver<SubEvent>,
+    pub(crate) sender: Sender<Msg>,
+}
 
 impl Subscription {
+    /// Consumes synchronously the events comming from a subscription.
     pub fn consume<C>(self, consumer: C) -> C
         where C: SubscriptionConsumer
     {
@@ -929,6 +1103,7 @@ impl Subscription {
         state.consumer
     }
 
+    /// Consumes asynchronously the events comming from a subscription.
     pub fn consume_async<C>(self, init: C) -> impl Future<Item=C, Error=()>
         where C: SubscriptionConsumer
     {
@@ -954,9 +1129,13 @@ impl Subscription {
     }
 }
 
+/// Outcome to returns when a subscription dispatches an event.
 #[derive(Debug, PartialEq, Eq)]
 pub enum OnEventAppeared {
+    /// States to continue processing the subscription.
     Continue,
+
+    /// Asks to drop the subscription.
     Drop,
 }
 
@@ -966,11 +1145,34 @@ struct NakedEvents {
     message: Chars,
 }
 
+/// Set of operations supported when consumming events from a subscription.
+/// Most of those operations are only available for persistent subscription,
+/// and will be no-op when used with either volatile or catchup subscriptions.
+///
+/// * Notes
+/// All the buffers used by `SubscriptionEnv` will get flushed once the instance
+/// goes out of scope.
 pub trait SubscriptionEnv {
+    /// Add an event id to ack list.
+    ///
+    /// * Notes
+    /// For persistent subscription only.
     fn push_ack(&mut self, Uuid);
+
+    /// Add an event ids to the nak list. It asks for `Vec` so you can have
+    /// different `NakAction` for different event set.
+    ///
+    /// * Notes
+    /// For persistent subscription only.
     fn push_nak_with_message<S: Into<Chars>>(&mut self, Vec<Uuid>, NakAction, S);
+
+    /// Get the number of time that event has been retried.
+    ///
+    /// * Notes
+    /// For persistent subscription only.
     fn current_event_retry_count(&self) -> usize;
 
+    /// Like `push_nak_with_message` but uses an empty message for `NakAction`.
     fn push_nak(&mut self, ids: Vec<Uuid>, action: NakAction) {
         self.push_nak_with_message(ids, action, "");
     }
@@ -1020,18 +1222,34 @@ impl SubscriptionEnv for PersistentSubscriptionEnv {
     }
 }
 
+/// Represents the lifecycle of a subscription.
 pub trait SubscriptionConsumer {
+    /// Called when the subscription has been confirmed by the server.
+    /// Usually, it's the first out of all callbacks to be called.
+    ///
+    /// * Notes
+    /// It's possible to have `when_event_appeared` called before
+    /// `when_confirmed` for catchup subscriptions as catchup subscriptions
+    /// mixes several operations at the same time.
     fn when_confirmed(&mut self, Uuid, i64, i64);
 
+    /// Called when the subscription has received an event from the server.
     fn when_event_appeared<E>(&mut self, &mut E, ResolvedEvent) -> OnEventAppeared
         where E: SubscriptionEnv;
 
+    /// Called when the subscrition has been dropped whether by the server or
+    /// the user themself.
     fn when_dropped(&mut self);
 }
 
+/// System supported consumer strategies for use with persistent subscriptions.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SystemConsumerStrategy {
+    /// Distributes events to a single client until it is full. Then round
+    /// robin to the next client.
     DispatchToSingle,
+
+    /// Distributes events to each c lient in a round robin fashion.
     RoundRobin,
 }
 
@@ -1044,20 +1262,51 @@ impl SystemConsumerStrategy {
     }
 }
 
+/// Gathers every persistent subscription property.
 #[derive(Debug)]
 pub struct PersistentSubscriptionSettings {
+    /// Whether or not the persistent subscription shoud resolve 'linkTo'
+    /// events to their linked events.
     pub resolve_link_tos: bool,
+
+    /// Where the subscription should start from (event number).
     pub start_from: i64,
+
+    /// Whether or not in depth latency statistics should be tracked on this
+    /// subscription.
     pub extra_stats: bool,
+
+    /// The amount of time after which a message should be considered to be
+    /// timeout and retried.
     pub msg_timeout: Duration,
+
+    /// The maximum number of retries (due to timeout) before a message get
+    /// considered to be parked.
     pub max_retry_count: u16,
+
+    /// The size of the buffer listenning to live messages as they happen.
     pub live_buf_size: u16,
+
+    /// The number of events read at a time when paging in history.
     pub read_batch_size: u16,
+
+    /// The number of events to cache when paging through history.
     pub history_buf_size: u16,
+
+    /// The amount of time to try checkpoint after.
     pub checkpoint_after: Duration,
+
+    /// The minimum number of messages to checkpoint.
     pub min_checkpoint_count: u16,
+
+    /// The maximum number of messages to checkpoint. If this number is reached
+    /// , a checkpoint will be forced.
     pub max_checkpoint_count: u16,
+
+    /// The maximum number of subscribers allowed.
     pub max_subs_count: u16,
+
+    /// The strategy to use for distributing events to client consumers.
     pub named_consumer_strategy: SystemConsumerStrategy,
 }
 
@@ -1087,6 +1336,8 @@ impl Default for PersistentSubscriptionSettings {
     }
 }
 
+/// Represents the different scenarios that could happen when performing
+/// a persistent subscription.
 #[derive(Debug, Eq, PartialEq)]
 pub enum PersistActionResult {
     Success,
@@ -1094,6 +1345,7 @@ pub enum PersistActionResult {
 }
 
 impl PersistActionResult {
+    /// Checks if the persistent action succeeded.
     pub fn is_success(&self) -> bool {
         match *self {
             PersistActionResult::Success => true,
@@ -1101,15 +1353,27 @@ impl PersistActionResult {
         }
     }
 
+    /// Checks if the persistent action failed.
     pub fn is_failure(&self) -> bool {
         !self.is_success()
     }
 }
 
+/// Enumerates all persistent action exceptions.
 #[derive(Debug, Eq, PartialEq)]
 pub enum PersistActionError {
+    /// The action failed.
     Fail,
+
+    /// Happens when creating a persistent subscription on a stream with a
+    /// group name already taken.
     AlreadyExists,
+
+    /// An operation tried to do something on a persistent subscription or a
+    /// stream that don't exist.
     DoesNotExist,
+
+    /// The current user is not allowed to operate on the supplied stream or
+    /// persistent subscription.
     AccessDenied,
 }

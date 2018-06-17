@@ -3,6 +3,19 @@ name = "eventstore"
 version = "0.1.0"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 build = "build.rs"
+license = "MIT"
+description = "GetEventStore TCP client"
+homepage = "https://code.coppermine.io/eventsourcing/rust-ges"
+repository = "https://code.coppermine.io/eventsourcing/rust-ges"
+readme = "README.md"
+keywords = ["database", "eventsourcing", "event", "eventstore", "ges"]
+exclude = [
+  ".gitignore",
+  ".gitlab-ci.yml",
+  "tests/**/*"
+]
+
+categories = ["Database interfaces"]
 
 [dependencies]
 tokio = "0.1"

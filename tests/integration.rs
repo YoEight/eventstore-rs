@@ -10,7 +10,7 @@ extern crate uuid;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::Future;
-use eventstore::client::Client;
+use eventstore::Client;
 use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata, SubscriptionEnv };
 use uuid::Uuid;
 
@@ -262,7 +262,6 @@ fn test_delete_stream(client: &Client) {
                   .unwrap();
 
     let result = client.delete_stream(stream_id.as_str())
-                       .hard_delete(true)
                        .execute()
                        .wait()
                        .unwrap();
