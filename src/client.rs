@@ -1,4 +1,4 @@
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 use std::thread::{ spawn, JoinHandle };
 
 use futures::{ Future, Stream, Sink };
@@ -19,7 +19,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(settings: Settings, addr: SocketAddrV4) -> Client {
+    pub fn new(settings: Settings, addr: SocketAddr) -> Client {
         let (sender, recv) = channel(500);
         let disc           = Box::new(StaticDiscovery::new(addr));
 
