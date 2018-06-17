@@ -1,0 +1,56 @@
+.job_template: &cargo_before
+  before_script:
+    - apt-get update
+    - apt-get install -y protobuf-compiler
+
+.job_template: &cargo_build
+  stage: build
+  variables:
+    CARGO_HOME: cached_cargo
+  <<: *cargo_before
+  script:
+    - cargo check
+
+.job_template: &cargo_cache
+  paths:
+    - cached_cargo
+
+stages:
+  - build
+  - test
+    #  - deploy
+
+Rustc 1.26:
+  <<: *cargo_build
+  image: library/rust:1.26
+  cache:
+    <<: *cargo_cache
+    key: rust-1.26
+
+Rustc Nightly:
+  <<: *cargo_build
+  image: rustlang/rust:nightly
+  cache:
+    <<: *cargo_cache
+    key: rust-nightly
+
+Integration tests:
+  image: library/rust:1.26
+  variables:
+    EVENTSTORE_HOST: "eventstore"
+    CARGO_HOME: cached_cargo
+  services:
+    - name: eventstore/eventstore:release-4.1.0
+      alias: eventstore
+  <<: *cargo_before
+  script:
+    - cargo test
+  cache:
+    key: cargo-test
+    paths:
+      - cached_cargo
+
+# push on crates.io:
+#   stage: deploy
+#   when: manual
+

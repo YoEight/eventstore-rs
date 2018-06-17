@@ -1,5 +1,5 @@
 use std::io::{ self, Cursor };
-use std::net::{ SocketAddr, SocketAddrV4 };
+use std::net::SocketAddr;
 
 use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
@@ -167,14 +167,14 @@ fn io_error_only<A>(res: Result<A, ConnErr>) -> io::Result<()> {
 }
 
 impl Connection {
-    pub(crate) fn new(bus: Sender<Msg>, addr: SocketAddrV4, handle: Handle) -> Connection {
+    pub(crate) fn new(bus: Sender<Msg>, addr: SocketAddr, handle: Handle) -> Connection {
         let (sender, recv) = channel(500);
         let id             = Uuid::new_v4();
         let cloned_handle  = handle.clone();
         let cloned_bus     = bus.clone();
 
         let conn_fut =
-                TcpStream::connect(&SocketAddr::V4(addr), &handle)
+                TcpStream::connect(&addr, &handle)
                     .map_err(ConnErr::ConnectError)
                     .and_then(move |stream|{
                         bus.send(Msg::Established(id))
