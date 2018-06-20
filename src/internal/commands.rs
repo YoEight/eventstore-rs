@@ -1,3 +1,4 @@
+//! Commands this client supports.
 use std::collections::HashMap;
 use std::ops::Deref;
 
@@ -22,6 +23,7 @@ fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationEr
     })
 }
 
+/// Command that sends events to a given stream.
 pub struct WriteEvents<'a> {
     stream: Chars,
     events: Vec<types::EventData>,
@@ -47,16 +49,21 @@ impl <'a> WriteEvents<'a> {
         }
     }
 
+    /// Sets events to write in the command. This function will replace
+    /// previously added events.
     pub fn set_events(self, events: Vec<types::EventData>) -> WriteEvents<'a> {
         WriteEvents { events, ..self}
     }
 
+    /// Adds an event to the current list of events to send to the server.
     pub fn push_event(mut self, event: types::EventData) -> WriteEvents<'a> {
         self.events.push(event);
 
         self
     }
 
+    /// Extends the current set of events to send the the server with the
+    /// given iterator.
     pub fn append_events<T>(mut self, events: T) -> WriteEvents<'a>
         where T: IntoIterator<Item=types::EventData>
     {
@@ -65,18 +72,24 @@ impl <'a> WriteEvents<'a> {
         self
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> WriteEvents<'a> {
         WriteEvents { require_master, ..self }
     }
 
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
     pub fn expected_version(self, version: types::ExpectedVersion) -> WriteEvents<'a> {
         WriteEvents { version, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials) -> WriteEvents<'a> {
         WriteEvents { creds: Some(creds), ..self }
     }
 
+    /// Sends asynchronously the write command to the server.
     pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::WriteEvents::new(promise);
@@ -97,6 +110,7 @@ impl <'a> WriteEvents<'a> {
     }
 }
 
+/// Command that reads an event from a given stream.
 pub struct ReadEvent<'a> {
     stream: Chars,
     event_number: i64,
@@ -126,18 +140,25 @@ impl <'a> ReadEvent<'a> {
         }
     }
 
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: `false`.
     pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadEvent<'a> {
         ReadEvent { resolve_link_tos, ..self }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> ReadEvent<'a> {
         ReadEvent { require_master, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> ReadEvent<'a> {
         ReadEvent { creds: Some(value), ..self }
     }
 
+    /// Sends asynchronously the read command to the server.
     pub fn execute(self) -> impl Future<Item=types::ReadEventStatus<types::ReadEventResult>, Error=OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op         = operations::ReadEvent::new(promise);
@@ -243,6 +264,7 @@ impl StreamAclInternal {
     }
 }
 
+/// Write stream metadata command.
 pub struct WriteStreamMetadata<'a> {
     metadata: types::StreamMetadata,
     inner: WriteEvents<'a>,
@@ -262,24 +284,30 @@ impl <'a> WriteStreamMetadata<'a> {
         }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(mut self, value: bool) -> WriteStreamMetadata<'a> {
         self.inner = self.inner.require_master(value);
 
         self
     }
 
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
     pub fn expected_version(mut self, value: types::ExpectedVersion) -> WriteStreamMetadata<'a> {
         self.inner = self.inner.expected_version(value);
 
         self
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(mut self, value: types::Credentials) -> WriteStreamMetadata<'a> {
         self.inner = self.inner.credentials(value);
 
         self
     }
 
+    /// Sends asynchronously the write command to the server.
     pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let metadata = StreamMetadataInternal::from_metadata(self.metadata);
         let event    = types::EventData::json("$metadata", metadata);
@@ -289,6 +317,7 @@ impl <'a> WriteStreamMetadata<'a> {
     }
 }
 
+/// Reads a stream metadata command.
 pub struct ReadStreamMetadata<'a> {
     stream: Chars,
     inner: ReadEvent<'a>,
@@ -307,18 +336,22 @@ impl <'a> ReadStreamMetadata<'a> {
         }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(mut self, value: bool) -> ReadStreamMetadata<'a> {
         self.inner = self.inner.require_master(value);
 
         self
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(mut self, value: types::Credentials) -> ReadStreamMetadata<'a> {
         self.inner = self.inner.credentials(value);
 
         self
     }
 
+    /// Sends asynchronously the read command to the server.
     pub fn execute(self) -> impl Future<Item=types::StreamMetadataResult, Error=OperationError> {
         let stream = self.stream;
 
@@ -351,6 +384,7 @@ impl <'a> ReadStreamMetadata<'a> {
     }
 }
 
+/// Command that starts a transaction on a stream.
 pub struct TransactionStart<'a> {
     stream: Chars,
     version: types::ExpectedVersion,
@@ -377,18 +411,24 @@ impl <'a> TransactionStart<'a> {
         }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> TransactionStart<'a> {
         TransactionStart { require_master, ..self }
     }
 
-    pub fn version(self, version: types::ExpectedVersion) -> TransactionStart<'a> {
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
+    pub fn expected_version(self, version: types::ExpectedVersion) -> TransactionStart<'a> {
         TransactionStart { version, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> TransactionStart<'a> {
         TransactionStart { creds_opt: Some(value), ..self }
     }
 
+    /// Sends asnychronously the start transaction command to the server.
     pub fn execute(self) -> impl Future<Item=Transaction, Error=OperationError> {
         let cloned_creds   = self.creds_opt.clone();
         let (rcv, promise) = operations::Promise::new(1);
@@ -425,6 +465,7 @@ impl <'a> TransactionStart<'a> {
     }
 }
 
+/// Represents a multi-requests transaction with the GetEventStore server.
 pub struct Transaction {
     stream: Chars,
     id: types::TransactionId,
@@ -436,14 +477,17 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    /// Returns the a `Transaction` id.
     pub fn get_id(&self) -> types::TransactionId {
         self.id
     }
 
+    /// Like `write` but specific to a single event.
     pub fn write_single(&self, event: types::EventData) -> impl Future<Item=(), Error=OperationError> {
         self.write(::std::iter::once(event))
     }
 
+    /// Asynchronously write to transaction in the GetEventStore server.
     pub fn write<I>(&self, events: I) -> impl Future<Item=(), Error=OperationError>
         where I: IntoIterator<Item=types::EventData>
     {
@@ -464,6 +508,7 @@ impl Transaction {
         single_value_future(rcv)
     }
 
+    /// Asynchronously commit this transaction.
     pub fn commit(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op =
@@ -482,13 +527,14 @@ impl Transaction {
         single_value_future(rcv)
     }
 
-    pub fn rollback(self) {
-        // On purpose, this function does nothing. GetEventStore doesn't have a rollback operation.
-        // This function is there mainly because of how transactions are perceived, meaning a
-        // transaction comes with a commit and a rollback functions.
-    }
+    // On purpose, this function does nothing. GetEventStore doesn't have a rollback operation.
+    // This function is there mainly because of how transactions are perceived, meaning a
+    // transaction comes with a `commit` and a `rollback` functions.
+    pub fn rollback(self) {}
 }
 
+/// A command that reads several events from a stream. It can read events
+/// forward or backward.
 pub struct ReadStreamEvents<'a> {
     stream: Chars,
     max_count: i32,
@@ -518,34 +564,47 @@ impl <'a> ReadStreamEvents<'a> {
         }
     }
 
+    /// Asks the command to read forward (toward the end of the stream).
+    /// That's the default behavior.
     pub fn forward(self) -> ReadStreamEvents<'a> {
         ReadStreamEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
+    /// Asks the command to read backward (toward the begining of the stream).
     pub fn backward(self) -> ReadStreamEvents<'a> {
         ReadStreamEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> ReadStreamEvents<'a> {
         ReadStreamEvents { creds: Some(value), ..self }
     }
 
+    /// Max batch size.
     pub fn max_count(self, max_count: i32) -> ReadStreamEvents<'a> {
         ReadStreamEvents { max_count, ..self }
     }
 
+    /// Starts the read ot the given event number. By default, it starts at
+    /// 0.
     pub fn start_from(self, start: i64) -> ReadStreamEvents<'a> {
         ReadStreamEvents { start, ..self }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> ReadStreamEvents<'a> {
         ReadStreamEvents { require_master, ..self }
     }
 
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: `false`.
     pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadStreamEvents<'a> {
         ReadStreamEvents { resolve_link_tos, ..self }
     }
 
+    /// Sends asynchronously the read command to the server.
     pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::ReadStreamEvents::new(promise, self.direction);
@@ -567,6 +626,7 @@ impl <'a> ReadStreamEvents<'a> {
     }
 }
 
+/// Like `ReadStreamEvents` but specialized to system stream '$all'.
 pub struct ReadAllEvents<'a> {
     max_count: i32,
     start: types::Position,
@@ -592,34 +652,47 @@ impl <'a> ReadAllEvents<'a> {
         }
     }
 
+    /// Asks the command to read forward (toward the end of the stream).
+    /// That's the default behavior.
     pub fn forward(self) -> ReadAllEvents<'a> {
         ReadAllEvents { direction: types::ReadDirection::Forward, ..self }
     }
 
+    /// Asks the command to read backward (toward the begining of the stream).
     pub fn backward(self) -> ReadAllEvents<'a> {
         ReadAllEvents { direction: types::ReadDirection::Backward, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> ReadAllEvents<'a> {
         ReadAllEvents { creds: Some(value), ..self }
     }
 
+    /// Max batch size.
     pub fn max_count(self, max_count: i32) -> ReadAllEvents<'a> {
         ReadAllEvents { max_count, ..self }
     }
 
+    /// Starts the read ot the given event number. By default, it starts at
+    /// `types::Position::start`.
     pub fn start_from(self, start: types::Position) -> ReadAllEvents<'a> {
         ReadAllEvents { start, ..self }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> ReadAllEvents<'a> {
         ReadAllEvents { require_master, ..self }
     }
 
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: `false`.
     pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadAllEvents<'a> {
         ReadAllEvents { resolve_link_tos, ..self }
     }
 
+    /// Sends asynchronously the read command to the server.
     pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::AllSlice>, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::ReadAllEvents::new(promise, self.direction);
@@ -640,6 +713,9 @@ impl <'a> ReadAllEvents<'a> {
     }
 }
 
+/// Command that deletes a stream. More information on [Deleting stream and events].
+///
+/// [Deleting stream and events]: https://eventstore.org/docs/server/deleting-streams-and-events/index.html
 pub struct DeleteStream<'a> {
     stream: Chars,
     require_master: bool,
@@ -665,22 +741,43 @@ impl <'a> DeleteStream<'a> {
         }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> DeleteStream<'a> {
         DeleteStream { require_master, ..self }
     }
 
+    /// Asks the server to check that the stream receiving the event is at
+    /// the given expected version. Default: `types::ExpectedVersion::Any`.
     pub fn expected_version(self, version: types::ExpectedVersion) -> DeleteStream<'a> {
         DeleteStream { version, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> DeleteStream<'a> {
         DeleteStream { creds: Some(value), ..self }
     }
 
-    pub fn hard_delete(self, hard_delete: bool) -> DeleteStream<'a> {
-        DeleteStream { hard_delete, ..self }
+    /// Makes use of Truncate before. When a stream is deleted, its Truncate
+    /// before is set to the streams current last event number. When a soft
+    /// deleted stream is read, the read will return a StreamNotFound. After
+    /// deleting the stream, you are able to write to it again, continuing from
+    /// where it left off.
+    ///
+    /// That is the default behavior.
+    pub fn soft_delete(self) -> DeleteStream<'a> {
+        DeleteStream { hard_delete: false, ..self }
     }
 
+    /// A hard delete writes a tombstone event to the stream, permanently
+    /// deleting it. The stream cannot be recreated or written to again.
+    /// Tombstone events are written with the event type '$streamDeleted'. When
+    /// a hard deleted stream is read, the read will return a StreamDeleted.
+    pub fn hard_delete(self) -> DeleteStream<'a> {
+        DeleteStream { hard_delete: true, ..self }
+    }
+
+    /// Sends asynchronously the delete command to the server.
     pub fn execute(self) -> impl Future<Item=types::Position, Error=OperationError> {
         let     (rcv, promise) = operations::Promise::new(1);
         let mut op             = operations::DeleteStream::new(promise);
@@ -701,6 +798,13 @@ impl <'a> DeleteStream<'a> {
     }
 }
 
+/// Represents a volatile subscription. For example, if a stream has 100 events
+/// in it when a subscriber connects, the subscriber can expect to see event
+/// number 101 onwards until the time the subscription is closed or dropped.
+///
+/// * Notes
+/// If the connection drops, the command will not try to resume the subscription.
+/// If you need this behavior, use a catchup subscription instead.
 pub struct SubscribeToStream<'a> {
     stream_id: Chars,
     pub(crate) sender: Sender<Msg>,
@@ -723,14 +827,20 @@ impl <'a> SubscribeToStream<'a> {
         }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> SubscribeToStream<'a> {
         SubscribeToStream { creds: Some(value), ..self }
     }
 
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: `false`.
     pub fn resolve_link_tos(self, resolve_link_tos: bool) -> SubscribeToStream<'a> {
         SubscribeToStream { resolve_link_tos, ..self }
     }
 
+    /// Sends the volatile subscription request to the server asynchronously
+    /// even if the subscription is available right away.
     pub fn execute(self) -> types::Subscription {
         let sender   = self.sender.clone();
         let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
@@ -755,6 +865,26 @@ impl <'a> SubscribeToStream<'a> {
     }
 }
 
+/// Subscribes to a given stream. This kind of subscription specifies a
+/// starting point (by default, the beginning of a stream). For a regular
+/// stream, that starting point will be an event number. For the system
+/// stream `$all`, it will be a position in the transaction file
+/// (see `subscribe_to_all_from`). This subscription will fetch every event
+/// until the end of the stream, then will dispatch subsequently written
+/// events.
+///
+/// For example, if a starting point of 50 is specified when a stream has
+/// 100 events in it, the subscriber can expect to see events 51 through
+/// 100, and then any events subsequenttly written events until such time
+/// as the subscription is dropped or closed.
+///
+/// * Notes
+/// Catchup subscription are resilient to connection drops.
+/// Basically, if the connection drops. The command will restart its
+/// catching up phase from the begining and then emit a new volatile
+/// subscription request.
+///
+/// All this process happens without the user has to do anything.
 pub struct RegularCatchupSubscribe<'a> {
     stream_id: Chars,
     resolve_link_tos: bool,
@@ -780,22 +910,37 @@ impl <'a> RegularCatchupSubscribe<'a> {
         }
     }
 
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: `false`.
     pub fn resolve_link_tos(self, resolve_link_tos: bool) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { resolve_link_tos, ..self }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { require_master, ..self }
     }
 
+    /// For example, if a starting point of 50 is specified when a stream has
+    /// 100 events in it, the subscriber can expect to see events 51 through
+    /// 100, and then any events subsequenttly written events until such time
+    /// as the subscription is dropped or closed.
+    ///
+    /// By default, it will start from the event number 0.
     pub fn start_position(self, start_pos: i64) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { start_pos, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials) -> RegularCatchupSubscribe<'a> {
         RegularCatchupSubscribe { creds_opt: Some(creds), ..self }
     }
 
+    /// Preforms the catching up phase of the subscription asynchronously. When
+    /// it will reach the head of stream, the command will emit a volatile
+    /// subscription request.
     pub fn execute(self) -> types::Subscription {
         let sender     = self.sender.clone();
         let (tx, rx)   = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
@@ -833,6 +978,7 @@ impl <'a> RegularCatchupSubscribe<'a> {
     }
 }
 
+/// Like `RegularCatchupSubscribe` but specific to the system stream '$all'.
 pub struct AllCatchupSubscribe<'a> {
     resolve_link_tos: bool,
     require_master: bool,
@@ -856,22 +1002,33 @@ impl <'a> AllCatchupSubscribe<'a> {
         }
     }
 
+    /// When using projections, you can have links placed into another stream.
+    /// If you set `true`, the server will resolve those links and will return
+    /// the event that the link points to. Default: `false`.
     pub fn resolve_link_tos(self, resolve_link_tos: bool) -> AllCatchupSubscribe<'a> {
         AllCatchupSubscribe { resolve_link_tos, ..self }
     }
 
+    /// Asks the server receiving the command to be the master of the cluster
+    /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> AllCatchupSubscribe<'a> {
         AllCatchupSubscribe { require_master, ..self }
     }
 
+    /// Starting point in the transaction journal log. By default, it will start at
+    /// `types::Position::start`.
     pub fn start_position(self, start_pos: types::Position) -> AllCatchupSubscribe<'a> {
         AllCatchupSubscribe { start_pos, ..self }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials) -> AllCatchupSubscribe<'a> {
         AllCatchupSubscribe { creds_opt: Some(creds), ..self }
     }
 
+    /// Preforms the catching up phase of the subscription asynchronously. When
+    /// it will reach the head of stream, the command will emit a volatile
+    /// subscription request.
     pub fn execute(self) -> types::Subscription {
         let sender     = self.sender.clone();
         let (tx, rx)   = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
@@ -908,6 +1065,7 @@ impl <'a> AllCatchupSubscribe<'a> {
     }
 }
 
+/// A command that creates a persistent subscription for a given group.
 pub struct CreatePersistentSubscription<'a> {
     stream_id: Chars,
     group_name: Chars,
@@ -937,8 +1095,8 @@ impl<'a> CreatePersistentSubscription<'a> {
         }
     }
 
-    pub
-    fn credentials(
+    /// Performs the command with the given credentials.
+    pub fn credentials(
         self,
         creds: types::Credentials,
         ) -> CreatePersistentSubscription<'a>
@@ -946,8 +1104,9 @@ impl<'a> CreatePersistentSubscription<'a> {
         CreatePersistentSubscription { creds: Some(creds), ..self }
     }
 
-    pub
-    fn settings(
+    /// Creates a persistent subscription based on the given
+    /// `types::PersistentSubscriptionSettings`.
+    pub fn settings(
         self,
         sub_settings: types::PersistentSubscriptionSettings
     ) -> CreatePersistentSubscription<'a>
@@ -955,8 +1114,9 @@ impl<'a> CreatePersistentSubscription<'a> {
         CreatePersistentSubscription { sub_settings, ..self }
     }
 
-    pub
-    fn execute(self)
+    /// Sends the persistent subscription creation command asynchronously to
+    /// the server.
+    pub fn execute(self)
         -> impl Future<Item=types::PersistActionResult, Error=OperationError>
     {
         let     (rcv, promise) = operations::Promise::new(1);
@@ -977,6 +1137,7 @@ impl<'a> CreatePersistentSubscription<'a> {
     }
 }
 
+/// Command that updates an already existing subscription's settings.
 pub struct UpdatePersistentSubscription<'a> {
     stream_id: Chars,
     group_name: Chars,
@@ -1006,6 +1167,7 @@ impl<'a> UpdatePersistentSubscription<'a> {
         }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(
         self,
         creds: types::Credentials,
@@ -1014,6 +1176,8 @@ impl<'a> UpdatePersistentSubscription<'a> {
         UpdatePersistentSubscription { creds: Some(creds), ..self }
     }
 
+    /// Updates a persistent subscription using the given
+    /// `types::PersistentSubscriptionSettings`.
     pub fn settings(
         self,
         sub_settings: types::PersistentSubscriptionSettings
@@ -1022,6 +1186,8 @@ impl<'a> UpdatePersistentSubscription<'a> {
         UpdatePersistentSubscription { sub_settings, ..self }
     }
 
+    /// Sends the persistent subscription update command asynchronously to
+    /// the server.
     pub fn execute(self)
         -> impl Future<Item=types::PersistActionResult, Error=OperationError>
     {
@@ -1043,6 +1209,7 @@ impl<'a> UpdatePersistentSubscription<'a> {
     }
 }
 
+/// Command that  deletes a persistent subscription.
 pub struct DeletePersistentSubscription<'a> {
     stream_id: Chars,
     group_name: Chars,
@@ -1070,6 +1237,7 @@ impl<'a> DeletePersistentSubscription<'a> {
         }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(
         self,
         creds: types::Credentials,
@@ -1078,6 +1246,8 @@ impl<'a> DeletePersistentSubscription<'a> {
         DeletePersistentSubscription { creds: Some(creds), ..self }
     }
 
+    /// Sends the persistent subscription deletion command asynchronously to
+    /// the server.
     pub fn execute(self)
         -> impl Future<Item=types::PersistActionResult, Error=OperationError>
     {
@@ -1098,6 +1268,10 @@ impl<'a> DeletePersistentSubscription<'a> {
     }
 }
 
+/// A subscription model where the server remembers the state of the
+/// consumption of a stream. This allows for many different modes of operations
+/// compared to a regular subscription where the client hols the subscription
+/// state.
 pub struct ConnectToPersistentSubscription<'a> {
     stream_id: Chars,
     group_name: Chars,
@@ -1126,18 +1300,22 @@ impl<'a> ConnectToPersistentSubscription<'a> {
         }
     }
 
+    /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials)
         -> ConnectToPersistentSubscription<'a>
     {
         ConnectToPersistentSubscription { creds: Some(creds), ..self }
     }
 
+    /// The buffer size to use  for the persistent subscription.
     pub fn batch_size(self, batch_size: u16)
         -> ConnectToPersistentSubscription<'a>
     {
         ConnectToPersistentSubscription { batch_size, ..self }
     }
 
+    /// Sends the persistent subscription connection request to the server
+    /// asynchronously even if the subscription is available right away.
     pub fn execute(self) -> types::Subscription {
         let sender   = self.sender.clone();
         let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
