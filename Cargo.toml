@@ -2,7 +2,12 @@
 name = "eventstore"
 version = "0.1.0"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
-build = "build.rs"
+
+# Uncomment if you want to update messages.rs code-gen.
+# We disabled codegen.rs because it requires having `protoc` installed on your machine
+# in order to build that library.
+# build = "codegen.rs"
+
 license = "MIT"
 description = "GetEventStore TCP client"
 homepage = "https://code.coppermine.io/eventsourcing/rust-ges"
