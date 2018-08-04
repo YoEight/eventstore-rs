@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 
 # Uncomment if you want to update messages.rs code-gen.

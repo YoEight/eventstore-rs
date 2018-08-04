@@ -12,7 +12,7 @@
 stages:
   - build
   - test
-    #  - deploy
+  - deploy
 
 Rustc 1.26:
   <<: *cargo_build
@@ -43,7 +43,18 @@ Integration tests:
     paths:
       - cached_cargo
 
-# push on crates.io:
-#   stage: deploy
-#   when: manual
+push on crates.io:
+  stage: deploy
+  image: library/rust:1.26
+  variables:
+    CARGO_HOME: cached_cargo
+  cache:
+    key: rust-1.26
+    paths:
+      - cached_cargo
+  script:
+    - cargo login $CRATE_TOKEN
+    - cargo package
+    - cargo publish
+  when: manual
 
