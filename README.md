@@ -1,7 +1,7 @@
 # eventstore-rs
 Rust GetEventStore TCP Client.
 
-[![Talk and exchange ideas in our dedicated Discord Server!]()](https://discord.gg/x7q37jJ)
+[Talk and exchange ideas in our dedicated Discord Server]
 
 ## State of implemented features
 
@@ -73,3 +73,5 @@ MIT License
 -Yorick Laupa
 
 [GetEventStore]: https://eventstore.org/
+[Talk and exchange ideas in our dedicated Discord Server]: https://discord.gg/x7q37jJ
+

@@ -11,3 +11,5 @@ Cargo.lock
 **/*.rs.bk
 Cargo.lock
 
+# Directories generated during CI workflow.
+cached_cargo/
