@@ -1,13 +1,7 @@
-.job_template: &cargo_before
-  before_script:
-    - apt-get update
-    - apt-get install -y protobuf-compiler
-
 .job_template: &cargo_build
   stage: build
   variables:
     CARGO_HOME: cached_cargo
-  <<: *cargo_before
   script:
     - cargo check
 
@@ -42,7 +36,6 @@ Integration tests:
   services:
     - name: eventstore/eventstore:release-4.1.0
       alias: eventstore
-  <<: *cargo_before
   script:
     - cargo test
   cache:
