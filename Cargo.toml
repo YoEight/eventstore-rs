@@ -27,7 +27,7 @@ tokio = "0.1"
 tokio-core = "0.1"
 tokio-io = "0.1"
 futures = "0.1"
-uuid = { version  = "0.5", features = [ "v4" ] }
+uuid = { version  = "0.7", features = [ "v4" ] }
 bytes = "0.4"
 timer = "0.2"
 time = "0.1"
