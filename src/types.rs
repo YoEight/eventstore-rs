@@ -13,7 +13,7 @@ use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
-use uuid::{ Uuid, ParseError };
+use uuid::{ Uuid, BytesError };
 
 use internal::command::Cmd;
 use internal::messages;
@@ -289,14 +289,14 @@ pub struct RecordedEvent {
     pub created_epoch: Option<i64>,
 }
 
-fn decode_parse_error(err: ParseError) -> ::std::io::Error {
-    ::std::io::Error::new(::std::io::ErrorKind::Other, format!("ParseError {}", err))
+fn decode_bytes_error(err: BytesError) -> ::std::io::Error {
+    ::std::io::Error::new(::std::io::ErrorKind::Other, format!("BytesError {}", err))
 }
 
 impl RecordedEvent {
     pub(crate) fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
         let event_stream_id = event.take_event_stream_id();
-        let event_id        = Uuid::from_bytes(event.get_event_id()).map_err(decode_parse_error)?;
+        let event_id        = Uuid::from_slice(event.get_event_id()).map_err(decode_bytes_error)?;
         let event_number    = event.get_event_number();
         let event_type      = event.take_event_type();
         let data            = event.take_data();

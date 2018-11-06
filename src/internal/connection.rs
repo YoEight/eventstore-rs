@@ -9,7 +9,7 @@ use tokio_io::AsyncRead;
 use tokio_io::codec::{ Decoder, Encoder };
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
-use uuid::{ Uuid, ParseError };
+use uuid::{ Uuid, BytesError };
 
 use internal::command::Cmd;
 use internal::messaging::Msg;
@@ -42,8 +42,8 @@ enum DecodeState {
     Payload,
 }
 
-fn decode_parse_error(err: ParseError) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, format!("ParseError {}", err))
+fn decode_bytes_error(err: BytesError) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, format!("BytesError {}", err))
 }
 
 impl Decoder for PkgCodec {
@@ -75,7 +75,7 @@ impl Decoder for PkgCodec {
 
             cursor.copy_to_slice(&mut correlation_bytes);
 
-            let correlation = Uuid::from_bytes(&correlation_bytes).map_err(decode_parse_error)?;
+            let correlation = Uuid::from_slice(&correlation_bytes).map_err(decode_bytes_error)?;
 
             // Client-wise, the server doesn't send back authentication
             // information. For a matter of consistency, we still implement
