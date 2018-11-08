@@ -5,10 +5,10 @@ use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
 use futures::stream::iter_ok;
-use tokio_io::AsyncRead;
-use tokio_io::codec::{ Decoder, Encoder };
-use tokio_core::net::TcpStream;
-use tokio_core::reactor::Handle;
+use tokio::spawn;
+use tokio::io::AsyncRead;
+use tokio::codec::{ Decoder, Encoder };
+use tokio::net::TcpStream;
 use uuid::{ Uuid, BytesError };
 
 use internal::command::Cmd;
@@ -19,7 +19,6 @@ use types::Credentials;
 pub(crate) struct Connection {
     pub(crate) id:     Uuid,
     sender: Sender<Pkg>,
-    handle: Handle,
 }
 
 struct PkgCodec {
@@ -167,14 +166,13 @@ fn io_error_only<A>(res: Result<A, ConnErr>) -> io::Result<()> {
 }
 
 impl Connection {
-    pub(crate) fn new(bus: Sender<Msg>, addr: SocketAddr, handle: Handle) -> Connection {
+    pub(crate) fn new(bus: Sender<Msg>, addr: SocketAddr) -> Connection {
         let (sender, recv) = channel(500);
         let id             = Uuid::new_v4();
-        let cloned_handle  = handle.clone();
         let cloned_bus     = bus.clone();
 
         let conn_fut =
-                TcpStream::connect(&addr, &handle)
+                TcpStream::connect(&addr)
                     .map_err(ConnErr::ConnectError)
                     .and_then(move |stream|{
                         bus.send(Msg::Established(id))
@@ -215,8 +213,8 @@ impl Connection {
                                 .then(|_| Ok(()))
                         });
 
-                cloned_handle.spawn(rcving);
-                cloned_handle.spawn(txing);
+                spawn(rcving);
+                spawn(txing);
 
                 Ok(())
             });
@@ -228,20 +226,19 @@ impl Connection {
                         .then(|_| Ok(()))
                 });
 
-        handle.spawn(conn_fut);
+        spawn(conn_fut);
 
         Connection {
             id,
             sender,
-            handle,
         }
     }
 
     pub fn enqueue(&self, pkg: Pkg) {
-        self.handle.spawn(self.sender.clone().send(pkg).then(|_| Ok(())))
+        spawn(self.sender.clone().send(pkg).then(|_| Ok(())));
     }
 
     pub fn enqueue_all(&self, pkgs: Vec<Pkg>) {
-        self.handle.spawn(self.sender.clone().send_all(iter_ok(pkgs)).then(|_| Ok(())))
+        spawn(self.sender.clone().send_all(iter_ok(pkgs)).then(|_| Ok(())));
     }
 }
