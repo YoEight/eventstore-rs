@@ -6,7 +6,6 @@ use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
 use futures::stream::iter_ok;
 use tokio::spawn;
-use tokio::io::AsyncRead;
 use tokio::codec::{ Decoder, Encoder };
 use tokio::net::TcpStream;
 use uuid::{ Uuid, BytesError };
@@ -182,7 +181,7 @@ impl Connection {
 
         let conn_fut =
             conn_fut.and_then(move |(bus, stream)| {
-                let (txing, rcving) = stream.framed(PkgCodec::new()).split();
+                let (txing, rcving) = PkgCodec::new().framed(stream).split();
 
                 let rcving =
                     rcving.map_err(ConnErr::ConnectError)
