@@ -18,7 +18,7 @@ fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationEr
     stream.into_future().then(|res| {
         match res {
             Ok((Some(x), _)) => x,
-            _                => unreachable!(),
+            _                => Err(operations::OperationError::Aborted),
         }
     })
 }
