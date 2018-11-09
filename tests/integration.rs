@@ -476,4 +476,6 @@ fn all_round_operation_test() {
     test_update_persistent_subscription(&connection);
     test_delete_persistent_subscription(&connection);
     test_persistent_subscription(&connection);
+
+    connection.shutdown();
 }

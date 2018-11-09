@@ -324,18 +324,15 @@ impl Connection {
         commands::ConnectToPersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
     }
 
-    /// Asynchronously closes the connection to the server.
-    pub fn shutdown(&self) {
-        self.sender.clone().send(Msg::Shutdown).wait().unwrap();
-    }
-
-    /// Waits the `Client` to be closed. When closing a connection, a `Client`
-    /// might have ongoing operations running. Calling this function makes sure
-    /// the `Client` has handled everything before terminate your program.
+    /// Closes the connection to the server.
     ///
-    /// TODO - At some point, this function with the next `Drop`
-    /// implementation.
-    pub fn wait_till_closed(self) {
+    /// When closing a connection, a `Connection` might have ongoing operations
+    /// running. `shutdown` makes sure the `Connection` has handled
+    /// everything properly when returning.
+    ///
+    /// `shutdown` blocks the current thread.
+    pub fn shutdown(self) {
+        self.sender.send(Msg::Shutdown).wait().unwrap();
         self.worker.join().unwrap();
     }
 }
