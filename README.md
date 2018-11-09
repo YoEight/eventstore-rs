@@ -27,19 +27,14 @@ extern crate futures;
 #[macro_use]
 extern crate serde_json;
 
-use eventstore::Client;
-use eventstore::types::{ Settings, EventData };
-use futures::future::Future;
+use eventstore::Connection;
+use eventstore::types::EventData;
+use futures::Future;
 
 fn main() {
-    // No connection has started yet.
-    let client = Client::new(
-        Settings::default(),
-        "127.0.0.1:1113".parse().unwrap(),
-    );
-
-    // Now the asynchronous connection procedure will start.
-    client.start();
+    let connection = Connection::builder()
+        .start("127.0.0.1:1113")
+        .unwrap();
 
     // It is not mandatory to use JSON as a data format however GetEventStore
     // provides great additional values if you do so.
@@ -51,7 +46,7 @@ fn main() {
 
     // All the operations are asynchronous but for the sake of this example
     // we decide to wait until the server sends a response.
-    let result = client
+    let result = connection
         .write_events("language-stream")
         .push_event(event)
         .execute()
