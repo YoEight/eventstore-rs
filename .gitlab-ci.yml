@@ -1,60 +1,45 @@
 .job_template: &cargo_build
   stage: build
-  variables:
-    CARGO_HOME: cached_cargo
   script:
+    - rustc --version
     - cargo check
 
-.job_template: &cargo_cache
-  paths:
-    - cached_cargo
+variables:
+  RUSTC_STABLE_VERSION: "1.30"
 
 stages:
   - build
   - test
   - deploy
 
-Rustc 1.26:
+Rustc Stable:
   <<: *cargo_build
-  image: library/rust:1.26
-  cache:
-    <<: *cargo_cache
-    key: rust-1.26
+  image: library/rust:$RUSTC_STABLE_VERSION
 
 Rustc Nightly:
   <<: *cargo_build
   image: rustlang/rust:nightly
-  cache:
-    <<: *cargo_cache
-    key: rust-nightly
 
 Integration tests:
-  image: library/rust:1.26
+  image: library/rust:$RUSTC_STABLE_VERSION
   variables:
     EVENTSTORE_HOST: "eventstore"
-    CARGO_HOME: cached_cargo
   services:
     - name: eventstore/eventstore:release-4.1.0
       alias: eventstore
   script:
+    - rustc --version
     - cargo test
-  cache:
-    key: cargo-test
-    paths:
-      - cached_cargo
 
 push on crates.io:
   stage: deploy
-  image: library/rust:1.26
-  variables:
-    CARGO_HOME: cached_cargo
-  cache:
-    key: rust-1.26
-    paths:
-      - cached_cargo
+  image: library/rust:$RUSTC_STABLE_VERSION
+  only:
+    - tags
+
   script:
+    - cargo --version
     - cargo login $CRATE_TOKEN
     - cargo package
     - cargo publish
-  when: manual
 
