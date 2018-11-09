@@ -23,7 +23,6 @@ mod connection;
 pub use connection::{
     Connection,
     ConnectionBuilder,
-    Handle,
 };
 pub use internal::{ commands };
 pub mod types;
