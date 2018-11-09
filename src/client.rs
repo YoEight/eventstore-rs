@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
-use std::thread::{ spawn, JoinHandle };
+use std::thread::{ self, JoinHandle };
 
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
 use protobuf::Chars;
-use tokio_core::reactor::Core;
+use tokio::runtime::Runtime;
 
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
@@ -38,12 +38,10 @@ impl Client {
 
         let tx     = sender.clone();
         let setts  = settings.clone();
-        let handle = spawn(move || {
-            let mut core   = Core::new().unwrap();
-            let     handle = core.handle();
-
-            let mut driver = Driver::new(&setts, disc, sender, handle.clone());
-            let mut ticker = None;
+        let handle = thread::spawn(move || {
+            let mut runtime  = Runtime::new().unwrap();
+            let mut driver   = Driver::new(&setts, disc, sender);
+            let mut ticker   = None;
 
             let worker = recv.for_each(move |msg| {
                 match msg {
@@ -93,7 +91,8 @@ impl Client {
             });
 
             // TODO - Handle more gracefully when the driver quits.
-            let _ = core.run(worker);
+            let _ = runtime.spawn(worker);
+            runtime.shutdown_on_idle().wait().unwrap();
 
             info!("Client is closed");
         });

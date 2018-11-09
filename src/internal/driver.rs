@@ -4,8 +4,8 @@ use std::time::{ Duration, Instant };
 
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::Sender;
-use tokio_core::reactor::Handle;
-use tokio_timer::Timer;
+use tokio::spawn;
+use tokio::timer::Interval;
 use uuid::Uuid;
 
 use internal::discovery::{ Endpoint, Discovery };
@@ -159,7 +159,6 @@ pub(crate) enum Report {
 }
 
 pub(crate) struct Driver {
-    handle: Handle,
     registry: Registry,
     candidate: Option<Connection>,
     tracker: HealthTracker,
@@ -167,7 +166,7 @@ pub(crate) struct Driver {
     state: ConnectionState,
     phase: Phase,
     last_endpoint: Option<Endpoint>,
-    discovery: Box<Discovery>,
+    discovery: Box<Discovery + Send>,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
@@ -180,9 +179,8 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
-    pub(crate) fn new(setts: &Settings, disc: Box<Discovery>, sender: Sender<Msg>, handle: Handle) -> Driver {
+    pub(crate) fn new(setts: &Settings, disc: Box<Discovery + Send>, sender: Sender<Msg>) -> Driver {
         Driver {
-            handle: handle,
             registry: Registry::new(),
             candidate: None,
             tracker: HealthTracker::new(&setts),
@@ -209,13 +207,13 @@ impl Driver {
         self.phase       = Phase::Reconnecting;
 
         let tick_period = Duration::from_millis(200);
-        let tick        = Timer::default().interval(tick_period).map_err(|_| ());
+        let tick        = Interval::new(Instant::now(), tick_period).map_err(|_| ());
 
         let tick = tick.fold(self.sender.clone(), |sender, _| {
             sender.send(Msg::Tick).map_err(|_| ())
         });
 
-        self.handle.spawn(tick.then(|_| Ok(())));
+        spawn(tick.then(|_| Ok(())));
 
         self.discover();
     }
@@ -227,7 +225,7 @@ impl Driver {
             self.phase = Phase::EndpointDiscovery;
 
             // TODO - Properly handle endpoint discovery asynchronously.
-            self.handle.spawn(
+            spawn(
                 self.sender.clone().send(Msg::Establish(endpoint)).then(|_| Ok(())));
 
             self.tracker.reset();
@@ -237,7 +235,7 @@ impl Driver {
     pub(crate) fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
             self.phase         = Phase::Establishing;
-            self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr, self.handle.clone()));
+            self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr));
             self.last_endpoint = Some(endpoint);
         }
     }
