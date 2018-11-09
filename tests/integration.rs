@@ -10,8 +10,8 @@ extern crate uuid;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::Future;
-use eventstore::Client;
-use eventstore::types::{ self, Credentials, Settings, EventData, StreamMetadata, SubscriptionEnv };
+use eventstore::Connection;
+use eventstore::types::{ self, Credentials, EventData, StreamMetadata, SubscriptionEnv };
 use uuid::Uuid;
 
 struct TestSub {
@@ -112,11 +112,11 @@ fn generate_event(event_type: &str) -> EventData {
 }
 
 // We write an event into a stream.
-fn test_write_events(client: &Client) {
+fn test_write_events(connection: &Connection) {
     let stream_id = fresh_stream_id("write-events");
     let event     = generate_event("write-events-test");
 
-    let result = client.write_events(stream_id)
+    let result = connection.write_events(stream_id)
                        .push_event(event)
                        .execute()
                        .wait()
@@ -126,16 +126,16 @@ fn test_write_events(client: &Client) {
 }
 
 // We write an event into a stream then try to read it back.
-fn test_read_event(client: &Client) {
+fn test_read_event(connection: &Connection) {
     let stream_id = fresh_stream_id("read_event");
     let event     = generate_event("read_event_test");
-    let _         = client.write_events(stream_id.as_str())
+    let _         = connection.write_events(stream_id.as_str())
                           .push_event(event)
                           .execute()
                           .wait()
                           .unwrap();
 
-    let result = client.read_event(stream_id.as_str(), 0)
+    let result = connection.read_event(stream_id.as_str(), 0)
                        .execute()
                        .wait()
                        .unwrap();
@@ -156,7 +156,7 @@ fn test_read_event(client: &Client) {
 }
 
 // We write metadata to a stream then try to read it back.
-fn test_write_and_read_stream_metadata(client: &Client) {
+fn test_write_and_read_stream_metadata(connection: &Connection) {
     let stream_id = fresh_stream_id("metadata");
     let duration  = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
     let metadata  =
@@ -167,7 +167,7 @@ fn test_write_and_read_stream_metadata(client: &Client) {
             .build();
 
     let result =
-        client.write_stream_metadata(stream_id.as_str(), metadata)
+        connection.write_stream_metadata(stream_id.as_str(), metadata)
               .execute()
               .wait()
               .unwrap();
@@ -175,7 +175,7 @@ fn test_write_and_read_stream_metadata(client: &Client) {
     debug!("Write stream metadata {:?}", result);
 
     let result =
-        client.read_stream_metadata(stream_id.as_str())
+        connection.read_stream_metadata(stream_id.as_str())
               .execute()
               .wait()
               .unwrap();
@@ -195,11 +195,11 @@ fn test_write_and_read_stream_metadata(client: &Client) {
 
 // We write a stream using a transaction. The write will be only be taken into
 // account by the server after the `commit` call.
-fn test_transaction(client: &Client) {
+fn test_transaction(connection: &Connection) {
     let stream_id   = fresh_stream_id("transaction");
     let event       = generate_event("transaction_test");
     let transaction =
-        client.start_transaction(stream_id.as_str())
+        connection.start_transaction(stream_id.as_str())
               .execute()
               .wait()
               .unwrap();
@@ -217,18 +217,18 @@ fn test_transaction(client: &Client) {
 }
 
 // We read stream events by batch.
-fn test_read_stream_events(client: &Client) {
+fn test_read_stream_events(connection: &Connection) {
     let stream_id = fresh_stream_id("read-stream-events");
     let events    = generate_events("read-stream-events-test", 10);
 
-    let _ = client.write_events(stream_id.as_str())
+    let _ = connection.write_events(stream_id.as_str())
                   .append_events(events)
                   .execute()
                   .wait()
                   .unwrap();
 
     let result =
-        client.read_stream(stream_id.as_str())
+        connection.read_stream(stream_id.as_str())
               .execute()
               .wait()
               .unwrap();
@@ -239,9 +239,9 @@ fn test_read_stream_events(client: &Client) {
 // We read $all system stream. We cannot write on $all stream. It's very
 // unlikely for $all stream to be empty. From a personal note, I never saw that
 // stream empty even right after booting the server.
-fn test_read_all_stream(client: &Client) {
+fn test_read_all_stream(connection: &Connection) {
     let result =
-        client.read_all()
+        connection.read_all()
               .max_count(10)
               .execute()
               .wait()
@@ -251,17 +251,17 @@ fn test_read_all_stream(client: &Client) {
 }
 
 // We write an event into a stream then delete that stream.
-fn test_delete_stream(client: &Client) {
+fn test_delete_stream(connection: &Connection) {
     let stream_id = fresh_stream_id("delete");
     let event     = generate_event("delete-test");
 
-    let _ = client.write_events(stream_id.as_str())
+    let _ = connection.write_events(stream_id.as_str())
                   .push_event(event)
                   .execute()
                   .wait()
                   .unwrap();
 
-    let result = client.delete_stream(stream_id.as_str())
+    let result = connection.delete_stream(stream_id.as_str())
                        .execute()
                        .wait()
                        .unwrap();
@@ -272,9 +272,9 @@ fn test_delete_stream(client: &Client) {
 // We create a volatile subscription on a stream then write events into that
 // same stream. We check our subscription consumer internal state to see it
 // has consumed all the expected events.
-fn test_volatile_subscription(client: &Client) {
+fn test_volatile_subscription(connection: &Connection) {
     let stream_id = fresh_stream_id("volatile");
-    let sub       = client.subcribe_to_stream(stream_id.as_str()).execute();
+    let sub       = connection.subcribe_to_stream(stream_id.as_str()).execute();
     let events    = generate_events("volatile-test", 3);
     let confirmation = sub.confirmation();
 
@@ -284,7 +284,7 @@ fn test_volatile_subscription(client: &Client) {
 
     let _ = confirmation.wait();
 
-    let _ = client.write_events(stream_id)
+    let _ = connection.write_events(stream_id)
                   .append_events(events)
                   .execute()
                   .wait()
@@ -300,24 +300,24 @@ fn test_volatile_subscription(client: &Client) {
 // sure we receive events written prior and after our subscription request.
 // To assess we received all the events we expected, we test our subscription
 // internal state value.
-fn test_catchup_subscription(client: &Client) {
+fn test_catchup_subscription(connection: &Connection) {
     let stream_id     = fresh_stream_id("catchup");
     let events_before = generate_events("catchup-test-before", 3);
     let events_after  = generate_events("catchup-test-after", 3);
 
-    let _ = client.write_events(stream_id.clone())
+    let _ = connection.write_events(stream_id.clone())
                   .append_events(events_before)
                   .execute()
                   .wait()
                   .unwrap();
 
-    let sub = client.subscribe_to_stream_from(stream_id.clone()).execute();
+    let sub = connection.subscribe_to_stream_from(stream_id.clone()).execute();
 
     let handle = spawn(move || {
         sub.consume(TestSub { count: 0, max: 6 })
     });
 
-    let _ = client.write_events(stream_id)
+    let _ = connection.write_events(stream_id)
                   .append_events(events_after)
                   .execute()
                   .wait()
@@ -330,8 +330,8 @@ fn test_catchup_subscription(client: &Client) {
 
 // $all stream being a special system stream, we can not test as precisely as
 // we did in `test_catchup_subscription`
-fn test_catchup_all_subscription(client: &Client) {
-    let sub = client.subscribe_to_all_from().execute();
+fn test_catchup_all_subscription(connection: &Connection) {
+    let sub = connection.subscribe_to_all_from().execute();
     let tmp = sub.consume(TestSub { count: 0, max: 10 });
 
     assert_eq!(
@@ -342,9 +342,9 @@ fn test_catchup_all_subscription(client: &Client) {
 }
 
 // We test we can successfully create a persistent subscription.
-fn test_create_persistent_subscription(client: &Client) {
+fn test_create_persistent_subscription(connection: &Connection) {
     let stream_id = fresh_stream_id("create_persistent_sub");
-    let result = client
+    let result = connection
         .create_persistent_subscription(stream_id, "a_group_name".to_string())
         .execute()
         .wait()
@@ -358,9 +358,9 @@ fn test_create_persistent_subscription(client: &Client) {
 }
 
 // We test we can successfully update a persistent subscription.
-fn test_update_persistent_subscription(client: &Client) {
+fn test_update_persistent_subscription(connection: &Connection) {
     let stream_id = fresh_stream_id("update_persistent_sub");
-    let result = client
+    let result = connection
         .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
         .execute()
         .wait()
@@ -376,7 +376,7 @@ fn test_update_persistent_subscription(client: &Client) {
 
     setts.max_retry_count = 1000;
 
-    let result = client
+    let result = connection
         .update_persistent_subscription(stream_id, "a_group_name".to_string())
         .settings(setts)
         .execute()
@@ -391,9 +391,9 @@ fn test_update_persistent_subscription(client: &Client) {
 }
 
 // We test we can successfully delete a persistent subscription.
-fn test_delete_persistent_subscription(client: &Client) {
+fn test_delete_persistent_subscription(connection: &Connection) {
     let stream_id = fresh_stream_id("delete_persistent_sub");
-    let result = client
+    let result = connection
         .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
         .execute()
         .wait()
@@ -405,7 +405,7 @@ fn test_delete_persistent_subscription(client: &Client) {
         "We expect create a persistent subscription to succeed",
     );
 
-    let result = client
+    let result = connection
         .delete_persistent_subscription(stream_id, "a_group_name".to_string())
         .execute()
         .wait()
@@ -418,23 +418,23 @@ fn test_delete_persistent_subscription(client: &Client) {
     );
 }
 
-fn test_persistent_subscription(client: &Client) {
+fn test_persistent_subscription(connection: &Connection) {
     let stream_id = fresh_stream_id("persistent_subscription");
     let events    = generate_events("persistent_subscription_test", 5);
 
-    let _ = client
+    let _ = connection
         .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
         .execute()
         .wait()
         .unwrap();
 
-    let _ = client.write_events(stream_id.clone())
+    let _ = connection.write_events(stream_id.clone())
                   .append_events(events)
                   .execute()
                   .wait()
                   .unwrap();
 
-    let sub = client.connect_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
+    let sub = connection.connect_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
                     .execute();
 
     let test_sub = sub.consume(PersistentTestSub { count: 0, max: 5 });
@@ -449,53 +449,31 @@ fn test_persistent_subscription(client: &Client) {
 #[test]
 fn all_round_operation_test() {
     use std::env;
-    use std::net::ToSocketAddrs;
 
     env_logger::init();
 
-    let mut settings = Settings::default();
-    let login        = "admin";
-    let password     = "changeit";
-    let host         = env::var("EVENTSTORE_HOST").unwrap_or("127.0.0.1".to_string());
-    let conn_str     = format!("{}:1113", host);
+    let host = env::var("EVENTSTORE_HOST").unwrap_or("127.0.0.1".to_string());
+    let conn_str = format!("{}:1113", host);
 
     info!("Connection string: {}", conn_str);
-    let addr = match conn_str.to_socket_addrs() {
-        Ok(mut addrs) => {
-            let addr = addrs.next();
 
-            match addr {
-                Some(addr) => addr,
+    let connection = Connection::builder()
+        .with_default_user(Credentials::new("admin", "changeit"))
+        .start(conn_str)
+        .unwrap();
 
-                None => {
-                    panic!("Can't resolve {} address.", conn_str);
-                },
-            }
-        },
-
-        Err(e) => {
-            panic!("Exception occured when parsing {}: {}.", conn_str, e);
-        },
-    };
-
-    settings.default_user = Some(Credentials::new(login, password));
-
-    let client = Client::new(settings, addr);
-
-    client.start();
-
-    test_write_events(&client);
-    test_read_event(&client);
-    test_write_and_read_stream_metadata(&client);
-    test_transaction(&client);
-    test_read_stream_events(&client);
-    test_read_all_stream(&client);
-    test_delete_stream(&client);
-    test_volatile_subscription(&client);
-    test_catchup_subscription(&client);
-    test_catchup_all_subscription(&client);
-    test_create_persistent_subscription(&client);
-    test_update_persistent_subscription(&client);
-    test_delete_persistent_subscription(&client);
-    test_persistent_subscription(&client);
+    test_write_events(&connection);
+    test_read_event(&connection);
+    test_write_and_read_stream_metadata(&connection);
+    test_transaction(&connection);
+    test_read_stream_events(&connection);
+    test_read_all_stream(&connection);
+    test_delete_stream(&connection);
+    test_volatile_subscription(&connection);
+    test_catchup_subscription(&connection);
+    test_catchup_all_subscription(&connection);
+    test_create_persistent_subscription(&connection);
+    test_update_persistent_subscription(&connection);
+    test_delete_persistent_subscription(&connection);
+    test_persistent_subscription(&connection);
 }

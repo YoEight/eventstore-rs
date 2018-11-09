@@ -18,10 +18,11 @@ extern crate serde_json;
 extern crate log;
 
 mod internal;
-mod client;
+mod connection;
 
-pub use client::{
-    Client,
+pub use connection::{
+    Connection,
+    ConnectionBuilder,
     Handle,
 };
 pub use internal::{ commands };

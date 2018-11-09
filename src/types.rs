@@ -22,7 +22,7 @@ use internal::package::Pkg;
 
 /// Represents a reconnection strategy when a connection has dropped or is
 /// about to be created.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Retry {
     Undefinately,
     Only(usize),
@@ -92,7 +92,7 @@ impl Credentials {
 }
 
 /// Global connection settings.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Settings {
     /// Maximum delay of inactivity before the client sends a heartbeat request.
     pub heartbeat_delay: Duration,
@@ -122,8 +122,8 @@ pub struct Settings {
     pub operation_check_period: Duration,
 }
 
-impl Settings {
-    pub fn default() -> Settings {
+impl Default for Settings {
+    fn default() -> Self {
         Settings {
             heartbeat_delay: Duration::from_millis(750),
             heartbeat_timeout: Duration::from_millis(1500),

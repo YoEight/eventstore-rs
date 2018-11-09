@@ -1,5 +1,7 @@
-use std::net::SocketAddr;
+use std::net::{ SocketAddr, ToSocketAddrs };
+use std::io::{ self, Result };
 use std::thread::{ self, JoinHandle };
+use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Sender, channel };
@@ -10,7 +12,7 @@ use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
 use internal::commands;
 use internal::discovery::StaticDiscovery;
-use types::{ StreamMetadata, Settings };
+use types::{ self, StreamMetadata, Settings };
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
@@ -24,15 +26,99 @@ use types::{ StreamMetadata, Settings };
 /// or a single thread can make many asynchronous requests. To get the most
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
-pub struct Client {
+pub struct Connection {
     worker: JoinHandle<()>,
     sender: Sender<Msg>,
     settings: Settings,
 }
 
-impl Client {
-    /// Creates a connection to an EventStore server.
-    pub fn new(settings: Settings, addr: SocketAddr) -> Client {
+/// Helps constructing a connection to the server.
+pub struct ConnectionBuilder {
+    pub settings: Settings,
+}
+
+impl ConnectionBuilder {
+    /// Maximum delay of inactivity before the client sends a heartbeat request.
+    pub fn heartbeat_delay(mut self, delay: Duration) -> Self {
+        self.settings.heartbeat_delay = delay;
+        self
+    }
+
+    /// Maximum delay the server has to issue a heartbeat response.
+    pub fn heartbeat_timeout(mut self, timeout: Duration) -> Self {
+        self.settings.heartbeat_timeout = timeout;
+        self
+    }
+
+    /// Delay in which an operation will be retried if no response arrived.
+    pub fn operation_timeout(mut self, timeout: Duration) -> Self {
+        self.settings.operation_timeout = timeout;
+        self
+    }
+
+    /// Retry strategy when an operation has timeout.
+    pub fn operation_retry(mut self, strategy: types::Retry) -> Self {
+        self.settings.operation_retry = strategy;
+        self
+    }
+
+    /// Retry strategy when failing to connect.
+    pub fn connection_retry(mut self, strategy: types::Retry) -> Self {
+        self.settings.connection_retry = strategy;
+        self
+    }
+
+    /// 'Credentials' to use if other `Credentials` are not explicitly supplied
+    /// when issuing commands.
+    pub fn with_default_user(mut self, user: types::Credentials) -> Self {
+        self.settings.default_user = Some(user);
+        self
+    }
+
+    /// Default connection name.
+    pub fn with_connection_name(mut self, name: String) -> Self {
+        self.settings.connection_name = Some(name);
+        self
+    }
+
+    /// The period used to check pending command. Those checks include if the
+    /// the connection has timeout or if the command was issued with a
+    /// different connection.
+    pub fn operation_check_period(mut self, period: Duration) -> Self {
+        self.settings.operation_check_period = period;
+        self
+    }
+
+    /// Creates a connection to an EventStore server. The connection will
+    /// start right away. This method will pick the first `SocketAddr` it
+    /// has resolved.
+    pub fn start<A>(self, addrs: A) -> Result<Connection>
+        where
+            A: ToSocketAddrs
+    {
+        let mut iter = addrs.to_socket_addrs()?;
+
+        if let Some(addr) = iter.next() {
+            let client = Connection::new(self.settings, addr);
+
+            client.start();
+
+            Ok(client)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
+        }
+    }
+}
+
+impl Connection {
+    /// Return a connection builder.
+    pub fn builder() -> ConnectionBuilder {
+        ConnectionBuilder {
+            settings: Default::default(),
+        }
+    }
+
+    fn new(settings: Settings, addr: SocketAddr) -> Connection {
         let (sender, recv) = channel(500);
         let disc           = Box::new(StaticDiscovery::new(addr));
 
@@ -97,16 +183,14 @@ impl Client {
             info!("Client is closed");
         });
 
-        Client {
+        Connection {
             worker: handle,
             sender: tx,
             settings,
         }
     }
 
-    /// Asynchronously starts the connection with the server. We might end
-    /// doing this automatically when calling `new` function.
-    pub fn start(&self) {
+    fn start(&self) {
         self.sender.clone().send(Msg::Start).wait().unwrap();
     }
 
