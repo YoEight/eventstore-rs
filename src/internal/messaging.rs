@@ -16,6 +16,7 @@ pub(crate) enum Msg {
     ConnectionClosed(Uuid, Error),
     NewOp(operations::OperationWrapper),
     Send(Pkg),
+    Marker, // Use as checkpoint detection.
 }
 
 impl Msg {

@@ -1,10 +1,10 @@
 use std::net::{ SocketAddr, ToSocketAddrs };
-use std::io::{ self, Result };
+use std::io;
 use std::thread::{ self, JoinHandle };
 use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Sender, channel };
+use futures::sync::mpsc::{ Receiver, Sender, channel };
 use protobuf::Chars;
 use tokio::runtime::Runtime;
 
@@ -12,6 +12,7 @@ use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
 use internal::commands;
 use internal::discovery::StaticDiscovery;
+use internal::operations::OperationError;
 use types::{ self, StreamMetadata, Settings };
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
@@ -92,7 +93,7 @@ impl ConnectionBuilder {
     /// Creates a connection to an EventStore server. The connection will
     /// start right away. This method will pick the first `SocketAddr` it
     /// has resolved.
-    pub fn start<A>(self, addrs: A) -> Result<Connection>
+    pub fn start<A>(self, addrs: A) -> io::Result<Connection>
         where
             A: ToSocketAddrs
     {
@@ -110,6 +111,80 @@ impl ConnectionBuilder {
     }
 }
 
+const DEFAULT_BOX_SIZE: usize = 500;
+
+fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
+    -> impl Future<Item=(), Error=()>
+{
+    enum State {
+        Live,
+        Clearing,
+    }
+
+    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver) -> Result<State, E> {
+        driver.close_connection();
+
+        let action = sender
+            .clone()
+            .send(Msg::Marker)
+            .map(|_| ())
+            .map_err(|_| ());
+
+        tokio::spawn(action);
+
+        info!("Closing the connection...");
+        info!("Start clearing uncomplete operations...");
+
+        return Ok(State::Clearing);
+    }
+
+    recv.fold(State::Live, move |acc, msg| {
+        if let State::Live = &acc {
+            match msg {
+                Msg::Start => driver.start(),
+                Msg::Establish(endpoint) => driver.on_establish(endpoint),
+                Msg::Established(id)  => driver.on_established(id),
+                Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, error),
+                Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
+                Msg::NewOp(op) => driver.on_new_op(op),
+                Msg::Send(pkg) => driver.on_send_pkg(pkg),
+
+                Msg::Tick => {
+                    if let Report::Quit = driver.on_tick() {
+                        return start_closing(&sender, &mut driver);
+                    }
+                },
+
+                // It's impossible to receive `Msg::Marker` at `State::Live` state.
+                // However we can hit two birds with one stone with pattern-matching
+                // coverage checker.
+                Msg::Shutdown | Msg::Marker => {
+                    info!("User-shutdown request received.");
+
+                    return start_closing(&sender, &mut driver);
+                },
+            }
+        } else {
+            match msg {
+                Msg::NewOp(mut op) => op.failed(OperationError::Aborted),
+                Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
+                Msg::Marker => {
+                    // We've reached the end of our checkpoint, we can properly
+                    // aborts uncompleted operations.
+                    driver.abort();
+                    info!("Connection closed properly.");
+
+                    return Err(());
+                },
+
+                _ => {},
+            }
+        }
+
+        Ok(acc)
+    }).map(|_| ())
+}
+
 impl Connection {
     /// Return a connection builder.
     pub fn builder() -> ConnectionBuilder {
@@ -119,73 +194,24 @@ impl Connection {
     }
 
     fn new(settings: Settings, addr: SocketAddr) -> Connection {
-        let (sender, recv) = channel(500);
-        let disc           = Box::new(StaticDiscovery::new(addr));
+        let (sender, recv) = channel(DEFAULT_BOX_SIZE);
+        let disc = Box::new(StaticDiscovery::new(addr));
+        let cloned_sender = sender.clone();
+        let driver = Driver::new(&settings, disc, sender.clone());
 
-        let tx     = sender.clone();
-        let setts  = settings.clone();
         let handle = thread::spawn(move || {
-            let mut runtime  = Runtime::new().unwrap();
-            let mut driver   = Driver::new(&setts, disc, sender);
-            let mut ticker   = None;
+            let mut runtime = Runtime::new().unwrap();
+            let action = connection_state_machine(cloned_sender, recv, driver);
+            let _ = runtime.spawn(action);
 
-            let worker = recv.for_each(move |msg| {
-                match msg {
-                    Msg::Start => {
-                        ticker = Some(driver.start());
-                    },
-
-                    Msg::Shutdown => {
-                        debug!("Client is shutting down...");
-                        // TODO - Implement graceful exit but handling all the
-                        // reponses we got so far.
-                        return Err(());
-                    },
-
-                    Msg::Establish(endpoint) =>
-                        driver.on_establish(endpoint),
-
-                    Msg::Established(id) => {
-                        driver.on_established(id);
-                    },
-
-                    Msg::ConnectionClosed(conn_id, error) => {
-                        driver.on_connection_closed(conn_id, error);
-                    },
-
-                    Msg::Arrived(pkg) => {
-                        driver.on_package_arrived(pkg);
-                    },
-
-                    Msg::Tick => {
-                        if let Report::Quit = driver.on_tick() {
-                            driver.close_connection();
-                            return Err(())
-                        }
-                    },
-
-                    Msg::NewOp(op) => {
-                        driver.on_new_op(op);
-                    },
-
-                    Msg::Send(pkg) => {
-                        driver.on_send_pkg(pkg);
-                    },
-                };
-
-                Ok(())
-            });
-
-            // TODO - Handle more gracefully when the driver quits.
-            let _ = runtime.spawn(worker);
-            runtime.shutdown_on_idle().wait().unwrap();
-
-            info!("Client is closed");
+            runtime.shutdown_on_idle()
+                .wait()
+                .unwrap();
         });
 
         Connection {
             worker: handle,
-            sender: tx,
+            sender,
             settings,
         }
     }

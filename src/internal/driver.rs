@@ -399,14 +399,18 @@ impl Driver {
         }
     }
 
-    fn start_new_attempt(&mut self) -> bool {
+    fn start_new_attempt(&mut self) -> Option<usize> {
         if let Some(att) = self.attempt_opt.as_mut() {
             att.tries   += 1;
             att.started = Instant::now();
 
-            att.tries <= self.max_reconnect
+            if att.tries <= self.max_reconnect {
+                Some(att.tries)
+            } else {
+                None
+            }
         } else {
-            false
+            None
         }
     }
 
@@ -441,9 +445,12 @@ impl Driver {
         if self.state == ConnectionState::Connecting {
             if self.phase == Phase::Reconnecting {
                 if self.conn_has_timeout() {
-                    if self.start_new_attempt() {
+                    if let Some(attempt_cnt) = self.start_new_attempt() {
+                        info!("Starting new connection attempt ({}).", attempt_cnt);
+
                         self.discover();
                     } else {
+                        error!("Maximum reconnection attempt count reached!");
                         return Report::Quit;
                     }
                 }
@@ -484,6 +491,10 @@ impl Driver {
                 conn.enqueue(pkg);
             }
         }
+    }
+
+    pub(crate) fn abort(&mut self) {
+        self.registry.abort();
     }
 }
 
