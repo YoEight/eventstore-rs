@@ -367,6 +367,12 @@ impl Requests {
             self.session_request_ids.remove(&session_id);
         }
     }
+
+    pub(crate) fn abort(&mut self) {
+        for op in self.sessions.values_mut() {
+            op.failed(OperationError::Aborted);
+        }
+    }
 }
 
 pub(crate) struct Registry {
@@ -398,6 +404,14 @@ impl Registry {
 
         while let Some(op) = self.awaiting.pop() {
             self.register(op, Some(conn));
+        }
+    }
+
+    pub(crate) fn abort(&mut self) {
+        self.requests.abort();
+
+        for op in self.awaiting.iter_mut() {
+            op.failed(OperationError::Aborted);
         }
     }
 }

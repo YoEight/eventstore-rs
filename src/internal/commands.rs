@@ -18,7 +18,14 @@ fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationEr
     stream.into_future().then(|res| {
         match res {
             Ok((Some(x), _)) => x,
-            _                => Err(operations::OperationError::Aborted),
+            _ => {
+                warn!("Operation stream-receiver was disposed too early. \
+                      It shouldn't happen but not a big of a deal neither. \
+                      Worth investigating though as it means the code \
+                      went on unexpected path.");
+
+                Err(operations::OperationError::Aborted)
+            },
         }
     })
 }
