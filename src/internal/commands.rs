@@ -149,8 +149,10 @@ impl <'a> ReadEvent<'a> {
 
     /// When using projections, you can have links placed into another stream.
     /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: `false`.
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadEvent<'a> {
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> ReadEvent<'a> {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
         ReadEvent { resolve_link_tos, ..self }
     }
 
@@ -606,8 +608,10 @@ impl <'a> ReadStreamEvents<'a> {
 
     /// When using projections, you can have links placed into another stream.
     /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: `false`.
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadStreamEvents<'a> {
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> ReadStreamEvents<'a> {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
         ReadStreamEvents { resolve_link_tos, ..self }
     }
 
@@ -694,8 +698,10 @@ impl <'a> ReadAllEvents<'a> {
 
     /// When using projections, you can have links placed into another stream.
     /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: `false`.
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> ReadAllEvents<'a> {
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> ReadAllEvents<'a> {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
         ReadAllEvents { resolve_link_tos, ..self }
     }
 
@@ -841,8 +847,10 @@ impl <'a> SubscribeToStream<'a> {
 
     /// When using projections, you can have links placed into another stream.
     /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: `false`.
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> SubscribeToStream<'a> {
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> SubscribeToStream<'a> {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
         SubscribeToStream { resolve_link_tos, ..self }
     }
 
@@ -919,8 +927,10 @@ impl <'a> RegularCatchupSubscribe<'a> {
 
     /// When using projections, you can have links placed into another stream.
     /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: `false`.
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> RegularCatchupSubscribe<'a> {
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> RegularCatchupSubscribe<'a> {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
         RegularCatchupSubscribe { resolve_link_tos, ..self }
     }
 
@@ -1011,8 +1021,10 @@ impl <'a> AllCatchupSubscribe<'a> {
 
     /// When using projections, you can have links placed into another stream.
     /// If you set `true`, the server will resolve those links and will return
-    /// the event that the link points to. Default: `false`.
-    pub fn resolve_link_tos(self, resolve_link_tos: bool) -> AllCatchupSubscribe<'a> {
+    /// the event that the link points to. Default: [NoResolution](../types/enum.LinkTos.html).
+    pub fn resolve_link_tos(self, tos: types::LinkTos) -> AllCatchupSubscribe<'a> {
+        let resolve_link_tos = tos.raw_resolve_lnk_tos();
+
         AllCatchupSubscribe { resolve_link_tos, ..self }
     }
 

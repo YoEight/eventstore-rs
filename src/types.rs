@@ -91,6 +91,24 @@ impl Credentials {
     }
 }
 
+/// Determines whether any link event encountered in the stream will be
+/// resolved. See the discussion on [Resolved Events](https://eventstore.org/docs/dotnet-api/reading-events/index.html#resolvedevent)
+/// for more information on this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkTos {
+    ResolveLink,
+    NoResolution,
+}
+
+impl LinkTos {
+    pub(crate) fn raw_resolve_lnk_tos(self) -> bool {
+        match self {
+            LinkTos::ResolveLink => true,
+            LinkTos::NoResolution => false,
+        }
+    }
+}
+
 /// Global connection settings.
 #[derive(Clone, Debug)]
 pub struct Settings {
