@@ -57,8 +57,8 @@ impl PartialEq for Cmd {
 impl Eq for Cmd {}
 
 impl Cmd {
-    pub fn to_u8(&self) -> u8 {
-        match *self {
+    pub fn to_u8(self) -> u8 {
+        match self {
             Cmd::HeartbeatRequest                          => 0x01,
             Cmd::HeartbeatResponse                         => 0x02,
             Cmd::IdentifyClient                            => 0xF5,

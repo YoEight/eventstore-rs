@@ -117,7 +117,7 @@ impl Pkg {
         parse_from_carllerche_bytes(&self.payload).map_err(|e| e.into())
     }
 
-    pub fn to_text(self) -> Chars {
+    pub fn build_text(self) -> Chars {
         unsafe {
             String::from_utf8_unchecked(self.payload.to_vec()).into()
         }

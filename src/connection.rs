@@ -135,7 +135,7 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
         info!("Closing the connection...");
         info!("Start clearing uncomplete operations...");
 
-        return Ok(State::Clearing);
+        Ok(State::Clearing)
     }
 
     recv.fold(State::Live, move |acc, msg| {
@@ -144,7 +144,7 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
                 Msg::Start => driver.start(),
                 Msg::Establish(endpoint) => driver.on_establish(endpoint),
                 Msg::Established(id)  => driver.on_established(id),
-                Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, error),
+                Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, &error),
                 Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
                 Msg::NewOp(op) => driver.on_new_op(op),
                 Msg::Send(pkg) => driver.on_send_pkg(pkg),

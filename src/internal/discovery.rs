@@ -7,7 +7,7 @@ pub struct Endpoint {
 impl Endpoint {
     pub fn from_addr(addr: SocketAddr) -> Endpoint {
         Endpoint {
-            addr: addr,
+            addr,
         }
     }
 }
@@ -27,7 +27,7 @@ impl Discovery for StaticDiscovery {
 impl StaticDiscovery {
     pub fn new(addr: SocketAddr) -> StaticDiscovery {
         StaticDiscovery {
-            addr: addr,
+            addr,
         }
     }
 }

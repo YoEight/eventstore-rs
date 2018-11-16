@@ -204,7 +204,7 @@ impl Requests {
 
                     match pkg.cmd {
                         Cmd::BadRequest => {
-                            let msg = pkg.to_text();
+                            let msg = pkg.build_text();
 
                             error!("Bad request for command {:?}: {}.", original_cmd, msg);
 
