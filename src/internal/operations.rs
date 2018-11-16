@@ -11,7 +11,6 @@ use uuid::Uuid;
 use internal::command::Cmd;
 use internal::messages;
 use internal::package::Pkg;
-use internal::timespan;
 use types::{ self, Slice };
 
 use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult, UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult, DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult };
@@ -235,11 +234,10 @@ impl OperationWrapper {
             // It means this operation was newly created and has to issue its
             // first package to the server.
             None => {
-                let req      = self.inner.initial_request();
-                let id       = session.new_request(req.cmd);
-                let decision = req.send(id, self.creds.clone(), dest);
+                let req = self.inner.initial_request();
+                let id = session.new_request(req.cmd);
 
-                decision
+                req.send(id, self.creds.clone(), dest)
             },
 
             // At this point, it means this operation send a package to
@@ -528,7 +526,7 @@ impl OperationImpl for WriteEvents {
 
                 let result = types::WriteResult {
                     next_expected_version: response.get_last_event_number(),
-                    position: position,
+                    position,
                 };
 
                 self.promise.accept(result);
@@ -924,7 +922,7 @@ impl OperationImpl for TransactionCommit {
 
                 let result = types::WriteResult {
                     next_expected_version: response.get_last_event_number(),
-                    position: position,
+                    position,
                 };
 
                 self.promise.accept(result);
@@ -1434,7 +1432,7 @@ impl OperationImpl for SubscribeToStream {
 
                 let event    = types::ResolvedEvent::new(response.take_event())?;
                 let appeared = types::SubEvent::EventAppeared {
-                    event,
+                    event: Box::new(event),
                     retry_count: 0,
                 };
 
@@ -1532,7 +1530,7 @@ pub(crate) struct CatchupWrapper<A: Catchup> {
 impl<A: Catchup> CatchupWrapper<A> {
     pub(crate) fn new(
         inner: A,
-        stream_id: Chars,
+        stream_id: &Chars,
         resolve_link_tos: bool,
         sender: mpsc::Sender<types::SubEvent>
     ) -> CatchupWrapper<A>
@@ -1589,7 +1587,7 @@ impl<A: Catchup> CatchupWrapper<A> {
                         if can_be_dispatched {
                             self.checkpoint.position = event
                                 .position
-                                .unwrap_or(types::Position::start());
+                                .unwrap_or_else(types::Position::start);
 
                             self.checkpoint.event_number = event
                                 .get_original_event()
@@ -1735,7 +1733,7 @@ impl Catchup for RegularCatchup {
 
             op.set_event_stream_id(stream_id);
             op.set_from_event_number(event_number);
-            op.set_max_count(max_count as i32);
+            op.set_max_count(i32::from(max_count));
             op.set_require_master(require_master);
             op.set_resolve_link_tos(resolve_link_tos);
 
@@ -1850,7 +1848,7 @@ impl Catchup for AllCatchup {
             let mut op = ReadAllEvents::new(promise, types::ReadDirection::Forward);
 
             op.set_from_position(position);
-            op.set_max_count(max_count as i32);
+            op.set_max_count(i32::from(max_count));
             op.set_require_master(require_master);
             op.set_resolve_link_tos(resolve_link_tos);
 
@@ -1943,15 +1941,13 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
                 } else {
                     return ImplResult::terminate();
                 }
-            } else {
+            } else if self.has_caught_up {
                 // We propagate live event only if we already caugh up the head of
                 // the stream. Otherwise, we accumulate.
-                if self.has_caught_up {
-                    let result = self.propagate_events();
+                let result = self.propagate_events();
 
-                    if result.is_err() {
-                        return ImplResult::terminate();
-                    }
+                if result.is_err() {
+                    return ImplResult::terminate();
                 }
             }
 
@@ -2042,7 +2038,7 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
         self.has_caught_up      = false;
         self.flying_event_count = 0;
 
-        let _ = buffer.push_req(self.initial_request())?;
+        buffer.push_req(self.initial_request())?;
 
         Ok(())
     }
@@ -2051,7 +2047,7 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
 fn duration_to_millis(duration: &::std::time::Duration) -> i32 {
     let secs_as_millis = duration.as_secs() as i32 * 1_000;
 
-    secs_as_millis + timespan::duration_subsec_millis(duration) as i32
+    secs_as_millis + duration.subsec_millis() as i32
 }
 
 pub struct CreatePersistentSubscription {
@@ -2077,20 +2073,20 @@ impl CreatePersistentSubscription {
         self.inner.set_event_stream_id(stream_id);
     }
 
-    pub fn set_settings(&mut self, settings: types::PersistentSubscriptionSettings) {
+    pub fn set_settings(&mut self, settings: &types::PersistentSubscriptionSettings) {
         self.inner.set_resolve_link_tos(settings.resolve_link_tos);
         self.inner.set_start_from(settings.start_from);
         self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
         self.inner.set_record_statistics(settings.extra_stats);
-        self.inner.set_live_buffer_size(settings.live_buf_size as i32);
-        self.inner.set_read_batch_size(settings.read_batch_size as i32);
-        self.inner.set_buffer_size(settings.history_buf_size as i32);
-        self.inner.set_max_retry_count(settings.max_retry_count as i32);
+        self.inner.set_live_buffer_size(i32::from(settings.live_buf_size));
+        self.inner.set_read_batch_size(i32::from(settings.read_batch_size));
+        self.inner.set_buffer_size(i32::from(settings.history_buf_size));
+        self.inner.set_max_retry_count(i32::from(settings.max_retry_count));
         self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
         self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
-        self.inner.set_checkpoint_max_count(settings.max_checkpoint_count as i32);
-        self.inner.set_checkpoint_min_count(settings.min_checkpoint_count as i32);
-        self.inner.set_subscriber_max_count(settings.max_subs_count as i32);
+        self.inner.set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
+        self.inner.set_checkpoint_min_count(i32::from(settings.min_checkpoint_count));
+        self.inner.set_subscriber_max_count(i32::from(settings.max_subs_count));
         self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
     }
 }
@@ -2169,15 +2165,15 @@ impl UpdatePersistentSubscription {
         self.inner.set_start_from(settings.start_from);
         self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
         self.inner.set_record_statistics(settings.extra_stats);
-        self.inner.set_live_buffer_size(settings.live_buf_size as i32);
-        self.inner.set_read_batch_size(settings.read_batch_size as i32);
-        self.inner.set_buffer_size(settings.history_buf_size as i32);
-        self.inner.set_max_retry_count(settings.max_retry_count as i32);
+        self.inner.set_live_buffer_size(i32::from(settings.live_buf_size));
+        self.inner.set_read_batch_size(i32::from(settings.read_batch_size));
+        self.inner.set_buffer_size(i32::from(settings.history_buf_size));
+        self.inner.set_max_retry_count(i32::from(settings.max_retry_count));
         self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
         self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
-        self.inner.set_checkpoint_max_count(settings.max_checkpoint_count as i32);
-        self.inner.set_checkpoint_min_count(settings.min_checkpoint_count as i32);
-        self.inner.set_subscriber_max_count(settings.max_subs_count as i32);
+        self.inner.set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
+        self.inner.set_checkpoint_min_count(i32::from(settings.min_checkpoint_count));
+        self.inner.set_subscriber_max_count(i32::from(settings.max_subs_count));
         self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
     }
 }
@@ -2322,7 +2318,7 @@ impl ConnectToPersistentSubscription {
     }
 
     pub(crate) fn set_buffer_size(&mut self, size: u16) {
-        self.inner.set_allowed_in_flight_messages(size as i32);
+        self.inner.set_allowed_in_flight_messages(i32::from(size));
     }
 
     fn publish(
@@ -2389,7 +2385,7 @@ impl OperationImpl for ConnectToPersistentSubscription {
                 let event       = types::ResolvedEvent::new_from_indexed(response.take_event())?;
                 let retry_count = response.get_retryCount() as usize;
                 let appeared    = types::SubEvent::EventAppeared {
-                    event,
+                    event: Box::new(event),
                     retry_count,
                 };
 

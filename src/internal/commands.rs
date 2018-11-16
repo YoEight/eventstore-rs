@@ -221,13 +221,13 @@ impl StreamMetadataInternal {
         }
     }
 
-    fn to_metadata(self) -> types::StreamMetadata {
+    fn build_metadata(self) -> types::StreamMetadata {
         types::StreamMetadata {
             max_count: self.max_count,
-            max_age: self.max_age.map(|t| t.to_duration()),
+            max_age: self.max_age.map(|t| t.build_duration()),
             truncate_before: self.truncate_before,
-            cache_control: self.cache_control.map(|t| t.to_duration()),
-            acl: self.acl.to_acl(),
+            cache_control: self.cache_control.map(|t| t.build_duration()),
+            acl: self.acl.build_acl(),
             custom_properties: self.custom_properties,
         }
     }
@@ -262,7 +262,7 @@ impl StreamAclInternal {
         }
     }
 
-    fn to_acl(self) -> types::StreamAcl {
+    fn build_acl(self) -> types::StreamAcl {
         types::StreamAcl {
             read_roles: self.read_roles,
             write_roles: self.write_roles,
@@ -374,19 +374,21 @@ impl <'a> ReadStreamMetadata<'a> {
                               .as_json()
                               .unwrap();
 
-                    types::StreamMetadataResult::Success {
-                        stream: stream,
+                    let versioned = types::VersionedMetadata {
+                        stream,
                         version: result.event_number,
-                        metadata: metadata_internal.to_metadata(),
-                    }
+                        metadata: metadata_internal.build_metadata(),
+                    };
+
+                    types::StreamMetadataResult::Success(Box::new(versioned))
                 },
 
                 types::ReadEventStatus::NotFound | types::ReadEventStatus::NoStream => {
-                    types::StreamMetadataResult::NotFound { stream: stream }
+                    types::StreamMetadataResult::NotFound { stream }
                 },
 
                 types::ReadEventStatus::Deleted => {
-                    types::StreamMetadataResult::Deleted { stream: stream }
+                    types::StreamMetadataResult::Deleted { stream }
                 },
             }
         })
@@ -973,7 +975,7 @@ impl <'a> RegularCatchupSubscribe<'a> {
 
         let op = operations::CatchupWrapper::new(
             inner,
-            self.stream_id,
+            &self.stream_id,
             self.resolve_link_tos,
             tx
         );
@@ -1062,7 +1064,7 @@ impl <'a> AllCatchupSubscribe<'a> {
 
         let op = operations::CatchupWrapper::new(
             inner,
-            "".into(),
+            &"".into(),
             self.resolve_link_tos,
             tx
         );
@@ -1143,7 +1145,7 @@ impl<'a> CreatePersistentSubscription<'a> {
 
         op.set_subscription_group_name(self.group_name);
         op.set_event_stream_id(self.stream_id);
-        op.set_settings(self.sub_settings);
+        op.set_settings(&self.sub_settings);
 
         let op = operations::OperationWrapper::new(op,
                                                    self.creds,

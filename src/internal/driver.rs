@@ -68,13 +68,11 @@ impl HealthTracker {
                 if self.pkg_num != num {
                     self.state = HeartbeatStatus::Delay(
                         self.pkg_num, Instant::now());
-                } else {
-                    if start.elapsed() >= self.heartbeat_delay {
-                        self.state = HeartbeatStatus::Timeout(
-                            self.pkg_num, Instant::now());
+                } else if start.elapsed() >= self.heartbeat_delay {
+                    self.state = HeartbeatStatus::Timeout(
+                        self.pkg_num, Instant::now());
 
-                        conn.enqueue(Pkg::heartbeat_request());
-                    }
+                    conn.enqueue(Pkg::heartbeat_request());
                 }
 
                 Heartbeat::Valid
@@ -87,14 +85,12 @@ impl HealthTracker {
                         self.pkg_num, Instant::now());
 
                     Heartbeat::Valid
-                } else {
-                    if start.elapsed() >= self.heartbeat_timeout {
-                        error!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
+                } else if start.elapsed() >= self.heartbeat_timeout {
+                    error!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
 
-                        Heartbeat::Failure
-                    } else {
-                        Heartbeat::Valid
-                    }
+                    Heartbeat::Failure
+                } else {
+                    Heartbeat::Valid
                 }
             },
         }
@@ -195,7 +191,7 @@ impl Driver {
             init_req_opt: None,
             reconnect_delay: Duration::from_secs(3),
             max_reconnect: setts.connection_retry.to_usize(),
-            sender: sender,
+            sender,
             operation_check_period: setts.operation_check_period,
             last_operation_check: Instant::now(),
         }
@@ -293,14 +289,14 @@ impl Driver {
         }
     }
 
-    pub(crate) fn on_connection_closed(&mut self, conn_id: Uuid, error: Error) {
+    pub(crate) fn on_connection_closed(&mut self, conn_id: Uuid, error: &Error) {
         if self.is_same_connection(&conn_id) {
             info!("CloseConnection: {}.", error);
             self.tcp_connection_close(&conn_id, error);
         }
     }
 
-    fn tcp_connection_close(&mut self, conn_id: &Uuid, err: Error) {
+    fn tcp_connection_close(&mut self, conn_id: &Uuid, err: &Error) {
         info!("Connection [{}] error. Cause: {}.", conn_id, err);
 
         match self.state {
@@ -344,28 +340,26 @@ impl Driver {
                     self.identify_client();
                 }
             }
-        } else {
-            if self.state == ConnectionState::Connected {
-                match pkg.cmd {
-                    Cmd::HeartbeatRequest => {
-                        let mut resp = pkg.copy_headers_only();
+        } else if self.state == ConnectionState::Connected {
+            match pkg.cmd {
+                Cmd::HeartbeatRequest => {
+                    let mut resp = pkg.copy_headers_only();
 
-                        resp.cmd = Cmd::HeartbeatResponse;
+                    resp.cmd = Cmd::HeartbeatResponse;
 
-                        if let Some(ref conn) = self.candidate {
-                            conn.enqueue(resp);
-                        }
-                    },
+                    if let Some(ref conn) = self.candidate {
+                        conn.enqueue(resp);
+                    }
+                },
 
-                    Cmd::HeartbeatResponse => (),
+                Cmd::HeartbeatResponse => (),
 
-                    _ => {
-                        // It will be always 'Some' when receiving a package.
-                        if let Some(ref conn) = self.candidate {
-                            self.registry.handle(pkg, conn);
-                        }
-                    },
-                }
+                _ => {
+                    // It will be always 'Some' when receiving a package.
+                    if let Some(ref conn) = self.candidate {
+                        self.registry.handle(pkg, conn);
+                    }
+                },
             }
         }
     }
@@ -431,7 +425,7 @@ impl Driver {
 
         if has_timeout {
             if let Some(conn) = self.candidate.take() {
-                self.tcp_connection_close(&conn.id, heartbeat_timeout_error());
+                self.tcp_connection_close(&conn.id, &heartbeat_timeout_error());
             }
         }
     }

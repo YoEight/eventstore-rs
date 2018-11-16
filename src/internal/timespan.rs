@@ -67,12 +67,6 @@ impl Builder {
     }
 }
 
-// Using `Duration::subsec_millis` forces nigthly rustc usage at this time.
-// This function will be deleted once `Duration::subsec_millis` lands on
-// stable.
-const NANOS_PER_MILLI: u32 = 1_000_000;
-pub fn duration_subsec_millis(duration: &Duration) -> u32 { duration.subsec_nanos() / NANOS_PER_MILLI }
-
 impl Timespan {
     fn from_ticks(ticks: u64) -> Timespan {
         Timespan {
@@ -84,7 +78,7 @@ impl Timespan {
         let mut builder = Timespan::builder();
 
         builder.seconds(duration.as_secs())
-               .milliseconds(duration_subsec_millis(&duration) as u64)
+               .milliseconds(u64::from(duration.subsec_millis()))
                .build()
     }
 
@@ -92,23 +86,23 @@ impl Timespan {
         Builder::new()
     }
 
-    pub fn days(&self) -> u64 {
+    pub fn days(self) -> u64 {
         self.ticks / TICKS_PER_DAY
     }
 
-    pub fn hours(&self) -> u64 {
+    pub fn hours(self) -> u64 {
         (self.ticks / TICKS_PER_HOUR) % 24
     }
 
-    pub fn minutes(&self) -> u64 {
+    pub fn minutes(self) -> u64 {
         (self.ticks / TICKS_PER_MINUTE) % 60
     }
 
-    pub fn seconds(&self) -> u64 {
+    pub fn seconds(self) -> u64 {
         (self.ticks / TICKS_PER_SECONDS) % 60
     }
 
-    pub fn total_milliseconds(&self) -> u64 {
+    pub fn total_milliseconds(self) -> u64 {
         let millis = ((self.ticks as f64) * MILLIS_PER_TICK) as u64;
 
         if millis > MAX_MILLIS {
@@ -118,11 +112,11 @@ impl Timespan {
         }
     }
 
-    pub fn to_duration(&self) -> Duration {
+    pub fn build_duration(self) -> Duration {
         Duration::from_millis(self.total_milliseconds())
     }
 
-    fn str_repr(&self) -> String {
+    fn str_repr(self) -> String {
         let mut builder = String::new();
         let     days      = self.days();
         let     hours     = self.hours();
@@ -175,7 +169,7 @@ impl <'de> Visitor<'de> for ForTimespan {
         where E: de::Error
     {
 
-        fn to_u32(vec: &Vec<u32>) -> u32 {
+        fn to_u32(vec: &[u32]) -> u32 {
             if vec.is_empty() {
                 return 0;
             }
@@ -201,13 +195,13 @@ impl <'de> Visitor<'de> for ForTimespan {
                     if c == '.' {
                         let num = to_u32(&buffer);
 
-                        builder.days(num as u64);
+                        builder.days(u64::from(num));
                         buffer.clear();
                         state = Parse::Hours;
                     } else if c == ':' {
                         let num = to_u32(&buffer);
 
-                        builder.hours(num as u64);
+                        builder.hours(u64::from(num));
                         buffer.clear();
                         state = Parse::Minutes;
                     } else {
@@ -219,7 +213,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     if c == ':' {
                         let num = to_u32(&buffer);
 
-                        builder.hours(num as u64);
+                        builder.hours(u64::from(num));
                         buffer.clear();
                         state = Parse::Minutes;
                     } else {
@@ -231,7 +225,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     if c == ':' {
                         let num = to_u32(&buffer);
 
-                        builder.minutes(num as u64);
+                        builder.minutes(u64::from(num));
                         buffer.clear();
                         state = Parse::Seconds;
                     } else {
@@ -243,7 +237,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     if c == '.' {
                         let num = to_u32(&buffer);
 
-                        builder.seconds(num as u64);
+                        builder.seconds(u64::from(num));
                         buffer.clear();
                         state = Parse::Fractions;
                     } else {
@@ -262,9 +256,9 @@ impl <'de> Visitor<'de> for ForTimespan {
 
         // In case the Timespan string representation didn't contain fractions.
         if let Parse::Seconds = state {
-            builder.seconds(num as u64);
+            builder.seconds(u64::from(num));
         } else {
-            residual_ticks = num as u64;
+            residual_ticks = u64::from(num);
         }
 
         let mut timespan = builder.build();

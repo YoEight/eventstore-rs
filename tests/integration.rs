@@ -25,7 +25,7 @@ impl types::SubscriptionConsumer for TestSub {
             id, last_commit_position, last_event_number);
     }
 
-    fn when_event_appeared<E>(&mut self, _: &mut E, event: types::ResolvedEvent)
+    fn when_event_appeared<E>(&mut self, _: &mut E, event: Box<types::ResolvedEvent>)
         -> types::OnEventAppeared
         where E: SubscriptionEnv
     {
@@ -60,7 +60,7 @@ impl types::SubscriptionConsumer for PersistentTestSub {
             id, last_commit_position, last_event_number);
     }
 
-    fn when_event_appeared<E>(&mut self, env: &mut E, event: types::ResolvedEvent)
+    fn when_event_appeared<E>(&mut self, env: &mut E, event: Box<types::ResolvedEvent>)
         -> types::OnEventAppeared
         where E: SubscriptionEnv
     {
@@ -183,8 +183,8 @@ fn test_write_and_read_stream_metadata(connection: &Connection) {
     debug!("Read stream metadata {:?}", result);
 
     match result {
-        types::StreamMetadataResult::Success { metadata,.. } => {
-            let read_max_age = metadata.max_age.unwrap();
+        types::StreamMetadataResult::Success(result) => {
+            let read_max_age = result.metadata.max_age.unwrap();
 
             assert_eq!(read_max_age, duration);
         },

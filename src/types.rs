@@ -452,7 +452,7 @@ impl ResolvedEvent {
     ///
     /// TODO - It's impossible for `get_original_event` to be undefined.
     pub fn get_original_event(&self) -> Option<&RecordedEvent> {
-        self.link.as_ref().or(self.event.as_ref())
+        self.link.as_ref().or_else(|| self.event.as_ref())
     }
 
     /// Returns the stream id of the original event.
@@ -463,11 +463,24 @@ impl ResolvedEvent {
 
 /// Represents stream metadata as a series of properties for system data and
 /// user-defined metadata.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StreamMetadataResult {
     Deleted { stream: Chars },
     NotFound { stream: Chars },
-    Success { stream: Chars, version: i64, metadata: StreamMetadata },
+    Success(Box<VersionedMetadata>),
+}
+
+/// Represents a stream metadata.
+#[derive(Debug, Clone)]
+pub struct VersionedMetadata {
+    /// Metadata's stream.
+    pub stream: Chars,
+
+    /// Metadata's version.
+    pub version: i64,
+
+    /// Metadata properties.
+    pub metadata: StreamMetadata,
 }
 
 /// The id of a transaction.
@@ -714,7 +727,7 @@ impl EventData {
 
     pub(crate) fn build(self) -> messages::NewEvent {
         let mut new_event = messages::NewEvent::new();
-        let     id        = self.id_opt.unwrap_or_else(|| Uuid::new_v4());
+        let     id        = self.id_opt.unwrap_or_else(Uuid::new_v4);
 
         new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
 
@@ -817,7 +830,7 @@ impl StreamMetadataBuilder {
 
 /// Represents stream metadata with strongly types properties for system values
 /// and a dictionary-like interface for custom values.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct StreamMetadata {
     /// The maximum number of events allowed in the stream.
     pub max_count: Option<u64>,
@@ -848,7 +861,7 @@ impl StreamMetadata {
 }
 
 /// Represents an access control list for a stream.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct StreamAcl {
     /// Roles and users permitted to read the stream.
     pub read_roles: Vec<String>,
@@ -876,7 +889,7 @@ pub(crate) enum SubEvent {
     },
 
     EventAppeared {
-        event: ResolvedEvent,
+        event: Box<ResolvedEvent>,
         retry_count: usize,
     },
 
@@ -894,7 +907,7 @@ impl SubEvent {
 
     pub(crate) fn new_event_appeared(event: ResolvedEvent) -> SubEvent {
         SubEvent::EventAppeared {
-            event,
+            event: Box::new(event),
             retry_count: 0,
         }
     }
@@ -960,7 +973,7 @@ pub enum NakAction {
 }
 
 impl NakAction {
-    fn to_internal_nak_action(self)
+    fn build_internal_nak_action(self)
         -> messages::PersistentSubscriptionNakEvents_NakAction
     {
         match self {
@@ -1041,7 +1054,7 @@ fn on_event<C>(
 
                             msg.set_processed_event_ids(bytes_vec);
                             msg.set_message(naked.message);
-                            msg.set_action(naked.action.to_internal_nak_action());
+                            msg.set_action(naked.action.build_internal_nak_action());
 
                             let pkg = Pkg::from_message(
                                 Cmd::PersistentSubscriptionAckEvents,
@@ -1252,7 +1265,7 @@ pub trait SubscriptionConsumer {
     fn when_confirmed(&mut self, Uuid, i64, i64);
 
     /// Called when the subscription has received an event from the server.
-    fn when_event_appeared<E>(&mut self, &mut E, ResolvedEvent) -> OnEventAppeared
+    fn when_event_appeared<E>(&mut self, &mut E, Box<ResolvedEvent>) -> OnEventAppeared
         where E: SubscriptionEnv;
 
     /// Called when the subscrition has been dropped whether by the server or
@@ -1281,7 +1294,7 @@ impl SystemConsumerStrategy {
 }
 
 /// Gathers every persistent subscription property.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PersistentSubscriptionSettings {
     /// Whether or not the persistent subscription shoud resolve 'linkTo'
     /// events to their linked events.
