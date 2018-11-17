@@ -36,7 +36,7 @@ fn main() {
         .unwrap();
 
     // It is not mandatory to use JSON as a data format however GetEventStore
-    // provides great additional values if you do so.
+    // provides great additional value if you do so.
     let payload = json!({
         "is_rust_a_nice_language": true,
     });
