@@ -27,8 +27,7 @@ extern crate futures;
 #[macro_use]
 extern crate serde_json;
 
-use eventstore::Connection;
-use eventstore::types::EventData;
+use eventstore::{ Connection, EventData };
 use futures::Future;
 
 fn main() {

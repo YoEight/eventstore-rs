@@ -10,8 +10,6 @@ extern crate uuid;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::Future;
-use eventstore::Connection;
-use eventstore::types::{ self, Credentials, EventData, StreamMetadata, SubscriptionEnv };
 use uuid::Uuid;
 
 struct TestSub {
@@ -19,15 +17,15 @@ struct TestSub {
     max: usize,
 }
 
-impl types::SubscriptionConsumer for TestSub {
+impl eventstore::SubscriptionConsumer for TestSub {
     fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
         debug!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
             id, last_commit_position, last_event_number);
     }
 
-    fn when_event_appeared<E>(&mut self, _: &mut E, event: Box<types::ResolvedEvent>)
-        -> types::OnEventAppeared
-        where E: SubscriptionEnv
+    fn when_event_appeared<E>(&mut self, _: &mut E, event: Box<eventstore::ResolvedEvent>)
+        -> eventstore::OnEventAppeared
+        where E: eventstore::SubscriptionEnv
     {
         let event     = event.get_original_event().unwrap();
         let num       = &event.event_number;
@@ -38,9 +36,9 @@ impl types::SubscriptionConsumer for TestSub {
         self.count += 1;
 
         if self.count == self.max {
-            types::OnEventAppeared::Drop
+            eventstore::OnEventAppeared::Drop
         } else {
-            types::OnEventAppeared::Continue
+            eventstore::OnEventAppeared::Continue
         }
     }
 
@@ -54,15 +52,15 @@ struct PersistentTestSub {
     max: usize,
 }
 
-impl types::SubscriptionConsumer for PersistentTestSub {
+impl eventstore::SubscriptionConsumer for PersistentTestSub {
     fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
         debug!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
             id, last_commit_position, last_event_number);
     }
 
-    fn when_event_appeared<E>(&mut self, env: &mut E, event: Box<types::ResolvedEvent>)
-        -> types::OnEventAppeared
-        where E: SubscriptionEnv
+    fn when_event_appeared<E>(&mut self, env: &mut E, event: Box<eventstore::ResolvedEvent>)
+        -> eventstore::OnEventAppeared
+        where E: eventstore::SubscriptionEnv
     {
         let event     = event.get_original_event().unwrap();
         let num       = &event.event_number;
@@ -75,9 +73,9 @@ impl types::SubscriptionConsumer for PersistentTestSub {
         env.push_ack(event.event_id);
 
         if self.count == self.max {
-            types::OnEventAppeared::Drop
+            eventstore::OnEventAppeared::Drop
         } else {
-            types::OnEventAppeared::Continue
+            eventstore::OnEventAppeared::Continue
         }
     }
 
@@ -92,7 +90,7 @@ fn fresh_stream_id(prefix: &str) -> String {
     format!("{}:{}", prefix, uuid)
 }
 
-fn generate_events(event_type: &str, cnt: usize) -> Vec<EventData> {
+fn generate_events(event_type: &str, cnt: usize) -> Vec<eventstore::EventData> {
     let mut events = Vec::with_capacity(cnt);
 
     for idx in 1..cnt+1 {
@@ -100,19 +98,19 @@ fn generate_events(event_type: &str, cnt: usize) -> Vec<EventData> {
             "event_index": idx,
         });
 
-        let data = EventData::json(event_type, payload);
+        let data = eventstore::EventData::json(event_type, payload);
         events.push(data);
     }
 
     events
 }
 
-fn generate_event(event_type: &str) -> EventData {
+fn generate_event(event_type: &str) -> eventstore::EventData {
     generate_events(event_type, 1).pop().expect("Can't be empty")
 }
 
 // We write an event into a stream.
-fn test_write_events(connection: &Connection) {
+fn test_write_events(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("write-events");
     let event     = generate_event("write-events-test");
 
@@ -126,7 +124,7 @@ fn test_write_events(connection: &Connection) {
 }
 
 // We write an event into a stream then try to read it back.
-fn test_read_event(connection: &Connection) {
+fn test_read_event(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("read_event");
     let event     = generate_event("read_event_test");
     let _         = connection.write_events(stream_id.as_str())
@@ -143,7 +141,7 @@ fn test_read_event(connection: &Connection) {
     debug!("Read response: {:?}", result);
 
     match result {
-        types::ReadEventStatus::Success(ref result) => {
+        eventstore::ReadEventStatus::Success(ref result) => {
             let event = result.event.get_original_event().unwrap();
             let value: serde_json::Value = serde_json::from_slice(&event.data).unwrap();
 
@@ -156,11 +154,11 @@ fn test_read_event(connection: &Connection) {
 }
 
 // We write metadata to a stream then try to read it back.
-fn test_write_and_read_stream_metadata(connection: &Connection) {
+fn test_write_and_read_stream_metadata(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("metadata");
     let duration  = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
     let metadata  =
-        StreamMetadata::builder()
+        eventstore::StreamMetadata::builder()
             .max_age(duration)
             .max_count(1000)
             .insert_custom_property("foo".to_owned(), "Bar!")
@@ -183,7 +181,7 @@ fn test_write_and_read_stream_metadata(connection: &Connection) {
     debug!("Read stream metadata {:?}", result);
 
     match result {
-        types::StreamMetadataResult::Success(result) => {
+        eventstore::StreamMetadataResult::Success(result) => {
             let read_max_age = result.metadata.max_age.unwrap();
 
             assert_eq!(read_max_age, duration);
@@ -195,7 +193,7 @@ fn test_write_and_read_stream_metadata(connection: &Connection) {
 
 // We write a stream using a transaction. The write will be only be taken into
 // account by the server after the `commit` call.
-fn test_transaction(connection: &Connection) {
+fn test_transaction(connection: &eventstore::Connection) {
     let stream_id   = fresh_stream_id("transaction");
     let event       = generate_event("transaction_test");
     let transaction =
@@ -217,7 +215,7 @@ fn test_transaction(connection: &Connection) {
 }
 
 // We read stream events by batch.
-fn test_read_stream_events(connection: &Connection) {
+fn test_read_stream_events(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("read-stream-events");
     let events    = generate_events("read-stream-events-test", 10);
 
@@ -239,7 +237,7 @@ fn test_read_stream_events(connection: &Connection) {
 // We read $all system stream. We cannot write on $all stream. It's very
 // unlikely for $all stream to be empty. From a personal note, I never saw that
 // stream empty even right after booting the server.
-fn test_read_all_stream(connection: &Connection) {
+fn test_read_all_stream(connection: &eventstore::Connection) {
     let result =
         connection.read_all()
               .max_count(10)
@@ -251,7 +249,7 @@ fn test_read_all_stream(connection: &Connection) {
 }
 
 // We write an event into a stream then delete that stream.
-fn test_delete_stream(connection: &Connection) {
+fn test_delete_stream(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("delete");
     let event     = generate_event("delete-test");
 
@@ -272,7 +270,7 @@ fn test_delete_stream(connection: &Connection) {
 // We create a volatile subscription on a stream then write events into that
 // same stream. We check our subscription consumer internal state to see it
 // has consumed all the expected events.
-fn test_volatile_subscription(connection: &Connection) {
+fn test_volatile_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("volatile");
     let sub       = connection.subcribe_to_stream(stream_id.as_str()).execute();
     let events    = generate_events("volatile-test", 3);
@@ -300,7 +298,7 @@ fn test_volatile_subscription(connection: &Connection) {
 // sure we receive events written prior and after our subscription request.
 // To assess we received all the events we expected, we test our subscription
 // internal state value.
-fn test_catchup_subscription(connection: &Connection) {
+fn test_catchup_subscription(connection: &eventstore::Connection) {
     let stream_id     = fresh_stream_id("catchup");
     let events_before = generate_events("catchup-test-before", 3);
     let events_after  = generate_events("catchup-test-after", 3);
@@ -330,7 +328,7 @@ fn test_catchup_subscription(connection: &Connection) {
 
 // $all stream being a special system stream, we can not test as precisely as
 // we did in `test_catchup_subscription`
-fn test_catchup_all_subscription(connection: &Connection) {
+fn test_catchup_all_subscription(connection: &eventstore::Connection) {
     let sub = connection.subscribe_to_all_from().execute();
     let tmp = sub.consume(TestSub { count: 0, max: 10 });
 
@@ -342,7 +340,7 @@ fn test_catchup_all_subscription(connection: &Connection) {
 }
 
 // We test we can successfully create a persistent subscription.
-fn test_create_persistent_subscription(connection: &Connection) {
+fn test_create_persistent_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("create_persistent_sub");
     let result = connection
         .create_persistent_subscription(stream_id, "a_group_name".to_string())
@@ -352,13 +350,13 @@ fn test_create_persistent_subscription(connection: &Connection) {
 
     assert_eq!(
         result,
-        types::PersistActionResult::Success,
+        eventstore::PersistActionResult::Success,
         "We expect create a persistent subscription to succeed",
     );
 }
 
 // We test we can successfully update a persistent subscription.
-fn test_update_persistent_subscription(connection: &Connection) {
+fn test_update_persistent_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("update_persistent_sub");
     let result = connection
         .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
@@ -368,11 +366,11 @@ fn test_update_persistent_subscription(connection: &Connection) {
 
     assert_eq!(
         result,
-        types::PersistActionResult::Success,
+        eventstore::PersistActionResult::Success,
         "We expect create a persistent subscription to succeed",
     );
 
-    let mut setts = types::PersistentSubscriptionSettings::default();
+    let mut setts = eventstore::PersistentSubscriptionSettings::default();
 
     setts.max_retry_count = 1000;
 
@@ -385,13 +383,13 @@ fn test_update_persistent_subscription(connection: &Connection) {
 
     assert_eq!(
         result,
-        types::PersistActionResult::Success,
+        eventstore::PersistActionResult::Success,
         "We expect updating a persistent subscription to succeed",
     );
 }
 
 // We test we can successfully delete a persistent subscription.
-fn test_delete_persistent_subscription(connection: &Connection) {
+fn test_delete_persistent_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("delete_persistent_sub");
     let result = connection
         .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
@@ -401,7 +399,7 @@ fn test_delete_persistent_subscription(connection: &Connection) {
 
     assert_eq!(
         result,
-        types::PersistActionResult::Success,
+        eventstore::PersistActionResult::Success,
         "We expect create a persistent subscription to succeed",
     );
 
@@ -413,12 +411,12 @@ fn test_delete_persistent_subscription(connection: &Connection) {
 
     assert_eq!(
         result,
-        types::PersistActionResult::Success,
+        eventstore::PersistActionResult::Success,
         "We expect deleting a persistent subscription to succeed",
     );
 }
 
-fn test_persistent_subscription(connection: &Connection) {
+fn test_persistent_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("persistent_subscription");
     let events    = generate_events("persistent_subscription_test", 5);
 
@@ -457,8 +455,8 @@ fn all_round_operation_test() {
 
     info!("Connection string: {}", conn_str);
 
-    let connection = Connection::builder()
-        .with_default_user(Credentials::new("admin", "changeit"))
+    let connection = eventstore::Connection::builder()
+        .with_default_user(eventstore::Credentials::new("admin", "changeit"))
         .start(conn_str)
         .unwrap();
 

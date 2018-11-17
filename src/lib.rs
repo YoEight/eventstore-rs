@@ -19,10 +19,12 @@ extern crate log;
 
 mod internal;
 mod connection;
+pub mod types;
 
 pub use connection::{
     Connection,
     ConnectionBuilder,
 };
+
 pub use internal::{ commands };
-pub mod types;
+pub use types::*;
