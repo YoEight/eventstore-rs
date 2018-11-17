@@ -1,0 +1,11 @@
+0.2.0
+=====
+* Simplify public eventstore module.
+* Move to a typeful representation of `resolve_link_tos` setting.
+* Implement connection state-machine graceful exit.
+* Introduce new connection api.
+
+0.1.3
+=====
+* Migrate to `uuid` 0.7.
+* Move to tokio multithreaded runtime.
