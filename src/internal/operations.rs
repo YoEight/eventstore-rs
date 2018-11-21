@@ -1057,7 +1057,7 @@ impl OperationImpl for ReadStreamEvents {
                 }
 
                 let next_num_opt = {
-                    if is_eof {
+                    if !is_eof {
                         Some(response.get_next_event_number())
                     } else {
                         None
