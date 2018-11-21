@@ -7,6 +7,8 @@ extern crate serde_json;
 extern crate env_logger;
 extern crate uuid;
 
+use eventstore::Slice;
+use std::collections::HashMap;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::Future;
@@ -214,7 +216,8 @@ fn test_transaction(connection: &eventstore::Connection) {
     debug!("Transaction commit result {:?}", result);
 }
 
-// We read stream events by batch.
+// We read stream events by batch. We also test if we can properly read a
+// stream thoroughly.
 fn test_read_stream_events(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("read-stream-events");
     let events    = generate_events("read-stream-events-test", 10);
@@ -225,13 +228,47 @@ fn test_read_stream_events(connection: &eventstore::Connection) {
                   .wait()
                   .unwrap();
 
-    let result =
-        connection.read_stream(stream_id.as_str())
-              .execute()
-              .wait()
-              .unwrap();
+    let mut pos = 0;
+    let mut idx = 0;
 
-    debug!("Read stream events result {:?}", result);
+    loop {
+        let result =
+            connection.read_stream(stream_id.as_str())
+                  .start_from(pos)
+                  .max_count(1)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+        match result {
+            eventstore::ReadStreamStatus::Success(slice) => match slice.events() {
+                eventstore::LocatedEvents::EndOfStream => {
+                    break;
+                },
+
+                eventstore::LocatedEvents::Events { mut events, next } => {
+                    let event = events.pop().unwrap();
+                    let event = event.get_original_event().unwrap();
+                    let obj: HashMap<String, i64> = event.as_json().unwrap();
+                    let value = obj.get("event_index").unwrap();
+
+                    idx = *value;
+
+                    match next {
+                        Some(n) => { pos = n },
+                        None    => { break; },
+                    }
+                },
+            },
+
+            eventstore::ReadStreamStatus::Error(error) => {
+                panic!("ReadStream error: {:?}", error);
+            },
+        }
+    }
+
+    assert_eq!(pos, 9);
+    assert_eq!(idx, 10);
 }
 
 // We read $all system stream. We cannot write on $all stream. It's very
