@@ -1,3 +1,7 @@
+0.2.1
+=====
+* BUGFIX: Fix next event number for stream reads.
+
 0.2.0
 =====
 * Simplify public eventstore module.
