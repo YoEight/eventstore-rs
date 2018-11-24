@@ -271,6 +271,72 @@ fn test_read_stream_events(connection: &eventstore::Connection) {
     assert_eq!(idx, 10);
 }
 
+// Like `test_read_stream_events` but use `ReadStreamEvents::until_end_of_stream`
+fn test_iterate_over_forward(connection: &eventstore::Connection) {
+    let stream_id = fresh_stream_id("until-end-of-stream-forward");
+    let events    = generate_events("until-end-of-stream-forward-test", 10);
+
+    let _ = connection.write_events(stream_id.as_str())
+                  .append_events(events)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+    let iter = connection.read_stream(stream_id.as_str())
+                  .start_from_beginning()
+                  .max_count(1)
+                  .iterate_over();
+
+    let mut pos = 0;
+    let mut idx = 0;
+
+    for event in iter {
+        let event = event.unwrap();
+        let event = event.get_original_event().unwrap();
+        let obj: HashMap<String, i64> = event.as_json().unwrap();
+        let value = obj.get("event_index").unwrap();
+
+        idx = *value;
+        pos += 1;
+    }
+
+    assert_eq!(pos, 10);
+    assert_eq!(idx, 10);
+}
+
+// Like `test_until_end_of_stream_forward` but backward.
+fn test_iterate_over_backward(connection: &eventstore::Connection) {
+    let stream_id = fresh_stream_id("until-end-of-stream-backward");
+    let events    = generate_events("until-end-of-stream-backward-test", 10);
+
+    let _ = connection.write_events(stream_id.as_str())
+                  .append_events(events)
+                  .execute()
+                  .wait()
+                  .unwrap();
+
+    let iter = connection.read_stream(stream_id.as_str())
+                  .start_from_end_of_stream()
+                  .max_count(1)
+                  .iterate_over();
+
+    let mut pos = 0;
+    let mut idx = 0;
+
+    for event in iter {
+        let event = event.unwrap();
+        let event = event.get_original_event().unwrap();
+        let obj: HashMap<String, i64> = event.as_json().unwrap();
+        let value = obj.get("event_index").unwrap();
+
+        idx = *value;
+        pos += 1;
+    }
+
+    assert_eq!(pos, 10);
+    assert_eq!(idx, 1);
+}
+
 // We read $all system stream. We cannot write on $all stream. It's very
 // unlikely for $all stream to be empty. From a personal note, I never saw that
 // stream empty even right after booting the server.
@@ -502,6 +568,8 @@ fn all_round_operation_test() {
     test_write_and_read_stream_metadata(&connection);
     test_transaction(&connection);
     test_read_stream_events(&connection);
+    test_iterate_over_forward(&connection);
+    test_iterate_over_backward(&connection);
     test_read_all_stream(&connection);
     test_delete_stream(&connection);
     test_volatile_subscription(&connection);

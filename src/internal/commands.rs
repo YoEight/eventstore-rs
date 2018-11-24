@@ -1,6 +1,7 @@
 //! Commands this client supports.
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::vec::IntoIter;
 
 use futures::sync::mpsc::{ self, Sender };
 use futures::{ Future, Sink, Stream };
@@ -10,7 +11,7 @@ use serde_json;
 use internal::messaging::Msg;
 use internal::operations::{ self, OperationError };
 use internal::timespan::Timespan;
-use types;
+use types::{ self, Slice };
 
 fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationError>
     where S: Stream<Item = Result<A, operations::OperationError>, Error = ()>
@@ -544,6 +545,118 @@ impl Transaction {
     pub fn rollback(self) {}
 }
 
+struct IterParams<'a> {
+    sender: Sender<Msg>,
+    settings: &'a types::Settings,
+    link_tos: types::LinkTos,
+    require_master: bool,
+    max_count: i32,
+    direction: types::ReadDirection,
+}
+
+struct ReadStream<'a> {
+    name: Chars,
+    slice_opt: Option<IntoIter<types::ResolvedEvent>>,
+    pos: i64,
+    end_of_stream: bool,
+    next_number: Option<i64>,
+    last_error: Option<types::ReadStreamError>,
+    params: IterParams<'a>,
+}
+
+impl<'a> ReadStream<'a> {
+    fn new(name: Chars, start_from: i64, params: IterParams) -> ReadStream {
+        ReadStream {
+            name,
+            params,
+            pos: start_from,
+            slice_opt: None,
+            end_of_stream: false,
+            next_number: None,
+            last_error: None,
+        }
+    }
+}
+
+impl<'a> Iterator for ReadStream<'a> {
+    type Item = Result<types::ResolvedEvent, types::ReadStreamError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ref error) = self.last_error {
+            return Some(Err(error.clone()));
+        }
+
+        if self.end_of_stream {
+            return self.slice_opt.as_mut().and_then(|i| i.next()).map(Ok);
+        }
+
+        if let Some(mut iter) = self.slice_opt.take() {
+            let next_event = iter.next();
+
+            if next_event.is_some() {
+                self.slice_opt = Some(iter);
+
+                return next_event.map(Ok);
+            }
+        }
+
+        let sender = self.params.sender.clone();
+        let stream_name = self.name.clone();
+        let result = ReadStreamEvents::new(sender, stream_name, self.params.settings)
+            .resolve_link_tos(self.params.link_tos)
+            .start_from(self.pos)
+            .max_count(self.params.max_count)
+            .require_master(self.params.require_master)
+            .set_direction(self.params.direction)
+            .execute()
+            .wait()
+            .unwrap();
+
+        match result {
+            types::ReadStreamStatus::Error(error) => match error {
+                types::ReadStreamError::NoStream(_) => {
+                    self.end_of_stream = true;
+
+                    None
+                },
+
+                error => {
+                    let result = Some(Err(error.clone()));
+
+                    self.last_error = Some(error);
+
+                    result
+                }
+            },
+
+            types::ReadStreamStatus::Success(slice) => match slice.events() {
+                types::LocatedEvents::EndOfStream => {
+                    self.end_of_stream = true;
+                    self.slice_opt = None;
+
+                    None
+                },
+
+                types::LocatedEvents::Events { events, next } => {
+                    if let Some(pos) = next {
+                        self.pos = pos;
+                    } else {
+                        self.end_of_stream = true;
+                    }
+
+                    let mut iter = events.into_iter();
+                    let next_event = iter.next().map(Ok);
+
+                    self.next_number = next;
+                    self.slice_opt = Some(iter);
+
+                    next_event
+                }
+            },
+        }
+    }
+}
+
 /// A command that reads several events from a stream. It can read events
 /// forward or backward.
 pub struct ReadStreamEvents<'a> {
@@ -578,12 +691,16 @@ impl <'a> ReadStreamEvents<'a> {
     /// Asks the command to read forward (toward the end of the stream).
     /// That's the default behavior.
     pub fn forward(self) -> ReadStreamEvents<'a> {
-        ReadStreamEvents { direction: types::ReadDirection::Forward, ..self }
+        self.set_direction(types::ReadDirection::Forward)
     }
 
     /// Asks the command to read backward (toward the begining of the stream).
     pub fn backward(self) -> ReadStreamEvents<'a> {
-        ReadStreamEvents { direction: types::ReadDirection::Backward, ..self }
+        self.set_direction(types::ReadDirection::Backward)
+    }
+
+    fn set_direction(self, direction: types::ReadDirection) -> ReadStreamEvents<'a> {
+        ReadStreamEvents { direction, ..self }
     }
 
     /// Performs the command with the given credentials.
@@ -596,10 +713,28 @@ impl <'a> ReadStreamEvents<'a> {
         ReadStreamEvents { max_count, ..self }
     }
 
-    /// Starts the read ot the given event number. By default, it starts at
+    /// Starts the read at the given event number. By default, it starts at
     /// 0.
     pub fn start_from(self, start: i64) -> ReadStreamEvents<'a> {
         ReadStreamEvents { start, ..self }
+    }
+
+    /// Starts the read from the beginning of the stream. It also set the read
+    /// direction to `Forward`.
+    pub fn start_from_beginning(self) -> ReadStreamEvents<'a> {
+        let start = 0;
+        let direction = types::ReadDirection::Forward;
+
+        ReadStreamEvents { start, direction, ..self }
+    }
+
+    /// Starts the read from the end of the stream. It also set the read
+    /// direction to `Backward`.
+    pub fn start_from_end_of_stream(self) -> ReadStreamEvents<'a> {
+        let start = -1;
+        let direction = types::ReadDirection::Backward;
+
+        ReadStreamEvents { start, direction, ..self }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
@@ -637,8 +772,117 @@ impl <'a> ReadStreamEvents<'a> {
 
         single_value_future(rcv)
     }
+
+    /// Returns an iterator able to consume the entire stream. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc).
+    pub fn iterate_over(self) -> impl Iterator<Item=Result<types::ResolvedEvent, types::ReadStreamError>> + 'a {
+        let params = IterParams {
+            sender: self.sender,
+            settings: self.settings,
+            link_tos: types::LinkTos::from_bool(self.resolve_link_tos),
+            require_master: self.require_master,
+            max_count: self.max_count,
+            direction: self.direction,
+        };
+
+        ReadStream::new(self.stream, self.start, params)
+    }
 }
 
+struct ReadAllStream<'a> {
+    slice_opt: Option<IntoIter<types::ResolvedEvent>>,
+    pos: types::Position,
+    end_of_stream: bool,
+    next_number: Option<types::Position>,
+    last_error: Option<types::ReadStreamError>,
+    params: IterParams<'a>,
+}
+
+impl<'a> ReadAllStream<'a> {
+    fn new(start_from: types::Position, params: IterParams) -> ReadAllStream {
+        ReadAllStream {
+            params,
+            pos: start_from,
+            slice_opt: None,
+            end_of_stream: false,
+            next_number: None,
+            last_error: None,
+        }
+    }
+}
+
+impl<'a> Iterator for ReadAllStream<'a> {
+    type Item = Result<types::ResolvedEvent, types::ReadStreamError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ref error) = self.last_error {
+            return Some(Err(error.clone()));
+        }
+
+        if self.end_of_stream {
+            return self.slice_opt.as_mut().and_then(|i| i.next()).map(Ok);
+        }
+
+        if let Some(mut iter) = self.slice_opt.take() {
+            let next_event = iter.next();
+
+            if next_event.is_some() {
+                self.slice_opt = Some(iter);
+
+                return next_event.map(Ok);
+            }
+        }
+
+        let sender = self.params.sender.clone();
+        let result = ReadAllEvents::new(sender, self.params.settings)
+            .resolve_link_tos(self.params.link_tos)
+            .start_from(self.pos)
+            .max_count(self.params.max_count)
+            .require_master(self.params.require_master)
+            .set_direction(self.params.direction)
+            .execute()
+            .wait()
+            .unwrap();
+
+        match result {
+            types::ReadStreamStatus::Error(error) => {
+                let result = Some(Err(error.clone()));
+
+                self.last_error = Some(error);
+
+                result
+            },
+
+            types::ReadStreamStatus::Success(slice) => match slice.events() {
+                types::LocatedEvents::EndOfStream => {
+                    self.end_of_stream = true;
+                    self.slice_opt = None;
+
+                    None
+                },
+
+                types::LocatedEvents::Events { events, next } => {
+                    if let Some(pos) = next {
+                        self.pos = pos;
+                    } else {
+                        self.end_of_stream = true;
+                    }
+
+                    let mut iter = events.into_iter();
+                    let next_event = iter.next().map(Ok);
+
+                    self.next_number = next;
+                    self.slice_opt = Some(iter);
+
+                    next_event
+                }
+            },
+        }
+    }
+}
 /// Like `ReadStreamEvents` but specialized to system stream '$all'.
 pub struct ReadAllEvents<'a> {
     max_count: i32,
@@ -668,12 +912,16 @@ impl <'a> ReadAllEvents<'a> {
     /// Asks the command to read forward (toward the end of the stream).
     /// That's the default behavior.
     pub fn forward(self) -> ReadAllEvents<'a> {
-        ReadAllEvents { direction: types::ReadDirection::Forward, ..self }
+        self.set_direction(types::ReadDirection::Forward)
     }
 
     /// Asks the command to read backward (toward the begining of the stream).
     pub fn backward(self) -> ReadAllEvents<'a> {
-        ReadAllEvents { direction: types::ReadDirection::Backward, ..self }
+        self.set_direction(types::ReadDirection::Backward)
+    }
+
+    fn set_direction(self, direction: types::ReadDirection) -> ReadAllEvents<'a> {
+        ReadAllEvents { direction, ..self }
     }
 
     /// Performs the command with the given credentials.
@@ -690,6 +938,24 @@ impl <'a> ReadAllEvents<'a> {
     /// `types::Position::start`.
     pub fn start_from(self, start: types::Position) -> ReadAllEvents<'a> {
         ReadAllEvents { start, ..self }
+    }
+
+    /// Starts the read from the beginning of the stream. It also set the read
+    /// direction to `Forward`.
+    pub fn start_from_beginning(self) -> ReadAllEvents<'a> {
+        let start = types::Position::start();
+        let direction = types::ReadDirection::Forward;
+
+        ReadAllEvents { start, direction, ..self }
+    }
+
+    /// Starts the read from the end of the stream. It also set the read
+    /// direction to `Backward`.
+    pub fn start_from_end_of_stream(self) -> ReadAllEvents<'a> {
+        let start = types::Position::end();
+        let direction = types::ReadDirection::Backward;
+
+        ReadAllEvents { start, direction, ..self }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
@@ -725,6 +991,24 @@ impl <'a> ReadAllEvents<'a> {
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         single_value_future(rcv)
+    }
+
+    /// Returns an iterator able to consume the entire stream. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc).
+    pub fn iterate_over(self) -> impl Iterator<Item=Result<types::ResolvedEvent, types::ReadStreamError>> + 'a {
+        let params = IterParams {
+            sender: self.sender,
+            settings: self.settings,
+            link_tos: types::LinkTos::from_bool(self.resolve_link_tos),
+            require_master: self.require_master,
+            max_count: self.max_count,
+            direction: self.direction,
+        };
+
+        ReadAllStream::new(self.start, params)
     }
 }
 
