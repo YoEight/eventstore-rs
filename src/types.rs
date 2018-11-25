@@ -107,6 +107,14 @@ impl LinkTos {
             LinkTos::NoResolution => false,
         }
     }
+
+    pub(crate) fn from_bool(raw: bool) -> LinkTos {
+        if raw {
+            LinkTos::ResolveLink
+        } else {
+            LinkTos::NoResolution
+        }
+    }
 }
 
 /// Global connection settings.
@@ -542,7 +550,7 @@ pub trait Slice {
 }
 
 /// Represents the errors that can arise when reading a stream.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReadStreamError {
     NoStream(Chars),
     StreamDeleted(Chars),
@@ -552,7 +560,7 @@ pub enum ReadStreamError {
 }
 
 /// Represents the result of reading a stream.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReadStreamStatus<A> {
     Success(A),
     Error(ReadStreamError),
