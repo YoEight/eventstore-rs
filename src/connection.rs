@@ -1,12 +1,11 @@
 use std::net::{ SocketAddr, ToSocketAddrs };
 use std::io;
-use std::thread::{ self, JoinHandle };
 use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Receiver, Sender, channel };
 use protobuf::Chars;
-use tokio::runtime::Runtime;
+use tokio::runtime::{ Runtime, Shutdown };
 
 use internal::driver::{ Driver, Report };
 use internal::messaging::Msg;
@@ -28,7 +27,7 @@ use types::{ self, StreamMetadata, Settings };
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
 pub struct Connection {
-    worker: JoinHandle<()>,
+    shutdown: Shutdown,
     sender: Sender<Msg>,
     settings: Settings,
 }
@@ -198,19 +197,14 @@ impl Connection {
         let disc = Box::new(StaticDiscovery::new(addr));
         let cloned_sender = sender.clone();
         let driver = Driver::new(&settings, disc, sender.clone());
-
-        let handle = thread::spawn(move || {
-            let mut runtime = Runtime::new().unwrap();
-            let action = connection_state_machine(cloned_sender, recv, driver);
-            let _ = runtime.spawn(action);
-
-            runtime.shutdown_on_idle()
-                .wait()
-                .unwrap();
-        });
+        let action = connection_state_machine(cloned_sender, recv, driver);
+        
+        let mut runtime = Runtime::new().unwrap();
+        let _ = runtime.spawn(action);
+        let shutdown = runtime.shutdown_on_idle();
 
         Connection {
-            worker: handle,
+            shutdown,
             sender,
             settings,
         }
@@ -359,6 +353,6 @@ impl Connection {
     /// `shutdown` blocks the current thread.
     pub fn shutdown(self) {
         self.sender.send(Msg::Shutdown).wait().unwrap();
-        self.worker.join().unwrap();
+        self.shutdown.wait().unwrap();
     }
 }
