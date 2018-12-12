@@ -27,7 +27,7 @@ use types::{ self, StreamMetadata, Settings };
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
 pub struct Connection {
-    shutdown: Shutdown,
+    shutdown: Option<Shutdown>,
     sender: Sender<Msg>,
     settings: Settings,
 }
@@ -100,6 +100,26 @@ impl ConnectionBuilder {
 
         if let Some(addr) = iter.next() {
             let client = Connection::new(self.settings, addr);
+
+            client.start();
+
+            Ok(client)
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
+        }
+    }
+
+    /// Creates a connection to an EventStore server. The connection will
+    /// start right away. This method will pick the first `SocketAddr` it
+    /// has resolved.
+    pub fn start_with_runtime<A>(self, addrs: A, runtime: &mut Runtime) -> io::Result<Connection>
+        where
+            A: ToSocketAddrs
+    {
+        let mut iter = addrs.to_socket_addrs()?;
+
+        if let Some(addr) = iter.next() {
+            let client = Connection::with_runtime(self.settings, addr, runtime);
 
             client.start();
 
@@ -193,21 +213,35 @@ impl Connection {
     }
 
     fn new(settings: Settings, addr: SocketAddr) -> Connection {
+        let mut runtime = Runtime::new().unwrap();
+        let sender = Self::initialize(&settings, addr, &mut runtime);
+        let shutdown = runtime.shutdown_on_idle();
+
+        Connection {
+            shutdown: Some(shutdown),
+            sender,
+            settings,
+        }
+    }
+
+    fn with_runtime(settings: Settings, addr: SocketAddr, runtime: &mut Runtime) -> Connection {
+        let sender = Self::initialize(&settings, addr, runtime);
+
+        Connection {
+            shutdown: None,
+            sender,
+            settings,
+        }
+    }
+
+    fn initialize(settings: &Settings, addr: SocketAddr, runtime: &mut Runtime) -> Sender<Msg> {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
         let disc = Box::new(StaticDiscovery::new(addr));
         let cloned_sender = sender.clone();
         let driver = Driver::new(&settings, disc, sender.clone());
         let action = connection_state_machine(cloned_sender, recv, driver);
-        
-        let mut runtime = Runtime::new().unwrap();
         let _ = runtime.spawn(action);
-        let shutdown = runtime.shutdown_on_idle();
-
-        Connection {
-            shutdown,
-            sender,
-            settings,
-        }
+        sender
     }
 
     fn start(&self) {
