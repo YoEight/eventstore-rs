@@ -1,6 +1,7 @@
 0.2.3
 =====
 * Remove an unnecessary OS thread.
+* Implement `ConnectionBuilder::start_with_runtime` to use an existing tokio runtime.
 
 0.2.2
 =====
