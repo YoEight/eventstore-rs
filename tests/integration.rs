@@ -100,7 +100,7 @@ fn generate_events(event_type: &str, cnt: usize) -> Vec<eventstore::EventData> {
             "event_index": idx,
         });
 
-        let data = eventstore::EventData::json(event_type, payload);
+        let data = eventstore::EventData::json(event_type, payload).unwrap();
         events.push(data);
     }
 

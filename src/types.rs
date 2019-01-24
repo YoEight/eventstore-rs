@@ -684,18 +684,19 @@ pub struct EventData {
 
 impl EventData {
     /// Creates an event with a JSON payload.
-    pub fn json<P, S>(event_type: S, payload: P) -> EventData
+    pub fn json<P, S>(event_type: S, payload: P) -> serde_json::Result<EventData>
         where P: Serialize,
               S: Into<Chars>
     {
-        let bytes = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let data = serde_json::to_vec(&payload)?;
+        let bytes = Bytes::from(data);
 
-        EventData {
+        Ok(EventData {
             event_type: event_type.into(),
             payload: Payload::Json(bytes),
             id_opt: None,
             metadata_payload_opt: None,
-        }
+        })
     }
 
     /// Creates an event with a raw binary payload.
