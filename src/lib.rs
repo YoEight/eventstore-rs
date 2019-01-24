@@ -26,5 +26,9 @@ pub use connection::{
     ConnectionBuilder,
 };
 
-pub use internal::{ commands };
+pub use internal::{
+    commands,
+    operations::OperationError
+};
+
 pub use types::*;
