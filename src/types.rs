@@ -1270,7 +1270,7 @@ pub trait SubscriptionConsumer {
     /// It's possible to have `when_event_appeared` called before
     /// `when_confirmed` for catchup subscriptions as catchup subscriptions
     /// mixes several operations at the same time.
-    fn when_confirmed(&mut self, _id: Uuid, _last_commit_position: i64, _last_event_number: i64);
+    fn when_confirmed(&mut self, _id: Uuid, _last_commit_position: i64, _last_event_number: i64) {}
 
     /// Called when the subscription has received an event from the server.
     fn when_event_appeared<E>(&mut self, &mut E, Box<ResolvedEvent>) -> OnEventAppeared
@@ -1278,7 +1278,7 @@ pub trait SubscriptionConsumer {
 
     /// Called when the subscrition has been dropped whether by the server or
     /// the user themself.
-    fn when_dropped(&mut self);
+    fn when_dropped(&mut self) {}
 }
 
 /// System supported consumer strategies for use with persistent subscriptions.
