@@ -1270,7 +1270,7 @@ pub trait SubscriptionConsumer {
     /// It's possible to have `when_event_appeared` called before
     /// `when_confirmed` for catchup subscriptions as catchup subscriptions
     /// mixes several operations at the same time.
-    fn when_confirmed(&mut self, Uuid, i64, i64);
+    fn when_confirmed(&mut self, _id: Uuid, _last_commit_position: i64, _last_event_number: i64);
 
     /// Called when the subscription has received an event from the server.
     fn when_event_appeared<E>(&mut self, &mut E, Box<ResolvedEvent>) -> OnEventAppeared
