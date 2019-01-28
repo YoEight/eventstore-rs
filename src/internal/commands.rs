@@ -320,7 +320,7 @@ impl <'a> WriteStreamMetadata<'a> {
     /// Sends asynchronously the write command to the server.
     pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
         let metadata = StreamMetadataInternal::from_metadata(self.metadata);
-        let event    = types::EventData::json("$metadata", metadata);
+        let event    = types::EventData::json("$metadata", metadata).unwrap();
 
         self.inner.push_event(event)
                   .execute()
