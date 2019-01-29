@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt;
 use std::ops::Deref;
 use std::time::{ Duration, Instant };
 
@@ -13,7 +15,14 @@ use internal::messages;
 use internal::package::Pkg;
 use types::{ self, Slice };
 
-use self::messages::{ OperationResult, ReadStreamEventsCompleted_ReadStreamResult, ReadAllEventsCompleted_ReadAllResult, CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult, UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult, DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult };
+use self::messages::{
+    OperationResult,
+    ReadStreamEventsCompleted_ReadStreamResult,
+    ReadAllEventsCompleted_ReadAllResult,
+    CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult,
+    UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult,
+    DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult
+};
 
 #[derive(Debug, Clone)]
 pub enum OperationError {
@@ -39,6 +48,32 @@ impl OperationError {
 
     fn wrong_client_impl_on_cmd(cmd: Cmd) -> OperationError {
         OperationError::WrongClientImpl(Some(cmd))
+    }
+}
+
+impl Error for OperationError {}
+
+impl fmt::Display for OperationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use OperationError::*;
+
+        match self {
+            WrongExpectedVersion(stream, exp) => {
+                writeln!(f, "expected version {:?} for stream {}", exp, stream)
+            },
+            StreamDeleted(stream) => writeln!(f, "stream {} deleted", stream),
+            InvalidTransaction => writeln!(f, "invalid transaction"),
+            AccessDenied(info) => writeln!(f, "access denied: {}", info),
+            ProtobufDecodingError(error) => writeln!(f, "protobuf decoding error: {}", error),
+            ServerError(error) => writeln!(f, "server error: {:?}", error),
+            InvalidOperation(info) => writeln!(f, "invalid operation: {}", info),
+            StreamNotFound(stream) => writeln!(f, "stream {} not found", stream),
+            AuthenticationRequired => writeln!(f, "authentication required"),
+            Aborted => writeln!(f, "aborted"),
+            WrongClientImpl(info) => writeln!(f, "wrong client impl: {:?}", info),
+            ConnectionHasDropped => writeln!(f, "connection has dropped"),
+            NotImplemented => writeln!(f, "not implemented"),
+        }
     }
 }
 
