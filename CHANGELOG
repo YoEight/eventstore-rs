@@ -2,6 +2,8 @@
 =====
 * Remove an unnecessary OS thread.
 * Implement `ConnectionBuilder::start_with_runtime` to use an existing tokio runtime.
+* Fix rare situation where the user send a command before the connection with the
+  server is available, causing that operation to be sent only after a `operation timeout` time.
 
 0.2.2
 =====

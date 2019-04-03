@@ -323,6 +323,13 @@ impl Driver {
                 if req.correlation == pkg.correlation {
                     if let Some(ref conn) = self.candidate {
                         info!("Connection identified: {}.", conn.id);
+
+                        // HACK: It can happen the user submitted operations before the connection was
+                        // available. Those operations are only check on every 's_operationTimeout'
+                        // ms. This could lead the first operation to take time before gettings.
+                        // FIXME: We might consider doing that hack only if it's the first time
+                        // we connect with the server.
+                        self.registry.check_and_retry(conn);
                     }
 
                     self.attempt_opt          = None;
