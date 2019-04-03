@@ -4,14 +4,6 @@ pub struct Endpoint {
     pub addr: SocketAddr,
 }
 
-impl Endpoint {
-    pub fn from_addr(addr: SocketAddr) -> Endpoint {
-        Endpoint {
-            addr,
-        }
-    }
-}
-
 pub struct StaticDiscovery {
     addr: SocketAddr,
 }
