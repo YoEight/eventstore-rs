@@ -465,7 +465,9 @@ impl Driver {
                 self.manage_heartbeat();
             } else if self.phase == Phase::Identification {
                 if self.has_init_req_timeout() {
-                    return Report::Quit;
+                    if let Some(conn) = self.candidate.take() {
+                        self.tcp_connection_close(&conn.id, &identification_timeout_error());
+                    }
                 } else {
                     self.manage_heartbeat();
                 }
@@ -501,4 +503,8 @@ impl Driver {
 
 fn heartbeat_timeout_error() -> Error {
     Error::new(ErrorKind::Other, "Heartbeat timeout error.")
+}
+
+fn identification_timeout_error() -> Error {
+    Error::new(ErrorKind::Other, "Identification timeout error.")
 }
