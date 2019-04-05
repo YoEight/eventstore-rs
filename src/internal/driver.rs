@@ -318,7 +318,17 @@ impl Driver {
     pub(crate) fn on_package_arrived(&mut self, pkg: Pkg) {
         self.tracker.incr_pkg_num();
 
-        if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
+        if pkg.cmd == Cmd::HeartbeatRequest {
+            let mut resp = pkg.copy_headers_only();
+
+            resp.cmd = Cmd::HeartbeatResponse;
+
+            if let Some(ref conn) = self.candidate {
+                conn.enqueue(resp);
+            }
+        } else if pkg.cmd == Cmd::HeartbeatResponse {
+            // No need to do anything in that situation.
+        } else if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
             if let Some(req) = self.init_req_opt.take() {
                 if req.correlation == pkg.correlation {
                     if let Some(ref conn) = self.candidate {
@@ -348,25 +358,9 @@ impl Driver {
                 }
             }
         } else if self.state == ConnectionState::Connected {
-            match pkg.cmd {
-                Cmd::HeartbeatRequest => {
-                    let mut resp = pkg.copy_headers_only();
-
-                    resp.cmd = Cmd::HeartbeatResponse;
-
-                    if let Some(ref conn) = self.candidate {
-                        conn.enqueue(resp);
-                    }
-                },
-
-                Cmd::HeartbeatResponse => (),
-
-                _ => {
-                    // It will be always 'Some' when receiving a package.
-                    if let Some(ref conn) = self.candidate {
-                        self.registry.handle(pkg, conn);
-                    }
-                },
+            // It will be always 'Some' when receiving a package.
+            if let Some(ref conn) = self.candidate {
+                self.registry.handle(pkg, conn);
             }
         }
     }
