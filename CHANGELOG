@@ -1,3 +1,7 @@
+0.2.4
+=====
+* Fix possible connection issues if Authentication or Identification processes take too long to complete.
+
 0.2.3
 =====
 * Remove an unnecessary OS thread.
