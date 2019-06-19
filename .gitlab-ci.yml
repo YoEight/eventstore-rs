@@ -5,7 +5,7 @@
     - cargo check
 
 variables:
-  RUSTC_STABLE_VERSION: "1.33"
+  RUSTC_STABLE_VERSION: "1.35"
 
 stages:
   - build
