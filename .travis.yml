@@ -1,0 +1,32 @@
+language: rust
+dist: xenial
+
+matrix:
+  include:
+    - rust: stable
+      env: MODE='BUILD'
+
+    - rust: beta
+      env: MODE='BUILD'
+
+    - rust: nightly
+      env: MODE='BUILD'
+
+    - rust: stable
+      env: MODE='TESTS' RUST_BACKTRACE='1' RUST_LOG='eventstore=debug'
+
+      before_script:
+        - docker pull eventstore/eventstore:latest
+        - docker run -p 1113:1113 -p 2113:2113 -d eventstore/eventstore:latest
+
+      script:
+        - cargo test
+
+  allow_failures:
+    - rust: nightly
+  fast_finish: true
+
+script:
+  - cargo check
+
+cache: cargo
