@@ -11,7 +11,7 @@ use eventstore::Slice;
 use std::collections::HashMap;
 use std::time::Duration;
 use std::thread::spawn;
-use futures::Future;
+use futures::{ Future, Stream };
 use uuid::Uuid;
 
 struct TestSub {
@@ -285,7 +285,8 @@ fn test_iterate_over_forward(connection: &eventstore::Connection) {
     let iter = connection.read_stream(stream_id.as_str())
                   .start_from_beginning()
                   .max_count(1)
-                  .iterate_over();
+                  .iterate_over()
+                  .wait();
 
     let mut pos = 0;
     let mut idx = 0;
@@ -318,7 +319,8 @@ fn test_iterate_over_backward(connection: &eventstore::Connection) {
     let iter = connection.read_stream(stream_id.as_str())
                   .start_from_end_of_stream()
                   .max_count(1)
-                  .iterate_over();
+                  .iterate_over()
+                  .wait();
 
     let mut pos = 0;
     let mut idx = 0;

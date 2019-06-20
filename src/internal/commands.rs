@@ -1,10 +1,11 @@
 //! Commands this client supports.
 use std::collections::HashMap;
+use std::mem;
 use std::ops::Deref;
 use std::vec::IntoIter;
 
 use futures::sync::mpsc::{ self, Sender };
-use futures::{ Future, Sink, Stream };
+use futures::{ Future, Sink, Stream, Poll, Async };
 use protobuf::Chars;
 use serde_json;
 
@@ -554,109 +555,6 @@ struct IterParams<'a> {
     direction: types::ReadDirection,
 }
 
-struct ReadStream<'a> {
-    name: Chars,
-    slice_opt: Option<IntoIter<types::ResolvedEvent>>,
-    pos: i64,
-    end_of_stream: bool,
-    next_number: Option<i64>,
-    last_error: Option<types::ReadStreamError>,
-    params: IterParams<'a>,
-}
-
-impl<'a> ReadStream<'a> {
-    fn new(name: Chars, start_from: i64, params: IterParams) -> ReadStream {
-        ReadStream {
-            name,
-            params,
-            pos: start_from,
-            slice_opt: None,
-            end_of_stream: false,
-            next_number: None,
-            last_error: None,
-        }
-    }
-}
-
-impl<'a> Iterator for ReadStream<'a> {
-    type Item = Result<types::ResolvedEvent, types::ReadStreamError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ref error) = self.last_error {
-            return Some(Err(error.clone()));
-        }
-
-        if self.end_of_stream {
-            return self.slice_opt.as_mut().and_then(|i| i.next()).map(Ok);
-        }
-
-        if let Some(mut iter) = self.slice_opt.take() {
-            let next_event = iter.next();
-
-            if next_event.is_some() {
-                self.slice_opt = Some(iter);
-
-                return next_event.map(Ok);
-            }
-        }
-
-        let sender = self.params.sender.clone();
-        let stream_name = self.name.clone();
-        let result = ReadStreamEvents::new(sender, stream_name, self.params.settings)
-            .resolve_link_tos(self.params.link_tos)
-            .start_from(self.pos)
-            .max_count(self.params.max_count)
-            .require_master(self.params.require_master)
-            .set_direction(self.params.direction)
-            .execute()
-            .wait()
-            .unwrap();
-
-        match result {
-            types::ReadStreamStatus::Error(error) => match error {
-                types::ReadStreamError::NoStream(_) => {
-                    self.end_of_stream = true;
-
-                    None
-                },
-
-                error => {
-                    let result = Some(Err(error.clone()));
-
-                    self.last_error = Some(error);
-
-                    result
-                }
-            },
-
-            types::ReadStreamStatus::Success(slice) => match slice.events() {
-                types::LocatedEvents::EndOfStream => {
-                    self.end_of_stream = true;
-                    self.slice_opt = None;
-
-                    None
-                },
-
-                types::LocatedEvents::Events { events, next } => {
-                    if let Some(pos) = next {
-                        self.pos = pos;
-                    } else {
-                        self.end_of_stream = true;
-                    }
-
-                    let mut iter = events.into_iter();
-                    let next_event = iter.next().map(Ok);
-
-                    self.next_number = next;
-                    self.slice_opt = Some(iter);
-
-                    next_event
-                }
-            },
-        }
-    }
-}
-
 /// A command that reads several events from a stream. It can read events
 /// forward or backward.
 pub struct ReadStreamEvents<'a> {
@@ -773,12 +671,14 @@ impl <'a> ReadStreamEvents<'a> {
         single_value_future(rcv)
     }
 
-    /// Returns an iterator able to consume the entire stream. For example, if
+    /// Returns a `Stream` that consumes a stream entirely. For example, if
     /// the direction is `Forward`, it ends when the last stream event is reached.
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self) -> impl Iterator<Item=Result<types::ResolvedEvent, types::ReadStreamError>> + 'a {
+    pub fn iterate_over(self)
+        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
+    {
         let params = IterParams {
             sender: self.sender,
             settings: self.settings,
@@ -788,101 +688,169 @@ impl <'a> ReadStreamEvents<'a> {
             direction: self.direction,
         };
 
-        ReadStream::new(self.stream, self.start, params)
+        let fetcher =
+            FetchRegularStream {
+                stream_name: self.stream,
+                params,
+            };
+
+        Fetcher {
+            pos: self.start,
+            fetcher,
+            state: Fetch::Needed,
+        }
     }
 }
 
-struct ReadAllStream<'a> {
-    slice_opt: Option<IntoIter<types::ResolvedEvent>>,
-    pos: types::Position,
-    end_of_stream: bool,
-    next_number: Option<types::Position>,
-    last_error: Option<types::ReadStreamError>,
+struct Fetcher<F> where F: FetchStream
+{
+    pos: <<F as FetchStream>::Chunk as types::Slice>::Location,
+    fetcher: F,
+    state: Fetch<F::Chunk, <<F as FetchStream>::Chunk as types::Slice>::Location>,
+}
+
+impl<F> Stream for Fetcher<F> where F: FetchStream
+{
+    type Item = types::ResolvedEvent;
+    type Error = OperationError;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        loop {
+            match mem::replace(&mut self.state, Fetch::Needed) {
+                Fetch::Needed => {
+                    let fut = self.fetcher.fetch(self.pos);
+                    self.state = Fetch::Fetching(fut);
+                },
+
+                Fetch::Fetched(mut events, next) => {
+                    if let Some(event) = events.next() {
+                        self.state = Fetch::Fetched(events, next);
+
+                        return Ok(Async::Ready(Some(event)));
+                    } else if let Some(pos) = next {
+                        self.pos = pos;
+                        self.state = Fetch::Needed;
+                    } else {
+                        self.state = Fetch::Fetched(events, next);
+
+                        return Ok(Async::Ready(None));
+                    }
+                },
+
+                Fetch::Fetching(mut fut) => {
+                    match fut.poll()? {
+                        Async::Ready(status) => {
+                            match status {
+                                types::ReadStreamStatus::Error(error) => {
+                                    match error {
+                                        types::ReadStreamError::Error(e) => {
+                                            return Err(OperationError::ServerError(Some(e)));
+                                        },
+
+                                        types::ReadStreamError::AccessDenied(stream) => {
+                                            return Err(OperationError::AccessDenied(stream));
+                                        },
+
+                                        types::ReadStreamError::StreamDeleted(stream) => {
+                                            return Err(OperationError::StreamDeleted(stream));
+                                        },
+
+                                        // Other `types::ReadStreamError` aren't blocking errors
+                                        // so we consider the stream as an empty one.
+                                        _ => {
+                                            self.state = Fetch::Fetched(vec![].into_iter(), None);
+
+                                            return Ok(Async::Ready(None));
+                                        }
+                                    }
+                                },
+
+                                types::ReadStreamStatus::Success(slice) =>
+                                    match slice.events() {
+                                        types::LocatedEvents::EndOfStream => {
+                                            self.state = Fetch::Fetched(vec![].into_iter(), None);
+
+                                            return Ok(Async::Ready(None));
+                                        },
+
+                                        types::LocatedEvents::Events { events, next } => {
+                                            self.state = Fetch::Fetched(events.into_iter(), next);
+                                        }
+                                    }
+                            }
+                        },
+
+                        Async::NotReady => {
+                            self.state = Fetch::Fetching(fut);
+
+                            return Ok(Async::NotReady);
+                        },
+                    }
+                },
+            }
+        }
+    }
+}
+
+trait FetchStream {
+    type Chunk: types::Slice;
+
+    fn fetch(&self, pos: <<Self as FetchStream>::Chunk as types::Slice>::Location)
+        -> Box<dyn Future<Item=types::ReadStreamStatus<Self::Chunk>, Error=OperationError>>;
+}
+
+
+struct FetchRegularStream<'a> {
+    stream_name: Chars,
     params: IterParams<'a>,
 }
 
-impl<'a> ReadAllStream<'a> {
-    fn new(start_from: types::Position, params: IterParams) -> ReadAllStream {
-        ReadAllStream {
-            params,
-            pos: start_from,
-            slice_opt: None,
-            end_of_stream: false,
-            next_number: None,
-            last_error: None,
-        }
-    }
-}
+impl<'a> FetchStream for FetchRegularStream<'a> {
+    type Chunk = types::StreamSlice;
 
-impl<'a> Iterator for ReadAllStream<'a> {
-    type Item = Result<types::ResolvedEvent, types::ReadStreamError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ref error) = self.last_error {
-            return Some(Err(error.clone()));
-        }
-
-        if self.end_of_stream {
-            return self.slice_opt.as_mut().and_then(|i| i.next()).map(Ok);
-        }
-
-        if let Some(mut iter) = self.slice_opt.take() {
-            let next_event = iter.next();
-
-            if next_event.is_some() {
-                self.slice_opt = Some(iter);
-
-                return next_event.map(Ok);
-            }
-        }
-
-        let sender = self.params.sender.clone();
-        let result = ReadAllEvents::new(sender, self.params.settings)
+    fn fetch(&self, pos: i64)
+        -> Box<dyn Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError>>
+    {
+        let fut = ReadStreamEvents::new(self.params.sender.clone(), self.stream_name.clone(), self.params.settings)
             .resolve_link_tos(self.params.link_tos)
-            .start_from(self.pos)
+            .start_from(pos)
             .max_count(self.params.max_count)
             .require_master(self.params.require_master)
             .set_direction(self.params.direction)
-            .execute()
-            .wait()
-            .unwrap();
+            .execute();
 
-        match result {
-            types::ReadStreamStatus::Error(error) => {
-                let result = Some(Err(error.clone()));
-
-                self.last_error = Some(error);
-
-                result
-            },
-
-            types::ReadStreamStatus::Success(slice) => match slice.events() {
-                types::LocatedEvents::EndOfStream => {
-                    self.end_of_stream = true;
-                    self.slice_opt = None;
-
-                    None
-                },
-
-                types::LocatedEvents::Events { events, next } => {
-                    if let Some(pos) = next {
-                        self.pos = pos;
-                    } else {
-                        self.end_of_stream = true;
-                    }
-
-                    let mut iter = events.into_iter();
-                    let next_event = iter.next().map(Ok);
-
-                    self.next_number = next;
-                    self.slice_opt = Some(iter);
-
-                    next_event
-                }
-            },
-        }
+        Box::new(fut)
     }
 }
+
+struct FetchAllStream<'a> {
+    params: IterParams<'a>,
+}
+
+impl<'a> FetchStream for FetchAllStream<'a> {
+    type Chunk = types::AllSlice;
+
+    fn fetch(&self, pos: types::Position)
+        -> Box<dyn Future<Item=types::ReadStreamStatus<types::AllSlice>, Error=OperationError>>
+    {
+        let fut = ReadAllEvents::new(self.params.sender.clone(), self.params.settings)
+            .resolve_link_tos(self.params.link_tos)
+            .start_from(pos)
+            .max_count(self.params.max_count)
+            .require_master(self.params.require_master)
+            .set_direction(self.params.direction)
+            .execute();
+
+        Box::new(fut)
+    }
+}
+
+enum Fetch<S, P> {
+    Needed,
+    Fetching(Box<dyn Future<Item=types::ReadStreamStatus<S>, Error=OperationError>>),
+    Fetched(IntoIter<types::ResolvedEvent>, Option<P>),
+}
+
 /// Like `ReadStreamEvents` but specialized to system stream '$all'.
 pub struct ReadAllEvents<'a> {
     max_count: i32,
@@ -993,12 +961,14 @@ impl <'a> ReadAllEvents<'a> {
         single_value_future(rcv)
     }
 
-    /// Returns an iterator able to consume the entire stream. For example, if
+    /// Returns a `Stream` that consumes $all stream entirely. For example, if
     /// the direction is `Forward`, it ends when the last stream event is reached.
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self) -> impl Iterator<Item=Result<types::ResolvedEvent, types::ReadStreamError>> + 'a {
+    pub fn iterate_over(self)
+        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
+    {
         let params = IterParams {
             sender: self.sender,
             settings: self.settings,
@@ -1008,7 +978,16 @@ impl <'a> ReadAllEvents<'a> {
             direction: self.direction,
         };
 
-        ReadAllStream::new(self.start, params)
+        let fetcher =
+            FetchAllStream {
+                params,
+            };
+
+        Fetcher {
+            pos: self.start,
+            fetcher,
+            state: Fetch::Needed,
+        }
     }
 }
 

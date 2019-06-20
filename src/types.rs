@@ -537,7 +537,7 @@ impl <A> LocatedEvents<A> {
 /// Gathers common slice operations.
 pub trait Slice {
     /// What kind of location this slice supports.
-    type Location;
+    type Location: Copy;
 
     /// Returns the starting point of that slice.
     fn from(&self) -> Self::Location;
