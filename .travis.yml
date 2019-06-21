@@ -44,6 +44,7 @@ deploy:
   provider: cargo
   on:
     tags: true
+    condition: "$MODE = TESTS"
   token:
     secure: u3rEfYcCWk1GeB3fZVlW/TDForpMS866+IsUGmGJZAbKwjaNBjR8JUdOl/UeAsqHnq5H+oFDrXSBjnbnqIsgVBbS3fdS9hpuUXioWQQgwm5sr+xbi/uKaBcKnaErfy8KEH5vkqJpsv5O/u4duhCPBNFg8tM+MQRh33MRTXPA5aNNx5mdJ0VHKP+ZUwL1PkprfwRiwleCBVJ4mhJ5zvSwgenLjzZG89YtTCUiyGrqyK8jryfX8hHrV3QNBFQrelNafmgXnwcUPjw/BxIytQY1wlauX3t+Z/wp0+Iftt/qK+K9xHBpIrAKL8YGxGYmglUX0WTjVKr8i6J00QRmILr9lQMb0TUQqGEnU0ozMx3b6vPKGsu5H/R4RtanHvDa9z7KAN5dA7b6HqIBexXWmE6mtEpP9p278ojYRfcEpH7AQPDdU8CkM+ZK8+qW4jZuaM7GyHOiTYdGtP1PtGHsUmfM5MaATW0lGZQUNQbDwRlyjYipuyqdy4dJyBOw755iBylLsfJMLet9eBia+jYT/ndb1vaLZgs5to683CObRcdeaQDRbvcmfb72IsE2CE8w298a08ZWEYg/GG1k746dW56aRTXqEsLuL/7PhudTzb7cWhm1rRLhc5t2CT3/Rtd4tWtXrT/bw8e2WUuyDmzAy7qklmooBzG2jDZixV2uV4IFAKY=
 
