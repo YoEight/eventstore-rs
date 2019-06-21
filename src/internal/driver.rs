@@ -154,7 +154,8 @@ pub(crate) enum Report {
     Quit,
 }
 
-pub(crate) struct Driver {
+pub(crate) struct Driver<D> where D: Discovery
+{
     registry: Registry,
     candidate: Option<Connection>,
     tracker: HealthTracker,
@@ -162,7 +163,7 @@ pub(crate) struct Driver {
     state: ConnectionState,
     phase: Phase,
     last_endpoint: Option<Endpoint>,
-    discovery: Box<Discovery + Send>,
+    discovery: D,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
@@ -174,8 +175,11 @@ pub(crate) struct Driver {
     last_operation_check: Instant,
 }
 
-impl Driver {
-    pub(crate) fn new(setts: &Settings, disc: Box<Discovery + Send>, sender: Sender<Msg>) -> Driver {
+impl<D> Driver<D> where D: Discovery
+{
+    pub(crate) fn new(setts: &Settings, disc: D, sender: Sender<Msg>)
+        -> Driver<D>
+    {
         Driver {
             registry: Registry::new(),
             candidate: None,
@@ -216,13 +220,28 @@ impl Driver {
 
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
-            let endpoint = self.discovery.discover(self.last_endpoint.as_ref());
+            let future = self.discovery.discover(self.last_endpoint.as_ref());
+            let sender = self.sender.clone();
+
+            let future =
+                future.then(move |result|
+                {
+                    let next = match result {
+                        Ok(endpoint) =>
+                            sender.clone().send(Msg::Establish(endpoint)),
+
+                        Err(e) => {
+                            error!("Failed to resolve TCP endpoint to which to connect {}.", e);
+                            sender.clone().send(Msg::ConnectionClosed(Uuid::nil(), e))
+                        }
+                    };
+
+                    next.then(|_| Ok(()))
+                 });
 
             self.phase = Phase::EndpointDiscovery;
 
-            // TODO - Properly handle endpoint discovery asynchronously.
-            spawn(
-                self.sender.clone().send(Msg::Establish(endpoint)).then(|_| Ok(())));
+            spawn(future);
 
             self.tracker.reset();
         }
@@ -290,14 +309,20 @@ impl Driver {
     }
 
     pub(crate) fn on_connection_closed(&mut self, conn_id: Uuid, error: &Error) {
-        if self.is_same_connection(&conn_id) {
-            info!("CloseConnection: {}.", error);
+        // If we received a `Uuid::nil()` connection id, it means an error raised
+        // before we made connection with the server, like during the discovery
+        // process for example.
+        if conn_id == Uuid::nil() || self.is_same_connection(&conn_id) {
             self.tcp_connection_close(&conn_id, error);
         }
     }
 
     fn tcp_connection_close(&mut self, conn_id: &Uuid, err: &Error) {
-        info!("Connection [{}] error. Cause: {}.", conn_id, err);
+        if Uuid::nil() == *conn_id {
+            info!("Connection error. Cause: {}.", err);
+        } else {
+            info!("Connection [{}] error. Cause: {}.", conn_id, err);
+        }
 
         match self.state {
             ConnectionState::Connected => {
