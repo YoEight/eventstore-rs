@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.2.4"
+version = "0.3.0"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 
 # Uncomment if you want to update messages.rs code-gen.
@@ -10,13 +10,13 @@ authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 
 license = "MIT"
 description = "GetEventStore TCP client"
-homepage = "https://gitlab.com/YoEight/eventstore-rs"
-repository = "https://gitlab.com/YoEight/eventstore-rs"
+repository = "https://github.com/YoEight/eventstore-rs"
 readme = "README.md"
 keywords = ["database", "eventsourcing", "event", "eventstore", "ges"]
 exclude = [
   ".gitignore",
   ".gitlab-ci.yml",
+  ".travis.yml",
   "tests/**/*"
 ]
 

@@ -5,7 +5,7 @@ Rust GetEventStore TCP Client.
 
 ## State of implemented features
 
-- [x] Can connect to GetEventStore 4.* servers.
+- [x] Can connect to GetEventStore  >=4.* servers.
 - [x] Connection health tracking.
 - [x] Operation timeout detection and retry.
 - [x] Write events.

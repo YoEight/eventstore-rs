@@ -1,3 +1,7 @@
+0.3.0
+=====
+* Migrate `iterate_over` from iterator to asynchronous stream.
+
 0.2.4
 =====
 * Fix possible connection issues if Authentication or Identification processes take too long to complete.
@@ -6,8 +10,8 @@
 =====
 * Remove an unnecessary OS thread.
 * Implement `ConnectionBuilder::start_with_runtime` to use an existing tokio runtime.
-* Fix rare situation where the user send a command before the connection with the
-  server is available, causing that operation to be sent only after a `operation timeout` time.
+* Fix rare issue where the user sends a command before the connection is confirmed with the
+  server, causing that operation to be sent only after a `operation timeout` time.
 * No longer terminate the connection in case of identification timeout.
 
 0.2.2
