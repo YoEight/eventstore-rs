@@ -1,5 +1,5 @@
 use bytes::{ Bytes, BytesMut, BufMut };
-use protobuf::{ Message, MessageStatic, parse_from_carllerche_bytes, Chars };
+use protobuf::{ Message, parse_from_carllerche_bytes, Chars };
 use uuid::Uuid;
 
 use internal::command::Cmd;
@@ -103,7 +103,7 @@ impl Pkg {
     }
 
     pub fn to_message<M>(&self) -> ::std::io::Result<M>
-        where M: MessageStatic
+        where M: Message
     {
         parse_from_carllerche_bytes(&self.payload).map_err(|e| e.into())
     }
