@@ -9,10 +9,10 @@ use futures::{ Future, Sink, Stream, Poll, Async };
 use protobuf::Chars;
 use serde_json;
 
-use internal::messaging::Msg;
-use internal::operations::{ self, OperationError };
-use internal::timespan::Timespan;
-use types::{ self, Slice };
+use crate::internal::messaging::Msg;
+use crate::internal::operations::{ self, OperationError };
+use crate::internal::timespan::Timespan;
+use crate::types::{ self, Slice };
 
 fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationError>
     where S: Stream<Item = Result<A, operations::OperationError>, Error = ()>

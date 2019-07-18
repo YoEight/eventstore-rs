@@ -2,9 +2,9 @@ use bytes::{ Bytes, BytesMut, BufMut };
 use protobuf::{ Message, parse_from_carllerche_bytes, Chars };
 use uuid::Uuid;
 
-use internal::command::Cmd;
-use internal::messages;
-use types::Credentials;
+use crate::internal::command::Cmd;
+use crate::internal::messages;
+use crate::types::Credentials;
 
 pub struct Pkg {
     pub cmd: Cmd,

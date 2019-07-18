@@ -8,14 +8,14 @@ use tokio::spawn;
 use tokio::timer::Interval;
 use uuid::Uuid;
 
-use internal::discovery::{ Endpoint, Discovery };
-use internal::command::Cmd;
-use internal::connection::Connection;
-use internal::messaging::Msg;
-use internal::operations::OperationWrapper;
-use internal::package::Pkg;
-use internal::registry::Registry;
-use types::{ Credentials, Settings };
+use crate::internal::discovery::{ Endpoint, Discovery };
+use crate::internal::command::Cmd;
+use crate::internal::connection::Connection;
+use crate::internal::messaging::Msg;
+use crate::internal::operations::OperationWrapper;
+use crate::internal::package::Pkg;
+use crate::internal::registry::Registry;
+use crate::types::{ Credentials, Settings };
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
