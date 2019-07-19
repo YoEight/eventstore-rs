@@ -7,13 +7,13 @@ use futures::sync::mpsc::{ Receiver, Sender, channel };
 use protobuf::Chars;
 use tokio::runtime::{ Runtime, Shutdown };
 
-use internal::discovery::Discovery;
-use internal::driver::{ Driver, Report };
-use internal::messaging::Msg;
-use internal::commands;
-use internal::discovery::StaticDiscovery;
-use internal::operations::OperationError;
-use types::{ self, StreamMetadata, Settings };
+use crate::internal::discovery::Discovery;
+use crate::internal::driver::{ Driver, Report };
+use crate::internal::messaging::Msg;
+use crate::internal::commands;
+use crate::internal::discovery::StaticDiscovery;
+use crate::internal::operations::OperationError;
+use crate::types::{ self, StreamMetadata, Settings };
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates

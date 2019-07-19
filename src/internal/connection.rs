@@ -10,10 +10,10 @@ use tokio::codec::{ Decoder, Encoder };
 use tokio::net::TcpStream;
 use uuid::{ Uuid, BytesError };
 
-use internal::command::Cmd;
-use internal::messaging::Msg;
-use internal::package::Pkg;
-use types::Credentials;
+use crate::internal::command::Cmd;
+use crate::internal::messaging::Msg;
+use crate::internal::package::Pkg;
+use crate::types::Credentials;
 
 pub(crate) struct Connection {
     pub(crate) id:     Uuid,

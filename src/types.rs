@@ -15,10 +15,10 @@ use serde::ser::Serialize;
 use serde_json;
 use uuid::{ Uuid, BytesError };
 
-use internal::command::Cmd;
-use internal::messages;
-use internal::messaging::Msg;
-use internal::package::Pkg;
+use crate::internal::command::Cmd;
+use crate::internal::messages;
+use crate::internal::messaging::Msg;
+use crate::internal::package::Pkg;
 
 /// Represents a reconnection strategy when a connection has dropped or is
 /// about to be created.
@@ -1197,14 +1197,14 @@ pub trait SubscriptionEnv {
     ///
     /// * Notes
     /// For persistent subscription only.
-    fn push_ack(&mut self, Uuid);
+    fn push_ack(&mut self, _: Uuid);
 
     /// Add an event ids to the nak list. It asks for `Vec` so you can have
     /// different `NakAction` for different event set.
     ///
     /// * Notes
     /// For persistent subscription only.
-    fn push_nak_with_message<S: Into<Chars>>(&mut self, Vec<Uuid>, NakAction, S);
+    fn push_nak_with_message<S: Into<Chars>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S);
 
     /// Get the number of time that event has been retried.
     ///
@@ -1274,7 +1274,7 @@ pub trait SubscriptionConsumer {
     fn when_confirmed(&mut self, _id: Uuid, _last_commit_position: i64, _last_event_number: i64) {}
 
     /// Called when the subscription has received an event from the server.
-    fn when_event_appeared<E>(&mut self, &mut E, Box<ResolvedEvent>) -> OnEventAppeared
+    fn when_event_appeared<E>(&mut self, _: &mut E, _: Box<ResolvedEvent>) -> OnEventAppeared
         where E: SubscriptionEnv;
 
     /// Called when the subscrition has been dropped whether by the server or

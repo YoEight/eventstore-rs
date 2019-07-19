@@ -10,10 +10,10 @@ use futures::sync::mpsc;
 use protobuf::{ Chars, RepeatedField };
 use uuid::Uuid;
 
-use internal::command::Cmd;
-use internal::messages;
-use internal::package::Pkg;
-use types::{ self, Slice };
+use crate::internal::command::Cmd;
+use crate::internal::messages;
+use crate::internal::package::Pkg;
+use crate::types::{ self, Slice };
 
 use self::messages::{
     OperationResult,
@@ -225,10 +225,10 @@ impl<'a, A: Session> ReqBuffer for VecReqBuffer<'a, A> {
 }
 
 pub(crate) trait Session {
-    fn new_request(&mut self, Cmd) -> Uuid;
-    fn pop(&mut self, &Uuid) -> ::std::io::Result<Tracking>;
-    fn reuse(&mut self, Tracking);
-    fn using(&mut self, &Uuid) -> ::std::io::Result<&mut Tracking>;
+    fn new_request(&mut self, _: Cmd) -> Uuid;
+    fn pop(&mut self, _: &Uuid) -> ::std::io::Result<Tracking>;
+    fn reuse(&mut self, _: Tracking);
+    fn using(&mut self, _: &Uuid) -> ::std::io::Result<&mut Tracking>;
     fn requests(&self) -> Vec<&Tracking>;
     fn terminate(&mut self);
     fn connection_id(&self) -> Uuid;
@@ -1709,12 +1709,12 @@ pub(crate) trait Catchup {
 
     fn create_next_puller(
         &self,
-        &Checkpoint
+        _: &Checkpoint
     ) -> OperationExtractor<Self::Item, Self::Puller>;
 
-    fn can_be_dispatched(&self, &Checkpoint, &types::ResolvedEvent) -> bool;
+    fn can_be_dispatched(&self, _: &Checkpoint, _: &types::ResolvedEvent) -> bool;
 
-    fn handle_pulled_item(&self, &mut Checkpoint, Self::Item) -> Pull;
+    fn handle_pulled_item(&self, _: &mut Checkpoint, _: Self::Item) -> Pull;
 }
 
 pub(crate) struct RegularCatchup {
