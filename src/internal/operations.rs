@@ -135,7 +135,7 @@ fn op_send_pkgs(pkgs: Vec<Pkg>) -> Decision {
     Ok(Outcome::Continue(pkgs))
 }
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
 pub(crate) struct OperationId(Uuid);
 
 impl OperationId {
@@ -153,6 +153,7 @@ pub(crate) struct OperationWrapper {
     creds: Option<types::Credentials>,
 }
 
+#[derive(Copy, Clone)]
 pub(crate) struct Tracking {
     id: Uuid,
     cmd: Cmd,

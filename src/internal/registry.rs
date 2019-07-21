@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{ HashMap, HashSet };
+use std::iter::IntoIterator;
 
 use bytes::BytesMut;
 use uuid::Uuid;
@@ -9,6 +10,7 @@ use crate::internal::messages;
 use crate::internal::operations::{ OperationError, OperationWrapper, OperationId, Tracking, Session };
 use crate::internal::package::Pkg;
 
+#[derive(Copy, Clone)]
 struct Request {
     session: OperationId,
     tracker: Tracking,
@@ -31,7 +33,7 @@ struct SessionImpl<'a> {
     id: OperationId,
     assocs: &'a mut HashMap<Uuid, Request>,
     conn: &'a Connection,
-    runnings: &'a mut Vec<Uuid>,
+    runnings: &'a mut HashSet<Uuid>,
 }
 
 impl<'a> SessionImpl<'a> {
@@ -39,7 +41,7 @@ impl<'a> SessionImpl<'a> {
         id: OperationId,
         assocs: &'a mut HashMap<Uuid, Request>,
         conn: &'a Connection,
-        runnings: &'a mut Vec<Uuid>) -> SessionImpl<'a>
+        runnings: &'a mut HashSet<Uuid>) -> SessionImpl<'a>
     {
         SessionImpl {
             id,
@@ -50,7 +52,10 @@ impl<'a> SessionImpl<'a> {
     }
 }
 
-fn terminate(assocs: &mut HashMap<Uuid, Request>, runnings: Vec<Uuid>) {
+fn terminate<I>(assocs: &mut HashMap<Uuid, Request>, runnings: I)
+    where
+        I: IntoIterator<Item=Uuid>
+{
     for id in runnings {
         assocs.remove(&id);
     }
@@ -62,7 +67,7 @@ impl<'a> Session for SessionImpl<'a> {
         let id  = req.get_id();
 
         self.assocs.insert(id, req);
-        self.runnings.push(id);
+        self.runnings.insert(id);
 
         id
     }
@@ -70,11 +75,7 @@ impl<'a> Session for SessionImpl<'a> {
     fn pop(&mut self, id: &Uuid) -> ::std::io::Result<Tracking> {
         match self.assocs.remove(id) {
             Some(req) => {
-                let pos = self.runnings
-                              .iter()
-                              .position(|x| x == id).unwrap();
-
-                self.runnings.remove(pos);
+                self.runnings.remove(id);
 
                 Ok(req.tracker)
             },
@@ -93,7 +94,7 @@ impl<'a> Session for SessionImpl<'a> {
             tracker,
         };
 
-        self.runnings.push(id);
+        self.runnings.insert(id);
         self.assocs.insert(id, req);
     }
 
@@ -112,7 +113,7 @@ impl<'a> Session for SessionImpl<'a> {
     }
 
     fn terminate(&mut self) {
-        terminate(self.assocs, self.runnings.drain(..).collect());
+        terminate(self.assocs, self.runnings.drain());
     }
 
     fn connection_id(&self) -> Uuid {
@@ -126,7 +127,7 @@ impl<'a> Session for SessionImpl<'a> {
 
 struct Requests {
     sessions: HashMap<OperationId, OperationWrapper>,
-    session_request_ids: HashMap<OperationId, Vec<Uuid>>,
+    session_request_ids: HashMap<OperationId, HashSet<Uuid>>,
     assocs: HashMap<Uuid, Request>,
     buffer: BytesMut,
 }
@@ -142,230 +143,253 @@ impl Requests {
     }
 
     fn register(&mut self, conn: &Connection, mut op: OperationWrapper) {
-        let mut runnings = Vec::new();
-        let     success = {
-            let session = SessionImpl::new(op.id, &mut self.assocs, conn, &mut runnings);
+        use std::mem;
 
-            match op.send(&mut self.buffer, session).map(|out| out.produced_pkgs()) {
-                Ok(pkgs) => {
-                    conn.enqueue_all(pkgs);
+        let mut requests = mem::replace(&mut self.assocs, HashMap::new());
+        let mut runnings = HashSet::new();
+        let session = SessionImpl::new(op.id, &mut requests, conn, &mut runnings);
 
-                    true
-                },
+        match op.send(&mut self.buffer, session).map(|out| out.produced_pkgs()) {
+            Ok(pkgs) => {
+                conn.enqueue_all(pkgs);
 
-                Err(e) => {
-                    error!("Exception occured when issuing requests: {}", e);
+                self.session_request_ids.insert(op.id, runnings);
+                self.sessions.insert(op.id, op);
+            },
 
-                    false
-                },
-            }
-        };
+            Err(e) => {
+                error!("Exception occured when issuing requests: {}", e);
 
-        if !success {
-            terminate(&mut self.assocs, runnings);
-        } else {
-            self.session_request_ids.insert(op.id, runnings);
-            self.sessions.insert(op.id, op);
+                terminate(&mut self.assocs, runnings);
+            },
         }
+
+        mem::replace(&mut self.assocs, requests);
     }
 
     fn handle_pkg(&mut self, conn: &Connection, pkg: Pkg) {
+        use std::mem;
+
+        struct Resp {
+            operation: OperationWrapper,
+            request: Request,
+            runnings: HashSet<Uuid>,
+        }
+
         enum Out {
             Failed,
             Handled,
         }
 
+        let mut sessions = mem::replace(&mut self.sessions, HashMap::new());
+        let mut sessions_requests = mem::replace(&mut self.session_request_ids, HashMap::new());
+        let mut requests = mem::replace(&mut self.assocs, HashMap::new());
+
+        let extract_resp = requests.get(&pkg.correlation).copied().and_then(|request|
+        {
+            sessions.remove(&request.session).and_then(|operation|
+            {
+                sessions_requests.remove(&request.session).map(|runnings|
+                {
+                    Resp {
+                        operation,
+                        request,
+                        runnings,
+                    }
+                })
+            })
+        });
+
         let pkg_id  = pkg.correlation;
         let pkg_cmd = pkg.cmd;
 
-        if let Some(req) = self.assocs.remove(&pkg_id) {
-            let original_cmd = req.tracker.get_cmd();
-            let session_id   = req.session;
+        if let Some(mut resp) = extract_resp {
+            let original_cmd = resp.request.tracker.get_cmd();
+            let session_id   = resp.request.session;
 
             debug!("Package [{}]: command {:?} received {:?}.", pkg_id, original_cmd, pkg_cmd);
 
-            let session_over = {
-                let runnings = self.session_request_ids
-                                   .get_mut(&req.session)
-                                   .expect("No session associated to request!");
+            let out = {
+                let mut session =
+                    SessionImpl::new(
+                        session_id, &mut requests, conn, &mut resp.runnings);
 
-                let op = self.sessions
-                             .get_mut(&session_id)
-                             .expect("Unknown session!");
+                match pkg.cmd {
+                    Cmd::BadRequest => {
+                        let msg = pkg.build_text();
 
-                // We insert back the request to let the operation decides if it
-                // want to keep it.
-                self.assocs.insert(pkg_id, req);
+                        error!("Bad request for command {:?}: {}.", original_cmd, msg);
 
-                let out = {
-                    let mut session =
-                        SessionImpl::new(
-                            session_id, &mut self.assocs, conn, runnings);
+                        resp.operation.failed(OperationError::ServerError(Some(msg)));
 
-                    match pkg.cmd {
-                        Cmd::BadRequest => {
-                            let msg = pkg.build_text();
+                        Out::Failed
+                    },
 
-                            error!("Bad request for command {:?}: {}.", original_cmd, msg);
+                    Cmd::NotAuthenticated => {
+                        error!("Not authenticated for command {:?}.", original_cmd);
 
-                            op.failed(OperationError::ServerError(Some(msg)));
+                        resp.operation.failed(OperationError::AuthenticationRequired);
 
-                            Out::Failed
-                        },
+                        Out::Failed
+                    },
 
-                        Cmd::NotAuthenticated => {
-                            error!("Not authenticated for command {:?}.", original_cmd);
+                    Cmd::NotHandled => {
+                        warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
 
-                            op.failed(OperationError::AuthenticationRequired);
+                        let msg: ::std::io::Result<messages::NotHandled> =
+                            pkg.to_message();
 
-                            Out::Failed
-                        },
+                        match msg {
+                            Ok(not_handled) => {
+                                match not_handled.get_reason() {
+                                    messages::NotHandled_NotHandledReason::NotMaster => {
+                                        warn!("Received a non master error on command {:?} id {}.
+                                              This driver doesn't support cluster connection yet.", original_cmd, pkg_id);
 
-                        Cmd::NotHandled => {
-                            warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
+                                        resp.operation.failed(OperationError::NotImplemented);
 
-                            let msg: ::std::io::Result<messages::NotHandled> =
-                                pkg.to_message();
+                                        Out::Failed
+                                    },
 
-                            match msg {
-                                Ok(not_handled) => {
-                                    match not_handled.get_reason() {
-                                        messages::NotHandled_NotHandledReason::NotMaster => {
-                                            warn!("Received a non master error on command {:?} id {}.
-                                                  This driver doesn't support cluster connection yet.", original_cmd, pkg_id);
+                                    _ => {
+                                        warn!("The server has either not started or is too busy.
+                                              Retrying command {:?} id {}.", original_cmd, pkg_id);
 
-                                            op.failed(OperationError::NotImplemented);
+                                        match resp.operation.retry(&mut self.buffer, &mut session, pkg_id) {
+                                            Ok(outcome) => {
+                                                let pkgs = outcome.produced_pkgs();
 
-                                            Out::Failed
-                                        },
+                                                if !pkgs.is_empty() {
+                                                    conn.enqueue_all(pkgs);
+                                                }
 
-                                        _ => {
-                                            warn!("The server has either not started or is too busy.
-                                                  Retrying command {:?} id {}.", original_cmd, pkg_id);
+                                                Out::Handled
+                                            },
 
-                                            match op.retry(&mut self.buffer, &mut session, pkg_id) {
-                                                Ok(outcome) => {
-                                                    let pkgs = outcome.produced_pkgs();
+                                            Err(error) => {
+                                                error!(
+                                                    "An error occured when retrying command {:?} id {}: {}.",
+                                                    original_cmd, pkg_id, error
+                                                );
 
-                                                    if !pkgs.is_empty() {
-                                                        conn.enqueue_all(pkgs);
-                                                    }
-
-                                                    Out::Handled
-                                                },
-
-                                                Err(error) => {
-                                                    error!(
-                                                        "An error occured when retrying command {:?} id {}: {}.",
-                                                        original_cmd, pkg_id, error
-                                                    );
-
-                                                    Out::Failed
-                                                },
-                                            }
-                                        },
-                                    }
-                                },
-
-                                Err(error) => {
-                                    error!("Decoding error: can't decode NotHandled message: {}.", error);
-
-                                    Out::Failed
-                                },
-                            }
-                        },
-
-                        _ => match op.receive(&mut self.buffer, session, pkg) {
-                            Ok(outcome) => {
-                                let pkgs = outcome.produced_pkgs();
-
-                                if !pkgs.is_empty() {
-                                    conn.enqueue_all(pkgs);
+                                                Out::Failed
+                                            },
+                                        }
+                                    },
                                 }
-
-                                Out::Handled
                             },
 
-                            Err(e) => {
-                                error!("An error occured when running operation: {}", e);
-                                let msg = format!("Exception raised: {}", e);
-
-                                op.failed(OperationError::InvalidOperation(msg));
+                            Err(error) => {
+                                error!("Decoding error: can't decode NotHandled message: {}.", error);
 
                                 Out::Failed
                             },
+                        }
+                    },
+
+                    _ => match resp.operation.receive(&mut self.buffer, session, pkg) {
+                        Ok(outcome) => {
+                            let pkgs = outcome.produced_pkgs();
+
+                            if !pkgs.is_empty() {
+                                conn.enqueue_all(pkgs);
+                            }
+
+                            Out::Handled
                         },
-                    }
-                };
 
-                if let Out::Failed = out {
-                    terminate(&mut self.assocs, runnings.drain(..).collect());
+                        Err(e) => {
+                            error!("An error occured when running operation: {}", e);
+                            let msg = format!("Exception raised: {}", e);
+
+                            resp.operation.failed(OperationError::InvalidOperation(msg));
+
+                            Out::Failed
+                        },
+                    },
                 }
-
-                runnings.is_empty()
             };
 
-            if session_over {
-                self.sessions.remove(&session_id);
-                self.session_request_ids.remove(&session_id);
+            if let Out::Failed = out {
+                terminate(&mut requests, resp.runnings.drain());
+            }
+
+            if !resp.runnings.is_empty() {
+                sessions.insert(session_id, resp.operation);
+                sessions_requests.insert(session_id, resp.runnings);
             }
         } else {
             warn!("Package [{}] not handled: cmd {:?}.", pkg_id, pkg_cmd);
         }
+
+        mem::replace(&mut self.sessions, sessions);
+        mem::replace(&mut self.session_request_ids, sessions_requests);
+        mem::replace(&mut self.assocs, requests);
     }
 
     fn check_and_retry(&mut self, conn: &Connection) {
-        let mut sessions_to_delete = Vec::new();
+        use std::mem;
 
-        for op in self.sessions.values_mut() {
-            let runnings = self
-                    .session_request_ids
-                    .get_mut(&op.id)
-                    .expect("No session associated to requests");
+        let mut sessions = mem::replace(&mut self.sessions, HashMap::new());
+        let mut sessions_requests = mem::replace(&mut self.session_request_ids, HashMap::new());
+        let mut requests = mem::replace(&mut self.assocs, HashMap::new());
 
-            let result = {
-                let session = SessionImpl::new(
-                    op.id, &mut self.assocs, conn, runnings);
+        sessions.retain(|op_id, op|
+        {
+            if let Some(mut runnings) = sessions_requests.remove(&op_id) {
+                let result = {
+                    let session = SessionImpl::new(
+                        op.id, &mut requests, conn, &mut runnings);
 
-                op.check_and_retry(&mut self.buffer, session)
-            };
+                    op.check_and_retry(&mut self.buffer, session)
+                };
 
-            match result {
-                Ok(outcome) => {
-                    if outcome.is_done() {
-                        for id in runnings.drain(..) {
-                            self.assocs.remove(&id);
+                match result {
+                    Ok(outcome) => {
+                        if outcome.is_done() {
+                            for id in runnings.drain() {
+                                requests.remove(&id);
+                            }
+
+                            return false;
                         }
 
-                        sessions_to_delete.push(op.id);
-                    } else {
                         let pkgs = outcome.produced_pkgs();
 
                         if !pkgs.is_empty() {
                             conn.enqueue_all(pkgs);
                         }
-                    }
-                },
 
-                Err(e) => {
-                    error!("Exception raised when checking out operation: {}", e);
-                    let msg = format!("Exception raised: {}", e);
+                        sessions_requests.insert(*op_id, runnings);
 
-                    op.failed(OperationError::InvalidOperation(msg));
+                        return true;
+                    },
 
-                    for id in runnings.drain(..) {
-                        self.assocs.remove(&id);
-                    }
+                    Err(e) => {
+                        error!("Exception raised when checking out operation {:?}: {}", op_id, e);
 
-                    sessions_to_delete.push(op.id);
-                },
+                        let msg = format!("Exception raised: {}", e);
+
+                        op.failed(OperationError::InvalidOperation(msg));
+
+                        for id in runnings.drain() {
+                            requests.remove(&id);
+                        }
+
+                        return false;
+                    },
+                }
             }
-        }
 
-        for session_id in sessions_to_delete {
-            self.sessions.remove(&session_id);
-            self.session_request_ids.remove(&session_id);
-        }
+            warn!("No running requests associated to session {:?}. It means we didn't clean
+                  the session up. Session disposed.", op_id);
+
+            false
+        });
+
+        mem::replace(&mut self.sessions, sessions);
+        mem::replace(&mut self.session_request_ids, sessions_requests);
+        mem::replace(&mut self.assocs, requests);
     }
 
     pub(crate) fn abort(&mut self) {
@@ -400,11 +424,15 @@ impl Registry {
     }
 
     pub(crate) fn check_and_retry(&mut self, conn: &Connection) {
+        debug!("Enter check_and_retry process…");
+
         self.requests.check_and_retry(conn);
 
         while let Some(op) = self.awaiting.pop() {
             self.register(op, Some(conn));
         }
+
+        debug!("check_and_retry process completed.");
     }
 
     pub(crate) fn abort(&mut self) {
