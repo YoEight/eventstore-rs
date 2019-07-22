@@ -2,6 +2,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
@@ -1416,4 +1417,23 @@ pub enum PersistActionError {
     /// The current user is not allowed to operate on the supplied stream or
     /// persistent subscription.
     AccessDenied,
+}
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub struct Endpoint {
+    pub addr: SocketAddr,
+}
+
+impl std::fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.addr)
+    }
+}
+
+impl Endpoint {
+    pub(crate) fn from_addr(addr: SocketAddr) -> Endpoint {
+        Endpoint {
+            addr,
+        }
+    }
 }

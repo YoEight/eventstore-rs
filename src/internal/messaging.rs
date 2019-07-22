@@ -2,9 +2,9 @@ use std::io::Error;
 
 use uuid::Uuid;
 
-use crate::internal::discovery::Endpoint;
 use crate::internal::operations;
 use crate::internal::package::Pkg;
+use crate::types::Endpoint;
 
 pub(crate) enum Msg {
     Start,
