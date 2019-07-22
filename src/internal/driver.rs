@@ -8,14 +8,13 @@ use tokio::spawn;
 use tokio::timer::Interval;
 use uuid::Uuid;
 
-use crate::internal::discovery::{ Endpoint, Discovery };
 use crate::internal::command::Cmd;
 use crate::internal::connection::Connection;
 use crate::internal::messaging::Msg;
 use crate::internal::operations::OperationWrapper;
 use crate::internal::package::Pkg;
 use crate::internal::registry::Registry;
-use crate::types::{ Credentials, Settings };
+use crate::types::{ Credentials, Endpoint, Settings };
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
@@ -154,7 +153,7 @@ pub(crate) enum Report {
     Quit,
 }
 
-pub(crate) struct Driver<D> where D: Discovery
+pub(crate) struct Driver
 {
     registry: Registry,
     candidate: Option<Connection>,
@@ -163,7 +162,7 @@ pub(crate) struct Driver<D> where D: Discovery
     state: ConnectionState,
     phase: Phase,
     last_endpoint: Option<Endpoint>,
-    discovery: D,
+    discovery: Sender<Option<Endpoint>>,
     connection_name: Option<String>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
@@ -175,10 +174,10 @@ pub(crate) struct Driver<D> where D: Discovery
     last_operation_check: Instant,
 }
 
-impl<D> Driver<D> where D: Discovery
+impl Driver
 {
-    pub(crate) fn new(setts: &Settings, disc: D, sender: Sender<Msg>)
-        -> Driver<D>
+    pub(crate) fn new(setts: &Settings, disc: Sender<Option<Endpoint>>, sender: Sender<Msg>)
+        -> Driver
     {
         Driver {
             registry: Registry::new(),
@@ -220,30 +219,17 @@ impl<D> Driver<D> where D: Discovery
 
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
-            let future = self.discovery.discover(self.last_endpoint.as_ref());
-            let sender = self.sender.clone();
-
-            let future =
-                future.then(move |result|
-                {
-                    let next = match result {
-                        Ok(endpoint) =>
-                            sender.clone().send(Msg::Establish(endpoint)),
-
-                        Err(e) => {
-                            error!("Failed to resolve TCP endpoint to which to connect {}.", e);
-                            sender.clone().send(Msg::ConnectionClosed(Uuid::nil(), e))
-                        }
-                    };
-
-                    next.then(|_| Ok(()))
-                 });
+            let failed_endpoint = self.last_endpoint.take();
+            let start_discovery =
+                self.discovery
+                    .clone()
+                    .send(failed_endpoint)
+                    .then(|_| Ok(()));
 
             self.phase = Phase::EndpointDiscovery;
-
-            spawn(future);
-
             self.tracker.reset();
+
+            spawn(start_discovery);
         }
     }
 

@@ -7,11 +7,10 @@ use futures::sync::mpsc::{ Receiver, Sender, channel };
 use protobuf::Chars;
 use tokio::runtime::{ Runtime, Shutdown };
 
-use crate::internal::discovery::Discovery;
+use crate::discovery;
 use crate::internal::driver::{ Driver, Report };
 use crate::internal::messaging::Msg;
 use crate::internal::commands;
-use crate::internal::discovery::StaticDiscovery;
 use crate::internal::operations::OperationError;
 use crate::types::{ self, StreamMetadata, Settings };
 
@@ -100,7 +99,7 @@ impl ConnectionBuilder {
         let mut iter = addrs.to_socket_addrs()?;
 
         if let Some(addr) = iter.next() {
-            let client = Connection::new(self.settings, addr);
+            let client = Connection::new(self.settings, DiscoveryProcess::Static(addr));
 
             client.start();
 
@@ -120,7 +119,7 @@ impl ConnectionBuilder {
         let mut iter = addrs.to_socket_addrs()?;
 
         if let Some(addr) = iter.next() {
-            let client = Connection::with_runtime(self.settings, addr, runtime);
+            let client = Connection::with_runtime(self.settings, DiscoveryProcess::Static(addr), runtime);
 
             client.start();
 
@@ -133,18 +132,16 @@ impl ConnectionBuilder {
 
 const DEFAULT_BOX_SIZE: usize = 500;
 
-fn connection_state_machine<D>(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver<D>)
+fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
     -> impl Future<Item=(), Error=()>
-    where D: Discovery
 {
     enum State {
         Live,
         Clearing,
     }
 
-    fn start_closing<D, E>(sender: &Sender<Msg>, driver: &mut Driver<D>)
+    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver)
         -> Result<State, E>
-        where D: Discovery
     {
         driver.close_connection();
 
@@ -209,6 +206,10 @@ fn connection_state_machine<D>(sender: Sender<Msg>, recv: Receiver<Msg>, mut dri
     }).map(|_| ())
 }
 
+enum DiscoveryProcess {
+    Static(SocketAddr),
+}
+
 impl Connection {
     /// Return a connection builder.
     pub fn builder() -> ConnectionBuilder {
@@ -217,9 +218,9 @@ impl Connection {
         }
     }
 
-    fn new(settings: Settings, addr: SocketAddr) -> Connection {
+    fn new(settings: Settings, discovery: DiscoveryProcess) -> Connection {
         let mut runtime = Runtime::new().unwrap();
-        let sender = Self::initialize(&settings, addr, &mut runtime);
+        let sender = Self::initialize(&settings, discovery, &mut runtime);
         let shutdown = runtime.shutdown_on_idle();
 
         Connection {
@@ -229,8 +230,8 @@ impl Connection {
         }
     }
 
-    fn with_runtime(settings: Settings, addr: SocketAddr, runtime: &mut Runtime) -> Connection {
-        let sender = Self::initialize(&settings, addr, runtime);
+    fn with_runtime(settings: Settings, discovery: DiscoveryProcess, runtime: &mut Runtime) -> Connection {
+        let sender = Self::initialize(&settings, discovery, runtime);
 
         Connection {
             shutdown: None,
@@ -239,11 +240,21 @@ impl Connection {
         }
     }
 
-    fn initialize(settings: &Settings, addr: SocketAddr, runtime: &mut Runtime) -> Sender<Msg> {
+    fn initialize(settings: &Settings, discovery: DiscoveryProcess, runtime: &mut Runtime) -> Sender<Msg> {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
-        let disc = StaticDiscovery::new(addr);
+        let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
         let cloned_sender = sender.clone();
-        let driver = Driver::new(&settings, disc, sender.clone());
+        let driver = Driver::new(&settings, start_discovery, sender.clone());
+
+        match discovery {
+            DiscoveryProcess::Static(addr) => {
+                let endpoint = types::Endpoint::from_addr(addr);
+                let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
+
+                runtime.spawn(action);
+            },
+        };
+
         let action = connection_state_machine(cloned_sender, recv, driver);
         let _ = runtime.spawn(action);
         sender
