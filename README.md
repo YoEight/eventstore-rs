@@ -16,14 +16,12 @@ Rust GetEventStore TCP Client.
 - [x] Volatile Subscriptions.
 - [x] Catchup Subscriptions.
 - [x] Persistent Subscriptions.
-- [ ] Support connection to server clusters.
+- [x] Support connection to server clusters. (through gossip, using custom DNS server is still TODO)
 - [ ] Support SSL connection.
 
 # Example
 
 ```rust
-extern crate eventstore;
-extern crate futures;
 #[macro_use]
 extern crate serde_json;
 
@@ -32,8 +30,7 @@ use futures::Future;
 
 fn main() {
     let connection = Connection::builder()
-        .start("127.0.0.1:1113")
-        .unwrap();
+        .single_node_connection("127.0.0.1:1113".parse().unwrap());
 
     // It is not mandatory to use JSON as a data format however GetEventStore
     // provides great additional value if you do so.

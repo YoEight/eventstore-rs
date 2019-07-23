@@ -1,11 +1,7 @@
-extern crate eventstore;
-extern crate futures;
 #[macro_use]
 extern crate log;
 #[macro_use]
 extern crate serde_json;
-extern crate env_logger;
-extern crate uuid;
 
 use eventstore::Slice;
 use std::collections::HashMap;
@@ -562,8 +558,7 @@ fn all_round_operation_test() {
 
     let connection = eventstore::Connection::builder()
         .with_default_user(eventstore::Credentials::new("admin", "changeit"))
-        .start(conn_str)
-        .unwrap();
+        .single_node_connection(conn_str.parse().unwrap());
 
     test_write_events(&connection);
     test_read_event(&connection);

@@ -370,8 +370,20 @@ impl Driver
             }
         } else if self.state == ConnectionState::Connected {
             // It will be always 'Some' when receiving a package.
-            if let Some(ref conn) = self.candidate {
-                self.registry.handle(pkg, conn);
+            if let Some(conn) = self.candidate.take() {
+                if let Some(new_endpoint) = self.registry.handle(pkg, &conn) {
+                    // We have been notified to connect to an other eventstore node.
+                    // This only happens if the user uses a cluster-mode connection.
+                    info!("Force reconnection to [{}] on connection [{}]", new_endpoint, conn.id);
+
+                    self.attempt_opt = Some(Attempt::new());
+                    self.state = ConnectionState::Connecting;
+                    self.phase = Phase::EndpointDiscovery;
+
+                    self.on_establish(new_endpoint);
+                } else {
+                    self.candidate = Some(conn);
+                }
             }
         }
     }

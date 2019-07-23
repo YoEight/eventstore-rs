@@ -2,7 +2,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::SocketAddr;
+use std::net::{ SocketAddr, ToSocketAddrs };
 use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
@@ -1434,6 +1434,127 @@ impl Endpoint {
     pub(crate) fn from_addr(addr: SocketAddr) -> Endpoint {
         Endpoint {
             addr,
+        }
+    }
+}
+
+/// Represents a source of cluster gossip.
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub struct GossipSeed {
+    /// The endpoint for the external HTTP endpoint of the gossip seed. The
+    /// HTTP endpoint is used rather than the TCP endpoint because it is
+    /// required for the client to exchange gossip with the server.
+    /// standard port which should be used here in 2113.
+    pub(crate) endpoint: Endpoint,
+}
+
+impl std::fmt::Display for GossipSeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "endpoint: {}", self.endpoint.addr)
+    }
+}
+
+impl GossipSeed {
+    /// Creates a gossip seed.
+    pub fn new<A>(addrs: A) -> std::io::Result<GossipSeed>
+        where A: ToSocketAddrs,
+    {
+        let mut iter = addrs.to_socket_addrs()?;
+
+        if let Some(addr) = iter.next() {
+            let endpoint = Endpoint {
+                addr,
+            };
+
+            Ok(GossipSeed::from_endpoint(endpoint))
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to resolve socket address."))
+        }
+    }
+
+    pub(crate) fn from_endpoint(endpoint: Endpoint) -> GossipSeed {
+        GossipSeed {
+            endpoint,
+        }
+    }
+
+    pub(crate) fn from_socket_addr(addr: SocketAddr) -> GossipSeed {
+        GossipSeed::from_endpoint(Endpoint::from_addr(addr))
+    }
+
+    pub(crate) fn url(self) -> std::io::Result<reqwest::Url> {
+        let url_str = format!("http://{}/gossip?format=json", self.endpoint.addr);
+
+        reqwest::Url::parse(&url_str)
+            .map_err(|error|
+            {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Wrong url [{}]: {}", url_str, error))
+            })
+    }
+}
+
+/// Indicates which order of preferred nodes for connecting to.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum NodePreference {
+    /// When attempting connnection, prefers master node.
+    /// TODO - Not implemented yet.
+    Master,
+
+    /// When attempting connnection, prefers slave node.
+    /// TODO - Not implemented yet.
+    Slave,
+
+    /// When attempting connnection, has no node preference.
+    Random,
+}
+
+impl std::fmt::Display for NodePreference {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use self::NodePreference::*;
+
+        match self {
+            Master => write!(f, "Master"),
+            Slave => write!(f, "Slave"),
+            Random => write!(f, "Random"),
+        }
+    }
+}
+
+#[derive(Debug)]
+/// Contains settings related to a cluster of fixed nodes.
+pub struct GossipSeedClusterSettings {
+    pub(crate) seeds: vec1::Vec1<GossipSeed>,
+    pub(crate) preference: NodePreference,
+    pub(crate) gossip_timeout: Duration,
+    pub(crate) max_discover_attempts: usize,
+}
+
+impl GossipSeedClusterSettings {
+    /// Creates a `GossipSeedClusterSettings` from a non-empty list of gossip
+    /// seeds.
+    pub fn new(seeds: vec1::Vec1<GossipSeed>) -> GossipSeedClusterSettings {
+        GossipSeedClusterSettings {
+            seeds,
+            preference: NodePreference::Random,
+            gossip_timeout: Duration::from_secs(1),
+            max_discover_attempts: 10,
+        }
+    }
+
+    /// Maximum duration a node should take when requested a gossip request.
+    pub fn set_gossip_timeout(self, gossip_timeout: Duration) -> GossipSeedClusterSettings {
+        GossipSeedClusterSettings {
+            gossip_timeout,
+            ..self
+        }
+    }
+
+    /// Maximum number of retries during a discovery process. Discovery process
+    /// is when the client tries to figure out the best node to connect to.
+    pub fn set_max_discover_attempts(self, max_attempt: usize) -> GossipSeedClusterSettings {
+        GossipSeedClusterSettings {
+            max_discover_attempts: max_attempt,
+            ..self
         }
     }
 }
