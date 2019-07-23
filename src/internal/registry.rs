@@ -9,6 +9,7 @@ use crate::internal::connection::Connection;
 use crate::internal::messages;
 use crate::internal::operations::{ OperationError, OperationWrapper, OperationId, Tracking, Session };
 use crate::internal::package::Pkg;
+use crate::types::Endpoint;
 
 #[derive(Copy, Clone)]
 struct Request {
@@ -167,7 +168,9 @@ impl Requests {
         mem::replace(&mut self.assocs, requests);
     }
 
-    fn handle_pkg(&mut self, conn: &Connection, pkg: Pkg) {
+    fn handle_pkg(&mut self, conn: &Connection, awaiting: &mut Vec<OperationWrapper>, pkg: Pkg)
+        -> Option<Endpoint>
+    {
         use std::mem;
 
         struct Resp {
@@ -178,7 +181,7 @@ impl Requests {
 
         enum Out {
             Failed,
-            Handled,
+            Handled(Option<Endpoint>),
         }
 
         let mut sessions = mem::replace(&mut self.sessions, HashMap::new());
@@ -203,7 +206,7 @@ impl Requests {
         let pkg_id  = pkg.correlation;
         let pkg_cmd = pkg.cmd;
 
-        if let Some(mut resp) = extract_resp {
+        let endpoint_opt = if let Some(mut resp) = extract_resp {
             let original_cmd = resp.request.tracker.get_cmd();
             let session_id   = resp.request.session;
 
@@ -236,46 +239,62 @@ impl Requests {
                     Cmd::NotHandled => {
                         warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
 
-                        let msg: ::std::io::Result<messages::NotHandled> =
-                            pkg.to_message();
+                        let decoded_msg: std::io::Result<Option<Endpoint>> =
+                            pkg.to_message().and_then(|not_handled: messages::NotHandled|
+                            {
+                                if let messages::NotHandled_NotHandledReason::NotMaster = not_handled.get_reason() {
+                                    let master_info: messages::NotHandled_MasterInfo =
+                                        protobuf::parse_from_bytes(not_handled.get_additional_info())?;
 
-                        match msg {
-                            Ok(not_handled) => {
-                                match not_handled.get_reason() {
-                                    messages::NotHandled_NotHandledReason::NotMaster => {
-                                        warn!("Received a non master error on command {:?} id {}.
-                                              This driver doesn't support cluster connection yet.", original_cmd, pkg_id);
+                                    // TODO - Support reconnection on the secure port when we are going to
+                                    // implement SSL connection.
+                                    let addr_str = format!("{}:{}", master_info.get_external_tcp_address(), master_info.get_external_tcp_port());
+                                    let addr = addr_str.parse().map_err(|e|
+                                    {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::InvalidInput,
+                                            format!("Failed parsing ip address: {}", e))
+                                    })?;
 
-                                        resp.operation.failed(OperationError::NotImplemented);
+                                    let external_tcp_port = Endpoint::from_addr(addr);
 
-                                        Out::Failed
-                                    },
+                                    Ok(Some(external_tcp_port))
+                                } else {
+                                    Ok(None)
+                                }
+                            });
 
-                                    _ => {
-                                        warn!("The server has either not started or is too busy.
-                                              Retrying command {:?} id {}.", original_cmd, pkg_id);
+                        match decoded_msg {
+                            Ok(endpoint_opt) => {
+                                if let Some(endpoint) = endpoint_opt {
+                                    warn!("Received a non master error on command {:?} id {}, [{:?}]",
+                                        resp.request.tracker.get_cmd(), pkg.correlation, endpoint);
 
-                                        match resp.operation.retry(&mut self.buffer, &mut session, pkg_id) {
-                                            Ok(outcome) => {
-                                                let pkgs = outcome.produced_pkgs();
+                                    Out::Handled(Some(endpoint))
+                                } else {
+                                    warn!("The server has either not started or is too busy.
+                                          Retrying command {:?} id {}.", original_cmd, pkg_id);
 
-                                                if !pkgs.is_empty() {
-                                                    conn.enqueue_all(pkgs);
-                                                }
+                                    match resp.operation.retry(&mut self.buffer, &mut session, pkg_id) {
+                                        Ok(outcome) => {
+                                            let pkgs = outcome.produced_pkgs();
 
-                                                Out::Handled
-                                            },
+                                            if !pkgs.is_empty() {
+                                                conn.enqueue_all(pkgs);
+                                            }
 
-                                            Err(error) => {
-                                                error!(
-                                                    "An error occured when retrying command {:?} id {}: {}.",
-                                                    original_cmd, pkg_id, error
-                                                );
+                                            Out::Handled(None)
+                                        },
 
-                                                Out::Failed
-                                            },
-                                        }
-                                    },
+                                        Err(error) => {
+                                            error!(
+                                                "An error occured when retrying command {:?} id {}: {}.",
+                                                original_cmd, pkg_id, error
+                                            );
+
+                                            Out::Failed
+                                        },
+                                    }
                                 }
                             },
 
@@ -295,7 +314,7 @@ impl Requests {
                                 conn.enqueue_all(pkgs);
                             }
 
-                            Out::Handled
+                            Out::Handled(None)
                         },
 
                         Err(e) => {
@@ -310,21 +329,39 @@ impl Requests {
                 }
             };
 
-            if let Out::Failed = out {
-                terminate(&mut requests, resp.runnings.drain());
-            }
+            match out {
+                Out::Handled(endpoint_opt) => {
+                    if endpoint_opt.is_some() {
+                        awaiting.push(resp.operation);
 
-            if !resp.runnings.is_empty() {
-                sessions.insert(session_id, resp.operation);
-                sessions_requests.insert(session_id, resp.runnings);
+                        endpoint_opt
+                    } else {
+                        if !resp.runnings.is_empty() {
+                            sessions.insert(session_id, resp.operation);
+                            sessions_requests.insert(session_id, resp.runnings);
+                        }
+
+                        None
+                    }
+                },
+
+                Out::Failed => {
+                    terminate(&mut requests, resp.runnings.drain());
+
+                    None
+                },
             }
         } else {
-            warn!("Package [{}] not handled: cmd {:?}.", pkg_id, pkg_cmd);
-        }
+            warn!("Package [{}] is not associated to a session. cmd {:?}.", pkg_id, pkg_cmd);
+
+            None
+        };
 
         mem::replace(&mut self.sessions, sessions);
         mem::replace(&mut self.session_request_ids, sessions_requests);
         mem::replace(&mut self.assocs, requests);
+
+        endpoint_opt
     }
 
     fn check_and_retry(&mut self, conn: &Connection) {
@@ -419,8 +456,13 @@ impl Registry {
         }
     }
 
-    pub(crate) fn handle(&mut self, pkg: Pkg, conn: &Connection) {
-        self.requests.handle_pkg(conn, pkg);
+    pub(crate) fn handle(&mut self, pkg: Pkg, conn: &Connection) -> Option<Endpoint> {
+        let mut awaiting = std::mem::replace(&mut self.awaiting, vec![]);
+        let endpoint_opt = self.requests.handle_pkg(conn, &mut awaiting, pkg);
+
+        std::mem::replace(&mut self.awaiting, awaiting);
+
+        endpoint_opt
     }
 
     pub(crate) fn check_and_retry(&mut self, conn: &Connection) {

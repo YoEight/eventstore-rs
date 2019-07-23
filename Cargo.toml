@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 edition = "2018"
 
@@ -25,8 +25,9 @@ categories = ["database", "api-bindings"]
 
 [dependencies]
 tokio = "0.1"
+tokio-timer = "0.2"
 futures = "0.1"
-uuid = { version  = "0.7", features = [ "v4" ] }
+uuid = { version  = "0.7", features = [ "v4", "serde" ] }
 bytes = "0.4"
 timer = "0.2"
 time = "0.1"
@@ -35,6 +36,9 @@ serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
 log = "0.4"
+reqwest = "0.9"
+vec1 = "1.4"
+rand = "0.6"
 
 [build-dependencies]
 protoc-rust = "2.6"

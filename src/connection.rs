@@ -1,5 +1,4 @@
-use std::net::{ SocketAddr, ToSocketAddrs };
-use std::io;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
@@ -12,7 +11,7 @@ use crate::internal::driver::{ Driver, Report };
 use crate::internal::messaging::Msg;
 use crate::internal::commands;
 use crate::internal::operations::OperationError;
-use crate::types::{ self, StreamMetadata, Settings };
+use crate::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
@@ -89,44 +88,42 @@ impl ConnectionBuilder {
         self
     }
 
-    /// Creates a connection to an EventStore server. The connection will
-    /// start right away. This method will pick the first `SocketAddr` it
-    /// has resolved.
-    pub fn start<A>(self, addrs: A) -> io::Result<Connection>
-        where
-            A: ToSocketAddrs
-    {
-        let mut iter = addrs.to_socket_addrs()?;
-
-        if let Some(addr) = iter.next() {
-            let client = Connection::new(self.settings, DiscoveryProcess::Static(addr));
-
-            client.start();
-
-            Ok(client)
-        } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
-        }
+    /// Creates a connection to a single EventStore node. The connection will
+    /// start right away.
+    pub fn single_node_connection(self, addr: SocketAddr) -> Connection {
+        self.start_common_with_runtime(DiscoveryProcess::Static(addr), None)
     }
 
-    /// Creates a connection to an EventStore server. The connection will
-    /// start right away. This method will pick the first `SocketAddr` it
-    /// has resolved.
-    pub fn start_with_runtime<A>(self, addrs: A, runtime: &mut Runtime) -> io::Result<Connection>
-        where
-            A: ToSocketAddrs
+    /// Creates a connection to a single EventStore node. The connection will
+    /// start right away.
+    pub fn single_node_connection_with_runtime(self, addr: SocketAddr, runtime: &mut Runtime) -> Connection {
+        self.start_common_with_runtime(DiscoveryProcess::Static(addr), Some(runtime))
+    }
+
+    /// Creates a connection to a cluster of EventStore nodes. The connection will
+    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
+    /// of a node. The standard external HTTP endpoint is running on `2113`.
+    pub fn cluster_nodes_through_gossip_connection(self, setts: GossipSeedClusterSettings)
+        -> Connection
     {
-        let mut iter = addrs.to_socket_addrs()?;
+        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts), None)
+    }
 
-        if let Some(addr) = iter.next() {
-            let client = Connection::with_runtime(self.settings, DiscoveryProcess::Static(addr), runtime);
+    /// Creates a connection to a cluster of EventStore nodes. The connection will
+    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
+    /// of a node. The standard external HTTP endpoint is running on `2113`.
+    pub fn cluster_nodes_through_gossip_connection_with_runtime(self, setts: GossipSeedClusterSettings, runtime: &mut Runtime)
+        -> Connection
+    {
+        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts), Some(runtime))
+    }
 
-            client.start();
+    fn start_common_with_runtime(self, discovery: DiscoveryProcess, runtime_opt: Option<&mut Runtime>) -> Connection {
+        let client = Connection::with_runtime(self.settings, discovery, runtime_opt);
 
-            Ok(client)
-        } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to resolve socket address."))
-        }
+        client.start();
+
+        client
     }
 }
 
@@ -208,6 +205,7 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
 
 enum DiscoveryProcess {
     Static(SocketAddr),
+    ClusterThroughGossip(GossipSeedClusterSettings),
 }
 
 impl Connection {
@@ -218,25 +216,27 @@ impl Connection {
         }
     }
 
-    fn new(settings: Settings, discovery: DiscoveryProcess) -> Connection {
-        let mut runtime = Runtime::new().unwrap();
-        let sender = Self::initialize(&settings, discovery, &mut runtime);
-        let shutdown = runtime.shutdown_on_idle();
+    fn with_runtime(settings: Settings, discovery: DiscoveryProcess, runtime_opt: Option<&mut Runtime>)
+        -> Connection
+    {
+        if let Some(runtime) = runtime_opt {
+            let sender = Self::initialize(&settings, discovery, runtime);
 
-        Connection {
-            shutdown: Some(shutdown),
-            sender,
-            settings,
-        }
-    }
+            Connection {
+                shutdown: None,
+                sender,
+                settings,
+            }
+        } else {
+            let mut runtime = Runtime::new().unwrap();
+            let sender = Self::initialize(&settings, discovery, &mut runtime);
+            let shutdown = runtime.shutdown_on_idle();
 
-    fn with_runtime(settings: Settings, discovery: DiscoveryProcess, runtime: &mut Runtime) -> Connection {
-        let sender = Self::initialize(&settings, discovery, runtime);
-
-        Connection {
-            shutdown: None,
-            sender,
-            settings,
+            Connection {
+                shutdown: Some(shutdown),
+                sender,
+                settings,
+            }
         }
     }
 
@@ -250,6 +250,12 @@ impl Connection {
             DiscoveryProcess::Static(addr) => {
                 let endpoint = types::Endpoint::from_addr(addr);
                 let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
+
+                runtime.spawn(action);
+            },
+
+            DiscoveryProcess::ClusterThroughGossip(setts) => {
+                let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
 
                 runtime.spawn(action);
             },
