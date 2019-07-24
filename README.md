@@ -1,5 +1,11 @@
 # eventstore-rs
-Rust GetEventStore TCP Client.
+![Crates.io](https://img.shields.io/crates/v/eventstore.svg)
+![Crates.io](https://img.shields.io/crates/d/eventstore.svg)
+![Travis (.org)](https://img.shields.io/travis/YoEight/eventstore-rs.svg)
+![Discord](https://img.shields.io/discord/415421715385155584.svg)
+![Crates.io](https://img.shields.io/crates/l/eventstore.svg)
+
+Rust [EventStore] TCP Client.
 
 [Talk and exchange ideas in our dedicated Discord Server]
 
@@ -61,8 +67,7 @@ Contributions and bug reports are welcome!
 
 MIT License
 
--Yorick Laupa
-
 [GetEventStore]: https://eventstore.org/
 [Talk and exchange ideas in our dedicated Discord Server]: https://discord.gg/x7q37jJ
+[EventStore]: https://eventstore.org/
 
