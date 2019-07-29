@@ -1,3 +1,7 @@
+0.4.1
+=====
+* Fix stream metadata and ACL JSON (de)serialization.
+
 0.4.0
 =====
 * Implement cluster-mode connection.
