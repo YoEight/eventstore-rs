@@ -7,6 +7,7 @@ use std::vec::IntoIter;
 use futures::sync::mpsc::{ self, Sender };
 use futures::{ Future, Sink, Stream, Poll, Async };
 use protobuf::Chars;
+use serde::ser::SerializeSeq;
 use serde_json;
 
 use crate::internal::messaging::Msg;
@@ -192,22 +193,22 @@ impl <'a> ReadEvent<'a> {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct StreamMetadataInternal {
-    #[serde(rename = "$maxCount")]
+    #[serde(rename = "$maxCount", skip_serializing_if = "Option::is_none", default)]
     max_count: Option<u64>,
 
-    #[serde(rename = "$maxAge")]
+    #[serde(rename = "$maxAge", skip_serializing_if = "Option::is_none", default)]
     max_age: Option<Timespan>,
 
-    #[serde(rename = "$tb")]
+    #[serde(rename = "$tb", skip_serializing_if = "Option::is_none", default)]
     truncate_before: Option<u64>,
 
-    #[serde(rename = "$cacheControl")]
+    #[serde(rename = "$cacheControl", skip_serializing_if = "Option::is_none", default)]
     cache_control: Option<Timespan>,
 
-    #[serde(rename = "$acl")]
+    #[serde(rename = "$acl", skip_serializing_if = "StreamAclInternal::is_empty", default)]
     acl: StreamAclInternal,
 
-    #[serde(flatten)]
+    #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
     custom_properties: HashMap<String, serde_json::Value>,
 }
 
@@ -235,43 +236,150 @@ impl StreamMetadataInternal {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Debug, PartialEq, Eq)]
+struct Roles(Option<Vec<String>>);
+
+impl serde::ser::Serialize for Roles {
+    fn serialize<S>(&self, serializer: S)
+        -> Result<S::Ok, S::Error>
+            where S: serde::ser::Serializer
+    {
+        match self.0.as_ref() {
+            None => serializer.serialize_none(),
+
+            Some(roles) => {
+                if let Some(role) = roles.first() {
+                    if roles.len() == 1 {
+                        return serializer.serialize_str(role.as_str());
+                    }
+                }
+
+                let mut seq = serializer.serialize_seq(Some(roles.len()))?;
+
+                for role in roles.as_slice() {
+                    seq.serialize_element(role)?;
+                }
+
+                seq.end()
+            },
+        }
+    }
+}
+
+impl<'de> serde::de::Deserialize<'de> for Roles {
+    fn deserialize<D>(deserializer: D)
+        -> Result<Self, D::Error>
+            where D: serde::de::Deserializer<'de>
+    {
+        deserializer.deserialize_any(RolesVisitor)
+    }
+}
+
+impl Default for Roles {
+    fn default() -> Roles {
+        Roles(None)
+    }
+}
+
+impl Roles {
+    fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    fn from_string(value: String) -> Roles {
+        Roles(Some(vec![value]))
+    }
+}
+
+struct RolesVisitor;
+
+impl<'de> serde::de::Visitor<'de> for RolesVisitor {
+    type Value = Roles;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter)
+        -> std::fmt::Result
+    {
+        formatter.write_str("String or a list of String")
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Roles, E> {
+        Ok(Roles::from_string(value))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Roles, E> {
+        Ok(Roles::from_string(value.to_owned()))
+    }
+
+    fn visit_seq<A>(self, mut seq: A)
+        -> Result<Roles, A::Error>
+            where A: serde::de::SeqAccess<'de>
+    {
+        let mut roles = if let Some(size) = seq.size_hint() {
+            Vec::with_capacity(size)
+        } else {
+            vec![]
+        };
+
+        while let Some(role) = seq.next_element()? {
+            roles.push(role);
+        }
+
+        Ok(Roles(Some(roles)))
+    }
+
+    fn visit_none<E>(self)
+        -> Result<Roles, E>
+            where E: serde::de::Error
+    {
+        Ok(Roles(None))
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Eq)]
 struct StreamAclInternal {
-    #[serde(rename = "$r")]
-    read_roles: Vec<String>,
+    #[serde(rename = "$r", skip_serializing_if = "Roles::is_empty", default)]
+    read_roles: Roles,
 
-    #[serde(rename = "$w")]
-    write_roles: Vec<String>,
+    #[serde(rename = "$w", skip_serializing_if = "Roles::is_empty", default)]
+    write_roles: Roles,
 
-    #[serde(rename = "$d")]
-    delete_roles: Vec<String>,
+    #[serde(rename = "$d", skip_serializing_if = "Roles::is_empty", default)]
+    delete_roles: Roles,
 
-    #[serde(rename = "$mr")]
-    meta_read_roles: Vec<String>,
+    #[serde(rename = "$mr", skip_serializing_if = "Roles::is_empty", default)]
+    meta_read_roles: Roles,
 
-    #[serde(rename = "$mw")]
-    meta_write_roles: Vec<String>,
+    #[serde(rename = "$mw", skip_serializing_if = "Roles::is_empty", default)]
+    meta_write_roles: Roles,
 }
 
 impl StreamAclInternal {
     fn from_acl(acl: types::StreamAcl) -> StreamAclInternal {
         StreamAclInternal {
-            read_roles: acl.read_roles,
-            write_roles: acl.write_roles,
-            delete_roles: acl.delete_roles,
-            meta_read_roles: acl.meta_read_roles,
-            meta_write_roles: acl.meta_write_roles,
+            read_roles: Roles(acl.read_roles),
+            write_roles: Roles(acl.write_roles),
+            delete_roles: Roles(acl.delete_roles),
+            meta_read_roles: Roles(acl.meta_read_roles),
+            meta_write_roles: Roles(acl.meta_write_roles),
         }
     }
 
     fn build_acl(self) -> types::StreamAcl {
         types::StreamAcl {
-            read_roles: self.read_roles,
-            write_roles: self.write_roles,
-            delete_roles: self.delete_roles,
-            meta_read_roles: self.meta_read_roles,
-            meta_write_roles: self.meta_write_roles,
+            read_roles: self.read_roles.0,
+            write_roles: self.write_roles.0,
+            delete_roles: self.delete_roles.0,
+            meta_read_roles: self.meta_read_roles.0,
+            meta_write_roles: self.meta_write_roles.0,
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.read_roles.is_empty() &&
+        self.write_roles.is_empty() &&
+        self.delete_roles.is_empty() &&
+        self.meta_read_roles.is_empty() &&
+        self.meta_write_roles.is_empty()
     }
 }
 
@@ -1624,4 +1732,52 @@ impl<'a> ConnectToPersistentSubscription<'a> {
         }
     }
 
+}
+
+#[cfg(test)]
+mod test {
+    fn compare_metadata(left: super::StreamMetadataInternal, right: super::StreamMetadataInternal) {
+        assert_eq!(left.max_count, right.max_count, "We are testing metadata max_count are the same");
+        assert_eq!(left.max_age, right.max_age, "We are testing metadata max_age are the same");
+        assert_eq!(left.truncate_before, right.truncate_before, "We are testing metadata truncate_before are the same");
+        assert_eq!(left.cache_control, right.cache_control, "We are testing metadata cache_control are the same");
+        assert_eq!(left.acl, right.acl, "We are testing metadata acl are the same");
+
+        // We currently do a shallow comparison check because serde_json::Value doesn't support
+        // PartialEq nor Eq unfortunately.
+        assert_eq!(left.custom_properties.len(), right.custom_properties.len(), "We are testing metadata custom_properties are the same");
+    }
+
+    #[test]
+    fn test_metadata_serialize_deserialize() {
+        let data_1 = r#"
+            {
+               "$maxCount": 42,
+               "$acl" : {
+                  "$w"  : "greg",
+                  "$r"  : ["greg", "john"]
+                }
+            }"#;
+
+        let expected_acl_1 = super::StreamAclInternal {
+            write_roles: super::Roles::from_string("greg".to_string()),
+            read_roles: super::Roles(Some(vec!["greg".to_string(), "john".to_string()])),
+            delete_roles: super::Roles(None),
+            meta_read_roles: super::Roles(None),
+            meta_write_roles: super::Roles(None),
+        };
+
+        let expected_metadata_1 = super::StreamMetadataInternal {
+            max_count: Some(42),
+            max_age: None,
+            truncate_before: None,
+            cache_control: None,
+            acl: expected_acl_1,
+            custom_properties: std::collections::HashMap::new(),
+        };
+
+        let metadata: super::StreamMetadataInternal = serde_json::from_str(data_1).unwrap();
+
+        compare_metadata(expected_metadata_1, metadata);
+    }
 }

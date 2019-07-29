@@ -790,12 +790,16 @@ impl StreamMetadataBuilder {
         Default::default()
     }
 
-    /// Sets the maximum number of events allowed in the stream.
+    /// Sets a sliding window based on the number of items in the stream.
+    /// When data reaches a certain length it disappears automatically
+    /// from the stream and is considered eligible for scavenging.
     pub fn max_count(self, value: u64) -> StreamMetadataBuilder {
         StreamMetadataBuilder { max_count: Some(value), ..self }
     }
 
-    /// Sets the maximum age of events allowed in the stream.
+    /// Sets a sliding window based on dates. When data reaches a certain age
+    /// it disappears automatically from the stream and is considered
+    /// eligible for scavenging.
     pub fn max_age(self, value: Duration) -> StreamMetadataBuilder {
         StreamMetadataBuilder { max_age: Some(value), ..self }
     }
@@ -805,7 +809,10 @@ impl StreamMetadataBuilder {
         StreamMetadataBuilder { truncate_before: Some(value), ..self }
     }
 
-    /// Sets the amount of time for which the stream head is cacheable.
+    /// This controls the cache of the head of a stream. Most URIs in a stream
+    /// are infinitely cacheable but the head by default will not cache. It
+    /// may be preferable in some situations to set a small amount of caching
+    /// on the head to allow intermediaries to handle polls (say 10 seconds).
     pub fn cache_control(self, value: Duration) -> StreamMetadataBuilder {
         StreamMetadataBuilder { cache_control: Some(value), ..self }
     }
@@ -842,17 +849,23 @@ impl StreamMetadataBuilder {
 /// and a dictionary-like interface for custom values.
 #[derive(Debug, Default, Clone)]
 pub struct StreamMetadata {
-    /// The maximum number of events allowed in the stream.
+    /// A sliding window based on the number of items in the stream. When data reaches
+    /// a certain length it disappears automatically from the stream and is considered
+    /// eligible for scavenging.
     pub max_count: Option<u64>,
 
-    /// The maximum age of events allowed in the stream.
+    /// A sliding window based on dates. When data reaches a certain age it disappears
+    /// automatically from the stream and is considered eligible for scavenging.
     pub max_age: Option<Duration>,
 
     /// The event number from which previous events can be scavenged. This is
     /// used to implement soft-deletion of streams.
     pub truncate_before: Option<u64>,
 
-    /// The amount of time for which the stream head is cacheable.
+    /// Controls the cache of the head of a stream. Most URIs in a stream are infinitely
+    /// cacheable but the head by default will not cache. It may be preferable
+    /// in some situations to set a small amount of caching on the head to allow
+    /// intermediaries to handle polls (say 10 seconds).
     pub cache_control: Option<Duration>,
 
     /// The access control list for the stream.
@@ -874,19 +887,19 @@ impl StreamMetadata {
 #[derive(Default, Debug, Clone)]
 pub struct StreamAcl {
     /// Roles and users permitted to read the stream.
-    pub read_roles: Vec<String>,
+    pub read_roles: Option<Vec<String>>,
 
     /// Roles and users permitted to write to the stream.
-    pub write_roles: Vec<String>,
+    pub write_roles: Option<Vec<String>>,
 
     /// Roles and users permitted to delete to the stream.
-    pub delete_roles: Vec<String>,
+    pub delete_roles: Option<Vec<String>>,
 
     /// Roles and users permitted to read stream metadata.
-    pub meta_read_roles: Vec<String>,
+    pub meta_read_roles: Option<Vec<String>>,
 
     /// Roles and users permitted to write stream metadata.
-    pub meta_write_roles: Vec<String>,
+    pub meta_write_roles: Option<Vec<String>>,
 }
 
 pub(crate) enum SubEvent {
