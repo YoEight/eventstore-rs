@@ -1089,8 +1089,7 @@ fn on_event<C>(
                         }
 
                         let pkgs = pkgs.into_iter().map(Msg::Send);
-
-                        sender.clone().send_all(iter_ok(pkgs)).wait().unwrap();
+                        let _ = sender.clone().send_all(iter_ok(pkgs)).wait().unwrap();
                     }
 
                     decision

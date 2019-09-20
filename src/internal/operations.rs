@@ -149,7 +149,7 @@ pub(crate) struct OperationWrapper {
     pub(crate) id: OperationId,
     max_retry: usize,
     timeout: Duration,
-    inner: Box<OperationImpl + Sync + Send>,
+    inner: Box<dyn OperationImpl + Sync + Send>,
     creds: Option<types::Credentials>,
 }
 
@@ -407,7 +407,7 @@ impl OperationWrapper {
 
 pub(crate) struct Request<'a> {
     cmd: Cmd,
-    msg: &'a ::protobuf::Message,
+    msg: &'a dyn ::protobuf::Message,
 }
 
 impl <'a> Request<'a> {
@@ -482,7 +482,7 @@ pub(crate) trait OperationImpl {
     /// request.
     fn initial_request(&self) -> Request;
     fn is_valid_response(&self, cmd: Cmd) -> bool;
-    fn respond(&mut self, buffer: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult>;
+    fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult>;
     fn report_operation_error(&mut self, error: OperationError);
 
     fn retry(&self, _: Cmd) -> Request {
@@ -491,7 +491,7 @@ pub(crate) trait OperationImpl {
 
     fn connection_has_dropped(
         &mut self,
-        _: &mut ReqBuffer,
+        _: &mut dyn ReqBuffer,
         _: Cmd
     ) -> ::std::io::Result<()>
     {
@@ -549,7 +549,7 @@ impl OperationImpl for WriteEvents {
         Cmd::WriteEventsCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::WriteEventsCompleted =
                 pkg.to_message()?;
 
@@ -681,7 +681,7 @@ impl OperationImpl for ReadEvent {
         Cmd::ReadEventCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let mut response: messages::ReadEventCompleted =
                 pkg.to_message()?;
 
@@ -752,7 +752,7 @@ impl OperationImpl for TransactionStart {
         Cmd::TransactionStartCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::TransactionStartCompleted =
                  pkg.to_message()?;
 
@@ -855,7 +855,7 @@ impl OperationImpl for TransactionWrite {
         Cmd::TransactionWriteCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::TransactionWriteCompleted =
                 pkg.to_message()?;
 
@@ -945,7 +945,7 @@ impl OperationImpl for TransactionCommit {
         Cmd::TransactionCommitCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::TransactionCommitCompleted =
                 pkg.to_message()?;
 
@@ -1076,7 +1076,7 @@ impl OperationImpl for ReadStreamEvents {
         self.response_cmd == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let mut response: messages::ReadStreamEventsCompleted =
                 pkg.to_message()?;
 
@@ -1213,7 +1213,7 @@ impl OperationImpl for ReadAllEvents {
         self.response_cmd == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let mut response: messages::ReadAllEventsCompleted =
                 pkg.to_message()?;
 
@@ -1316,7 +1316,7 @@ impl OperationImpl for DeleteStream {
         Cmd::DeleteStreamCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         let response: messages::DeleteStreamCompleted =
                 pkg.to_message()?;
 
@@ -1442,7 +1442,7 @@ impl OperationImpl for SubscribeToStream {
         }
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         match pkg.cmd {
             Cmd::SubscriptionConfirmed => {
                 let response: messages::SubscriptionConfirmation =
@@ -1519,7 +1519,7 @@ impl <A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
         self.inner.is_valid_response(cmd)
     }
 
-    fn respond(&mut self, buffer: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         self.inner.respond(buffer, pkg)
     }
 
@@ -1654,7 +1654,7 @@ impl<A: Catchup> CatchupWrapper<A> {
         }
     }
 
-    fn pull(&mut self, buffer: &mut ReqBuffer)
+    fn pull(&mut self, buffer: &mut dyn ReqBuffer)
         -> ::std::io::Result<()>
     {
         let extractor = self.inner.create_next_puller(&self.checkpoint);
@@ -1960,7 +1960,7 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
         self.sub.is_valid_response(cmd) || valid_for_puller
     }
 
-    fn respond(&mut self, buffer: &mut ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+    fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         if self.is_sub_pkg(pkg.cmd) {
             let cmd    = pkg.cmd;
             let result = self.sub.respond(buffer, pkg)?;
@@ -2064,7 +2064,7 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
 
     fn connection_has_dropped(
         &mut self,
-        buffer: &mut ReqBuffer,
+        buffer: &mut dyn ReqBuffer,
         _: Cmd
     ) -> ::std::io::Result<()>
     {
@@ -2139,7 +2139,7 @@ impl OperationImpl for CreatePersistentSubscription {
         Cmd::CreatePersistentSubscriptionCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
         -> ::std::io::Result<ImplResult>
     {
         let response: messages::CreatePersistentSubscriptionCompleted =
@@ -2226,7 +2226,7 @@ impl OperationImpl for UpdatePersistentSubscription {
         Cmd::UpdatePersistentSubscriptionCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
         -> ::std::io::Result<ImplResult>
     {
         let response: messages::UpdatePersistentSubscriptionCompleted =
@@ -2296,7 +2296,7 @@ impl OperationImpl for DeletePersistentSubscription {
         Cmd::DeletePersistentSubscriptionCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
         -> ::std::io::Result<ImplResult>
     {
         let response: messages::DeletePersistentSubscriptionCompleted =
@@ -2392,7 +2392,7 @@ impl OperationImpl for ConnectToPersistentSubscription {
         }
     }
 
-    fn respond(&mut self, _: &mut ReqBuffer, pkg: Pkg)
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
         -> ::std::io::Result<ImplResult>
     {
         match pkg.cmd {
