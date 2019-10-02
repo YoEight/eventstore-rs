@@ -5,6 +5,7 @@ extern crate serde_json;
 
 use eventstore::Slice;
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::time::Duration;
 use std::thread::spawn;
 use futures::{ Future, Stream };
@@ -556,9 +557,11 @@ fn all_round_operation_test() {
 
     info!("Connection string: {}", conn_str);
 
+    let endpoint = conn_str.to_socket_addrs().unwrap().next().unwrap();
+
     let connection = eventstore::Connection::builder()
         .with_default_user(eventstore::Credentials::new("admin", "changeit"))
-        .single_node_connection(conn_str.parse().unwrap());
+        .single_node_connection(endpoint);
 
     test_write_events(&connection);
     test_read_event(&connection);

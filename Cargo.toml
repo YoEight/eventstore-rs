@@ -17,8 +17,7 @@ keywords = ["database", "eventsourcing", "event", "eventstore", "ges"]
 exclude = [
   ".gitignore",
   ".gitlab-ci.yml",
-  ".travis.yml",
-  "tests/**/*"
+  ".travis.yml"
 ]
 
 categories = ["database", "api-bindings"]

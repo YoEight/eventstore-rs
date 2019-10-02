@@ -7,11 +7,22 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    container:
+      image: rust:1.38
+
+    services:
+      eventstore:
+        image: eventstore/eventstore:latest
+        ports:
+          - 1113/tcp
+
     steps:
     - uses: actions/checkout@v1
-    - name: Checks
-      run: cargo --version
+    - name: Install
+      run: rustup component add clippy-preview
     - name: Build
-      run: cargo check --verbose
+      run: cargo build
     - name: Run tests
-      run: cargo test --verbose
+      run: EVENTSTORE_HOST=eventstore RUST_BACKTRACE='1' RUST_LOG='eventstore=debug' cargo test
+    - name: Linting
+      run: cargo clippy -- -D warnings
