@@ -1012,7 +1012,7 @@ pub struct ReadStreamEvents {
     direction: types::ReadDirection,
     request_cmd: Cmd,
     response_cmd: Cmd,
-    inner: messages::ReadStreamEvents,
+    pub inner: messages::ReadStreamEvents,
 }
 
 impl ReadStreamEvents {

@@ -163,7 +163,7 @@ pub(crate) struct Driver
     phase: Phase,
     last_endpoint: Option<Endpoint>,
     discovery: Sender<Option<Endpoint>>,
-    connection_name: Option<String>,
+    connection_name: Option<protobuf::Chars>,
     default_user: Option<Credentials>,
     operation_timeout: Duration,
     init_req_opt: Option<InitReq>,
