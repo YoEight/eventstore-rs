@@ -1,0 +1,22 @@
+name: Deployment
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  deploy:
+
+    runs-on: ubuntu-latest
+
+    container:
+      image: rust:1.38
+
+    steps:
+    - name: Login on Crates.IO
+      env:
+        TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      run: cargo login $TOKEN
+    - name: Upload
+      run: cargo publish
