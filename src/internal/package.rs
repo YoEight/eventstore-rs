@@ -69,11 +69,11 @@ impl Pkg {
         }
     }
 
-    pub fn identify_client(name_opt: &Option<String>) -> Pkg {
+    pub fn identify_client(name_opt: &Option<protobuf::Chars>) -> Pkg {
         let mut msg  = messages::IdentifyClient::new();
         let     name = match *name_opt {
             Some(ref name) => name.clone(),
-            None           => format!("ES-{}", Uuid::new_v4()),
+            None           => format!("ES-{}", Uuid::new_v4()).into(),
         };
 
         msg.set_connection_name(name);

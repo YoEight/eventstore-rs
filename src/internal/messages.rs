@@ -1078,7 +1078,7 @@ impl ResolvedIndexedEvent {
         ::std::default::Default::default()
     }
 
-    // required .EventStore.Client.Messages.EventRecord event = 1;
+    // optional .EventStore.Client.Messages.EventRecord event = 1;
 
 
     pub fn get_event(&self) -> &EventRecord {
@@ -1147,9 +1147,6 @@ impl ResolvedIndexedEvent {
 
 impl ::protobuf::Message for ResolvedIndexedEvent {
     fn is_initialized(&self) -> bool {
-        if self.event.is_none() {
-            return false;
-        }
         for v in &self.event {
             if !v.is_initialized() {
                 return false;
@@ -12054,7 +12051,7 @@ impl ::protobuf::reflect::ProtobufValue for SubscriptionDropped_SubscriptionDrop
 pub struct NotHandled {
     // message fields
     reason: ::std::option::Option<NotHandled_NotHandledReason>,
-    additional_info: ::protobuf::SingularField<::std::vec::Vec<u8>>,
+    additional_info: ::std::option::Option<::bytes::Bytes>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -12095,12 +12092,12 @@ impl NotHandled {
 
     pub fn get_additional_info(&self) -> &[u8] {
         match self.additional_info.as_ref() {
-            Some(v) => &v,
+            Some(v) => v,
             None => &[],
         }
     }
     pub fn clear_additional_info(&mut self) {
-        self.additional_info.clear();
+        self.additional_info = ::std::option::Option::None;
     }
 
     pub fn has_additional_info(&self) -> bool {
@@ -12108,22 +12105,22 @@ impl NotHandled {
     }
 
     // Param is passed by value, moved
-    pub fn set_additional_info(&mut self, v: ::std::vec::Vec<u8>) {
-        self.additional_info = ::protobuf::SingularField::some(v);
+    pub fn set_additional_info(&mut self, v: ::bytes::Bytes) {
+        self.additional_info = ::std::option::Option::Some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_additional_info(&mut self) -> &mut ::std::vec::Vec<u8> {
+    pub fn mut_additional_info(&mut self) -> &mut ::bytes::Bytes {
         if self.additional_info.is_none() {
-            self.additional_info.set_default();
+            self.additional_info = ::std::option::Option::Some(::bytes::Bytes::new());
         }
         self.additional_info.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_additional_info(&mut self) -> ::std::vec::Vec<u8> {
-        self.additional_info.take().unwrap_or_else(|| ::std::vec::Vec::new())
+    pub fn take_additional_info(&mut self) -> ::bytes::Bytes {
+        self.additional_info.take().unwrap_or_else(|| ::bytes::Bytes::new())
     }
 }
 
@@ -12143,7 +12140,7 @@ impl ::protobuf::Message for NotHandled {
                     ::protobuf::rt::read_proto2_enum_with_unknown_fields_into(wire_type, is, &mut self.reason, 1, &mut self.unknown_fields)?
                 },
                 2 => {
-                    ::protobuf::rt::read_singular_bytes_into(wire_type, is, &mut self.additional_info)?;
+                    ::protobuf::rt::read_singular_carllerche_bytes_into(wire_type, is, &mut self.additional_info)?;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -12173,7 +12170,7 @@ impl ::protobuf::Message for NotHandled {
             os.write_enum(1, v.value())?;
         }
         if let Some(ref v) = self.additional_info.as_ref() {
-            os.write_bytes(2, &v)?;
+            os.write_bytes(2, v)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -12222,7 +12219,7 @@ impl ::protobuf::Message for NotHandled {
                     |m: &NotHandled| { &m.reason },
                     |m: &mut NotHandled| { &mut m.reason },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeCarllercheBytes>(
                     "additional_info",
                     |m: &NotHandled| { &m.additional_info },
                     |m: &mut NotHandled| { &mut m.additional_info },
@@ -12250,7 +12247,7 @@ impl ::protobuf::Message for NotHandled {
 impl ::protobuf::Clear for NotHandled {
     fn clear(&mut self) {
         self.reason = ::std::option::Option::None;
-        self.additional_info.clear();
+        self.additional_info = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -12270,11 +12267,11 @@ impl ::protobuf::reflect::ProtobufValue for NotHandled {
 #[derive(PartialEq,Clone,Default)]
 pub struct NotHandled_MasterInfo {
     // message fields
-    external_tcp_address: ::protobuf::SingularField<::std::string::String>,
+    external_tcp_address: ::std::option::Option<::protobuf::Chars>,
     external_tcp_port: ::std::option::Option<i32>,
-    external_http_address: ::protobuf::SingularField<::std::string::String>,
+    external_http_address: ::std::option::Option<::protobuf::Chars>,
     external_http_port: ::std::option::Option<i32>,
-    external_secure_tcp_address: ::protobuf::SingularField<::std::string::String>,
+    external_secure_tcp_address: ::std::option::Option<::protobuf::Chars>,
     external_secure_tcp_port: ::std::option::Option<i32>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
@@ -12297,12 +12294,12 @@ impl NotHandled_MasterInfo {
 
     pub fn get_external_tcp_address(&self) -> &str {
         match self.external_tcp_address.as_ref() {
-            Some(v) => &v,
+            Some(v) => v,
             None => "",
         }
     }
     pub fn clear_external_tcp_address(&mut self) {
-        self.external_tcp_address.clear();
+        self.external_tcp_address = ::std::option::Option::None;
     }
 
     pub fn has_external_tcp_address(&self) -> bool {
@@ -12310,22 +12307,22 @@ impl NotHandled_MasterInfo {
     }
 
     // Param is passed by value, moved
-    pub fn set_external_tcp_address(&mut self, v: ::std::string::String) {
-        self.external_tcp_address = ::protobuf::SingularField::some(v);
+    pub fn set_external_tcp_address(&mut self, v: ::protobuf::Chars) {
+        self.external_tcp_address = ::std::option::Option::Some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_external_tcp_address(&mut self) -> &mut ::std::string::String {
+    pub fn mut_external_tcp_address(&mut self) -> &mut ::protobuf::Chars {
         if self.external_tcp_address.is_none() {
-            self.external_tcp_address.set_default();
+            self.external_tcp_address = ::std::option::Option::Some(::protobuf::Chars::new());
         }
         self.external_tcp_address.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_external_tcp_address(&mut self) -> ::std::string::String {
-        self.external_tcp_address.take().unwrap_or_else(|| ::std::string::String::new())
+    pub fn take_external_tcp_address(&mut self) -> ::protobuf::Chars {
+        self.external_tcp_address.take().unwrap_or_else(|| ::protobuf::Chars::new())
     }
 
     // required int32 external_tcp_port = 2;
@@ -12352,12 +12349,12 @@ impl NotHandled_MasterInfo {
 
     pub fn get_external_http_address(&self) -> &str {
         match self.external_http_address.as_ref() {
-            Some(v) => &v,
+            Some(v) => v,
             None => "",
         }
     }
     pub fn clear_external_http_address(&mut self) {
-        self.external_http_address.clear();
+        self.external_http_address = ::std::option::Option::None;
     }
 
     pub fn has_external_http_address(&self) -> bool {
@@ -12365,22 +12362,22 @@ impl NotHandled_MasterInfo {
     }
 
     // Param is passed by value, moved
-    pub fn set_external_http_address(&mut self, v: ::std::string::String) {
-        self.external_http_address = ::protobuf::SingularField::some(v);
+    pub fn set_external_http_address(&mut self, v: ::protobuf::Chars) {
+        self.external_http_address = ::std::option::Option::Some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_external_http_address(&mut self) -> &mut ::std::string::String {
+    pub fn mut_external_http_address(&mut self) -> &mut ::protobuf::Chars {
         if self.external_http_address.is_none() {
-            self.external_http_address.set_default();
+            self.external_http_address = ::std::option::Option::Some(::protobuf::Chars::new());
         }
         self.external_http_address.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_external_http_address(&mut self) -> ::std::string::String {
-        self.external_http_address.take().unwrap_or_else(|| ::std::string::String::new())
+    pub fn take_external_http_address(&mut self) -> ::protobuf::Chars {
+        self.external_http_address.take().unwrap_or_else(|| ::protobuf::Chars::new())
     }
 
     // required int32 external_http_port = 4;
@@ -12407,12 +12404,12 @@ impl NotHandled_MasterInfo {
 
     pub fn get_external_secure_tcp_address(&self) -> &str {
         match self.external_secure_tcp_address.as_ref() {
-            Some(v) => &v,
+            Some(v) => v,
             None => "",
         }
     }
     pub fn clear_external_secure_tcp_address(&mut self) {
-        self.external_secure_tcp_address.clear();
+        self.external_secure_tcp_address = ::std::option::Option::None;
     }
 
     pub fn has_external_secure_tcp_address(&self) -> bool {
@@ -12420,22 +12417,22 @@ impl NotHandled_MasterInfo {
     }
 
     // Param is passed by value, moved
-    pub fn set_external_secure_tcp_address(&mut self, v: ::std::string::String) {
-        self.external_secure_tcp_address = ::protobuf::SingularField::some(v);
+    pub fn set_external_secure_tcp_address(&mut self, v: ::protobuf::Chars) {
+        self.external_secure_tcp_address = ::std::option::Option::Some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_external_secure_tcp_address(&mut self) -> &mut ::std::string::String {
+    pub fn mut_external_secure_tcp_address(&mut self) -> &mut ::protobuf::Chars {
         if self.external_secure_tcp_address.is_none() {
-            self.external_secure_tcp_address.set_default();
+            self.external_secure_tcp_address = ::std::option::Option::Some(::protobuf::Chars::new());
         }
         self.external_secure_tcp_address.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_external_secure_tcp_address(&mut self) -> ::std::string::String {
-        self.external_secure_tcp_address.take().unwrap_or_else(|| ::std::string::String::new())
+    pub fn take_external_secure_tcp_address(&mut self) -> ::protobuf::Chars {
+        self.external_secure_tcp_address.take().unwrap_or_else(|| ::protobuf::Chars::new())
     }
 
     // optional int32 external_secure_tcp_port = 6;
@@ -12480,7 +12477,7 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.external_tcp_address)?;
+                    ::protobuf::rt::read_singular_carllerche_string_into(wire_type, is, &mut self.external_tcp_address)?;
                 },
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
@@ -12490,7 +12487,7 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
                     self.external_tcp_port = ::std::option::Option::Some(tmp);
                 },
                 3 => {
-                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.external_http_address)?;
+                    ::protobuf::rt::read_singular_carllerche_string_into(wire_type, is, &mut self.external_http_address)?;
                 },
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
@@ -12500,7 +12497,7 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
                     self.external_http_port = ::std::option::Option::Some(tmp);
                 },
                 5 => {
-                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.external_secure_tcp_address)?;
+                    ::protobuf::rt::read_singular_carllerche_string_into(wire_type, is, &mut self.external_secure_tcp_address)?;
                 },
                 6 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
@@ -12546,19 +12543,19 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         if let Some(ref v) = self.external_tcp_address.as_ref() {
-            os.write_string(1, &v)?;
+            os.write_string(1, v)?;
         }
         if let Some(v) = self.external_tcp_port {
             os.write_int32(2, v)?;
         }
         if let Some(ref v) = self.external_http_address.as_ref() {
-            os.write_string(3, &v)?;
+            os.write_string(3, v)?;
         }
         if let Some(v) = self.external_http_port {
             os.write_int32(4, v)?;
         }
         if let Some(ref v) = self.external_secure_tcp_address.as_ref() {
-            os.write_string(5, &v)?;
+            os.write_string(5, v)?;
         }
         if let Some(v) = self.external_secure_tcp_port {
             os.write_int32(6, v)?;
@@ -12605,7 +12602,7 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeCarllercheChars>(
                     "external_tcp_address",
                     |m: &NotHandled_MasterInfo| { &m.external_tcp_address },
                     |m: &mut NotHandled_MasterInfo| { &mut m.external_tcp_address },
@@ -12615,7 +12612,7 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
                     |m: &NotHandled_MasterInfo| { &m.external_tcp_port },
                     |m: &mut NotHandled_MasterInfo| { &mut m.external_tcp_port },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeCarllercheChars>(
                     "external_http_address",
                     |m: &NotHandled_MasterInfo| { &m.external_http_address },
                     |m: &mut NotHandled_MasterInfo| { &mut m.external_http_address },
@@ -12625,7 +12622,7 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
                     |m: &NotHandled_MasterInfo| { &m.external_http_port },
                     |m: &mut NotHandled_MasterInfo| { &mut m.external_http_port },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeCarllercheChars>(
                     "external_secure_tcp_address",
                     |m: &NotHandled_MasterInfo| { &m.external_secure_tcp_address },
                     |m: &mut NotHandled_MasterInfo| { &mut m.external_secure_tcp_address },
@@ -12657,11 +12654,11 @@ impl ::protobuf::Message for NotHandled_MasterInfo {
 
 impl ::protobuf::Clear for NotHandled_MasterInfo {
     fn clear(&mut self) {
-        self.external_tcp_address.clear();
+        self.external_tcp_address = ::std::option::Option::None;
         self.external_tcp_port = ::std::option::Option::None;
-        self.external_http_address.clear();
+        self.external_http_address = ::std::option::Option::None;
         self.external_http_port = ::std::option::Option::None;
-        self.external_secure_tcp_address.clear();
+        self.external_secure_tcp_address = ::std::option::Option::None;
         self.external_secure_tcp_port = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
@@ -12867,7 +12864,7 @@ impl ::protobuf::reflect::ProtobufValue for ScavengeDatabase {
 pub struct ScavengeDatabaseCompleted {
     // message fields
     result: ::std::option::Option<ScavengeDatabaseCompleted_ScavengeResult>,
-    error: ::protobuf::SingularField<::std::string::String>,
+    error: ::std::option::Option<::protobuf::Chars>,
     total_time_ms: ::std::option::Option<i32>,
     total_space_saved: ::std::option::Option<i64>,
     // special fields
@@ -12910,12 +12907,12 @@ impl ScavengeDatabaseCompleted {
 
     pub fn get_error(&self) -> &str {
         match self.error.as_ref() {
-            Some(v) => &v,
+            Some(v) => v,
             None => "",
         }
     }
     pub fn clear_error(&mut self) {
-        self.error.clear();
+        self.error = ::std::option::Option::None;
     }
 
     pub fn has_error(&self) -> bool {
@@ -12923,22 +12920,22 @@ impl ScavengeDatabaseCompleted {
     }
 
     // Param is passed by value, moved
-    pub fn set_error(&mut self, v: ::std::string::String) {
-        self.error = ::protobuf::SingularField::some(v);
+    pub fn set_error(&mut self, v: ::protobuf::Chars) {
+        self.error = ::std::option::Option::Some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_error(&mut self) -> &mut ::std::string::String {
+    pub fn mut_error(&mut self) -> &mut ::protobuf::Chars {
         if self.error.is_none() {
-            self.error.set_default();
+            self.error = ::std::option::Option::Some(::protobuf::Chars::new());
         }
         self.error.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_error(&mut self) -> ::std::string::String {
-        self.error.take().unwrap_or_else(|| ::std::string::String::new())
+    pub fn take_error(&mut self) -> ::protobuf::Chars {
+        self.error.take().unwrap_or_else(|| ::protobuf::Chars::new())
     }
 
     // required int32 total_time_ms = 3;
@@ -13002,7 +12999,7 @@ impl ::protobuf::Message for ScavengeDatabaseCompleted {
                     ::protobuf::rt::read_proto2_enum_with_unknown_fields_into(wire_type, is, &mut self.result, 1, &mut self.unknown_fields)?
                 },
                 2 => {
-                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.error)?;
+                    ::protobuf::rt::read_singular_carllerche_string_into(wire_type, is, &mut self.error)?;
                 },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
@@ -13052,7 +13049,7 @@ impl ::protobuf::Message for ScavengeDatabaseCompleted {
             os.write_enum(1, v.value())?;
         }
         if let Some(ref v) = self.error.as_ref() {
-            os.write_string(2, &v)?;
+            os.write_string(2, v)?;
         }
         if let Some(v) = self.total_time_ms {
             os.write_int32(3, v)?;
@@ -13107,7 +13104,7 @@ impl ::protobuf::Message for ScavengeDatabaseCompleted {
                     |m: &ScavengeDatabaseCompleted| { &m.result },
                     |m: &mut ScavengeDatabaseCompleted| { &mut m.result },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeCarllercheChars>(
                     "error",
                     |m: &ScavengeDatabaseCompleted| { &m.error },
                     |m: &mut ScavengeDatabaseCompleted| { &mut m.error },
@@ -13145,7 +13142,7 @@ impl ::protobuf::Message for ScavengeDatabaseCompleted {
 impl ::protobuf::Clear for ScavengeDatabaseCompleted {
     fn clear(&mut self) {
         self.result = ::std::option::Option::None;
-        self.error.clear();
+        self.error = ::std::option::Option::None;
         self.total_time_ms = ::std::option::Option::None;
         self.total_space_saved = ::std::option::Option::None;
         self.unknown_fields.clear();
@@ -13226,7 +13223,7 @@ impl ::protobuf::reflect::ProtobufValue for ScavengeDatabaseCompleted_ScavengeRe
 pub struct IdentifyClient {
     // message fields
     version: ::std::option::Option<i32>,
-    connection_name: ::protobuf::SingularField<::std::string::String>,
+    connection_name: ::std::option::Option<::protobuf::Chars>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -13267,12 +13264,12 @@ impl IdentifyClient {
 
     pub fn get_connection_name(&self) -> &str {
         match self.connection_name.as_ref() {
-            Some(v) => &v,
+            Some(v) => v,
             None => "",
         }
     }
     pub fn clear_connection_name(&mut self) {
-        self.connection_name.clear();
+        self.connection_name = ::std::option::Option::None;
     }
 
     pub fn has_connection_name(&self) -> bool {
@@ -13280,22 +13277,22 @@ impl IdentifyClient {
     }
 
     // Param is passed by value, moved
-    pub fn set_connection_name(&mut self, v: ::std::string::String) {
-        self.connection_name = ::protobuf::SingularField::some(v);
+    pub fn set_connection_name(&mut self, v: ::protobuf::Chars) {
+        self.connection_name = ::std::option::Option::Some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_connection_name(&mut self) -> &mut ::std::string::String {
+    pub fn mut_connection_name(&mut self) -> &mut ::protobuf::Chars {
         if self.connection_name.is_none() {
-            self.connection_name.set_default();
+            self.connection_name = ::std::option::Option::Some(::protobuf::Chars::new());
         }
         self.connection_name.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_connection_name(&mut self) -> ::std::string::String {
-        self.connection_name.take().unwrap_or_else(|| ::std::string::String::new())
+    pub fn take_connection_name(&mut self) -> ::protobuf::Chars {
+        self.connection_name.take().unwrap_or_else(|| ::protobuf::Chars::new())
     }
 }
 
@@ -13319,7 +13316,7 @@ impl ::protobuf::Message for IdentifyClient {
                     self.version = ::std::option::Option::Some(tmp);
                 },
                 2 => {
-                    ::protobuf::rt::read_singular_string_into(wire_type, is, &mut self.connection_name)?;
+                    ::protobuf::rt::read_singular_carllerche_string_into(wire_type, is, &mut self.connection_name)?;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -13349,7 +13346,7 @@ impl ::protobuf::Message for IdentifyClient {
             os.write_int32(1, v)?;
         }
         if let Some(ref v) = self.connection_name.as_ref() {
-            os.write_string(2, &v)?;
+            os.write_string(2, v)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -13398,7 +13395,7 @@ impl ::protobuf::Message for IdentifyClient {
                     |m: &IdentifyClient| { &m.version },
                     |m: &mut IdentifyClient| { &mut m.version },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_singular_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_option_accessor::<_, ::protobuf::types::ProtobufTypeCarllercheChars>(
                     "connection_name",
                     |m: &IdentifyClient| { &m.connection_name },
                     |m: &mut IdentifyClient| { &mut m.connection_name },
@@ -13426,7 +13423,7 @@ impl ::protobuf::Message for IdentifyClient {
 impl ::protobuf::Clear for IdentifyClient {
     fn clear(&mut self) {
         self.version = ::std::option::Option::None;
-        self.connection_name.clear();
+        self.connection_name = ::std::option::Option::None;
         self.unknown_fields.clear();
     }
 }
@@ -13644,122 +13641,133 @@ impl ::protobuf::reflect::ProtobufValue for OperationResult {
 
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x0emessages.proto\x12\x1aEventStore.Client.Messages\x1a\x0frustproto.\
-    proto\"\xde\x01\n\x08NewEvent\x12\x19\n\x08event_id\x18\x01\x20\x02(\x0c\
+    proto\"\xd4\x01\n\x08NewEvent\x12\x19\n\x08event_id\x18\x01\x20\x02(\x0c\
     R\x07eventId\x12\x1d\n\nevent_type\x18\x02\x20\x02(\tR\teventType\x12*\n\
     \x11data_content_type\x18\x03\x20\x02(\x05R\x0fdataContentType\x122\n\
     \x15metadata_content_type\x18\x04\x20\x02(\x05R\x13metadataContentType\
     \x12\x12\n\x04data\x18\x05\x20\x02(\x0cR\x04data\x12\x1a\n\x08metadata\
-    \x18\x06\x20\x01(\x0cR\x08metadata:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\
-    \"\xeb\x02\n\x0bEventRecord\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\t\
-    R\reventStreamId\x12!\n\x0cevent_number\x18\x02\x20\x02(\x03R\x0beventNu\
-    mber\x12\x19\n\x08event_id\x18\x03\x20\x02(\x0cR\x07eventId\x12\x1d\n\ne\
-    vent_type\x18\x04\x20\x02(\tR\teventType\x12*\n\x11data_content_type\x18\
-    \x05\x20\x02(\x05R\x0fdataContentType\x122\n\x15metadata_content_type\
-    \x18\x06\x20\x02(\x05R\x13metadataContentType\x12\x12\n\x04data\x18\x07\
-    \x20\x02(\x0cR\x04data\x12\x1a\n\x08metadata\x18\x08\x20\x01(\x0cR\x08me\
-    tadata\x12\x18\n\x07created\x18\t\x20\x01(\x03R\x07created\x12#\n\rcreat\
-    ed_epoch\x18\n\x20\x01(\x03R\x0ccreatedEpoch:\x08\x98\xa7\x08\x01\xa0\
-    \xa7\x08\x01\"\x92\x01\n\x14ResolvedIndexedEvent\x12=\n\x05event\x18\x01\
-    \x20\x02(\x0b2'.EventStore.Client.Messages.EventRecordR\x05event\x12;\n\
-    \x04link\x18\x02\x20\x01(\x0b2'.EventStore.Client.Messages.EventRecordR\
-    \x04link\"\xdf\x01\n\rResolvedEvent\x12=\n\x05event\x18\x01\x20\x02(\x0b\
-    2'.EventStore.Client.Messages.EventRecordR\x05event\x12;\n\x04link\x18\
-    \x02\x20\x01(\x0b2'.EventStore.Client.Messages.EventRecordR\x04link\x12'\
-    \n\x0fcommit_position\x18\x03\x20\x02(\x03R\x0ecommitPosition\x12)\n\x10\
-    prepare_position\x18\x04\x20\x02(\x03R\x0fpreparePosition\"\xcf\x01\n\
-    \x0bWriteEvents\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reventStre\
-    amId\x12)\n\x10expected_version\x18\x02\x20\x02(\x03R\x0fexpectedVersion\
-    \x12<\n\x06events\x18\x03\x20\x03(\x0b2$.EventStore.Client.Messages.NewE\
-    ventR\x06events\x12%\n\x0erequire_master\x18\x04\x20\x02(\x08R\rrequireM\
-    aster:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\"\xd6\x02\n\x14WriteEventsCom\
-    pleted\x12C\n\x06result\x18\x01\x20\x02(\x0e2+.EventStore.Client.Message\
-    s.OperationResultR\x06result\x12\x18\n\x07message\x18\x02\x20\x01(\tR\
-    \x07message\x12,\n\x12first_event_number\x18\x03\x20\x02(\x03R\x10firstE\
-    ventNumber\x12*\n\x11last_event_number\x18\x04\x20\x02(\x03R\x0flastEven\
-    tNumber\x12)\n\x10prepare_position\x18\x05\x20\x01(\x03R\x0fpreparePosit\
-    ion\x12'\n\x0fcommit_position\x18\x06\x20\x01(\x03R\x0ecommitPosition\
-    \x12'\n\x0fcurrent_version\x18\x07\x20\x01(\x03R\x0ecurrentVersion:\x08\
-    \x98\xa7\x08\x01\xa0\xa7\x08\x01\"\xb3\x01\n\x0cDeleteStream\x12&\n\x0fe\
-    vent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12)\n\x10expected_ver\
-    sion\x18\x02\x20\x02(\x03R\x0fexpectedVersion\x12%\n\x0erequire_master\
-    \x18\x03\x20\x02(\x08R\rrequireMaster\x12\x1f\n\x0bhard_delete\x18\x04\
-    \x20\x01(\x08R\nhardDelete:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\"\xd4\
-    \x01\n\x15DeleteStreamCompleted\x12C\n\x06result\x18\x01\x20\x02(\x0e2+.\
-    EventStore.Client.Messages.OperationResultR\x06result\x12\x18\n\x07messa\
-    ge\x18\x02\x20\x01(\tR\x07message\x12)\n\x10prepare_position\x18\x03\x20\
-    \x01(\x03R\x0fpreparePosition\x12'\n\x0fcommit_position\x18\x04\x20\x01(\
-    \x03R\x0ecommitPosition:\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\x96\x01\n\
-    \x10TransactionStart\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reven\
-    tStreamId\x12)\n\x10expected_version\x18\x02\x20\x02(\x03R\x0fexpectedVe\
-    rsion\x12%\n\x0erequire_master\x18\x03\x20\x02(\x08R\rrequireMaster:\x08\
-    \x98\xa7\x08\x01\xa0\xa7\x08\x01\"\xab\x01\n\x19TransactionStartComplete\
-    d\x12%\n\x0etransaction_id\x18\x01\x20\x02(\x03R\rtransactionId\x12C\n\
-    \x06result\x18\x02\x20\x02(\x0e2+.EventStore.Client.Messages.OperationRe\
-    sultR\x06result\x12\x18\n\x07message\x18\x03\x20\x01(\tR\x07message:\x08\
-    \x98\xa7\x08\x01\xa0\xa7\x08\x01\"\x9e\x01\n\x10TransactionWrite\x12%\n\
-    \x0etransaction_id\x18\x01\x20\x02(\x03R\rtransactionId\x12<\n\x06events\
-    \x18\x02\x20\x03(\x0b2$.EventStore.Client.Messages.NewEventR\x06events\
-    \x12%\n\x0erequire_master\x18\x03\x20\x02(\x08R\rrequireMaster\"\xab\x01\
-    \n\x19TransactionWriteCompleted\x12%\n\x0etransaction_id\x18\x01\x20\x02\
-    (\x03R\rtransactionId\x12C\n\x06result\x18\x02\x20\x02(\x0e2+.EventStore\
-    .Client.Messages.OperationResultR\x06result\x12\x18\n\x07message\x18\x03\
-    \x20\x01(\tR\x07message:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\"a\n\x11Tra\
-    nsactionCommit\x12%\n\x0etransaction_id\x18\x01\x20\x02(\x03R\rtransacti\
-    onId\x12%\n\x0erequire_master\x18\x02\x20\x02(\x08R\rrequireMaster\"\xda\
-    \x02\n\x1aTransactionCommitCompleted\x12%\n\x0etransaction_id\x18\x01\
-    \x20\x02(\x03R\rtransactionId\x12C\n\x06result\x18\x02\x20\x02(\x0e2+.Ev\
-    entStore.Client.Messages.OperationResultR\x06result\x12\x18\n\x07message\
-    \x18\x03\x20\x01(\tR\x07message\x12,\n\x12first_event_number\x18\x04\x20\
-    \x02(\x03R\x10firstEventNumber\x12*\n\x11last_event_number\x18\x05\x20\
-    \x02(\x03R\x0flastEventNumber\x12)\n\x10prepare_position\x18\x06\x20\x01\
-    (\x03R\x0fpreparePosition\x12'\n\x0fcommit_position\x18\x07\x20\x01(\x03\
-    R\x0ecommitPosition:\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\xb1\x01\n\tRe\
-    adEvent\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12\
-    !\n\x0cevent_number\x18\x02\x20\x02(\x03R\x0beventNumber\x12(\n\x10resol\
-    ve_link_tos\x18\x03\x20\x02(\x08R\x0eresolveLinkTos\x12%\n\x0erequire_ma\
-    ster\x18\x04\x20\x02(\x08R\rrequireMaster:\x08\xa0\xa7\x08\x01\x98\xa7\
-    \x08\x01\"\xc0\x02\n\x12ReadEventCompleted\x12V\n\x06result\x18\x01\x20\
-    \x02(\x0e2>.EventStore.Client.Messages.ReadEventCompleted.ReadEventResul\
-    tR\x06result\x12F\n\x05event\x18\x02\x20\x02(\x0b20.EventStore.Client.Me\
-    ssages.ResolvedIndexedEventR\x05event\x12\x14\n\x05error\x18\x03\x20\x01\
-    (\tR\x05error\"j\n\x0fReadEventResult\x12\x0b\n\x07Success\x10\0\x12\x0c\
-    \n\x08NotFound\x10\x01\x12\x0c\n\x08NoStream\x10\x02\x12\x11\n\rStreamDe\
-    leted\x10\x03\x12\t\n\x05Error\x10\x04\x12\x10\n\x0cAccessDenied\x10\x05\
-    :\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\xde\x01\n\x10ReadStreamEvents\
-    \x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12*\n\x11\
-    from_event_number\x18\x02\x20\x02(\x03R\x0ffromEventNumber\x12\x1b\n\tma\
-    x_count\x18\x03\x20\x02(\x05R\x08maxCount\x12(\n\x10resolve_link_tos\x18\
-    \x04\x20\x02(\x08R\x0eresolveLinkTos\x12%\n\x0erequire_master\x18\x05\
-    \x20\x02(\x08R\rrequireMaster:\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\x88\
-    \x04\n\x19ReadStreamEventsCompleted\x12H\n\x06events\x18\x01\x20\x03(\
-    \x0b20.EventStore.Client.Messages.ResolvedIndexedEventR\x06events\x12^\n\
-    \x06result\x18\x02\x20\x02(\x0e2F.EventStore.Client.Messages.ReadStreamE\
-    ventsCompleted.ReadStreamResultR\x06result\x12*\n\x11next_event_number\
-    \x18\x03\x20\x02(\x03R\x0fnextEventNumber\x12*\n\x11last_event_number\
-    \x18\x04\x20\x02(\x03R\x0flastEventNumber\x12'\n\x10is_end_of_stream\x18\
-    \x05\x20\x02(\x08R\risEndOfStream\x120\n\x14last_commit_position\x18\x06\
-    \x20\x02(\x03R\x12lastCommitPosition\x12\x14\n\x05error\x18\x07\x20\x01(\
-    \tR\x05error\"n\n\x10ReadStreamResult\x12\x0b\n\x07Success\x10\0\x12\x0c\
-    \n\x08NoStream\x10\x01\x12\x11\n\rStreamDeleted\x10\x02\x12\x0f\n\x0bNot\
-    Modified\x10\x03\x12\t\n\x05Error\x10\x04\x12\x10\n\x0cAccessDenied\x10\
-    \x05:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\"\xd1\x01\n\rReadAllEvents\x12\
-    '\n\x0fcommit_position\x18\x01\x20\x02(\x03R\x0ecommitPosition\x12)\n\
-    \x10prepare_position\x18\x02\x20\x02(\x03R\x0fpreparePosition\x12\x1b\n\
-    \tmax_count\x18\x03\x20\x02(\x05R\x08maxCount\x12(\n\x10resolve_link_tos\
-    \x18\x04\x20\x02(\x08R\x0eresolveLinkTos\x12%\n\x0erequire_master\x18\
-    \x05\x20\x02(\x08R\rrequireMaster\"\xe4\x03\n\x16ReadAllEventsCompleted\
-    \x12'\n\x0fcommit_position\x18\x01\x20\x02(\x03R\x0ecommitPosition\x12)\
-    \n\x10prepare_position\x18\x02\x20\x02(\x03R\x0fpreparePosition\x12A\n\
-    \x06events\x18\x03\x20\x03(\x0b2).EventStore.Client.Messages.ResolvedEve\
-    ntR\x06events\x120\n\x14next_commit_position\x18\x04\x20\x02(\x03R\x12ne\
-    xtCommitPosition\x122\n\x15next_prepare_position\x18\x05\x20\x02(\x03R\
-    \x13nextPreparePosition\x12a\n\x06result\x18\x06\x20\x01(\x0e2@.EventSto\
-    re.Client.Messages.ReadAllEventsCompleted.ReadAllResult:\x07SuccessR\x06\
-    result\x12\x14\n\x05error\x18\x07\x20\x01(\tR\x05error\"J\n\rReadAllResu\
-    lt\x12\x0b\n\x07Success\x10\0\x12\x0f\n\x0bNotModified\x10\x01\x12\t\n\
-    \x05Error\x10\x02\x12\x10\n\x0cAccessDenied\x10\x03:\x08\x98\xa7\x08\x01\
-    \xa0\xa7\x08\x01\"\x8b\x06\n\x1cCreatePersistentSubscription\x126\n\x17s\
-    ubscription_group_name\x18\x01\x20\x02(\tR\x15subscriptionGroupName\x12&\
+    \x18\x06\x20\x01(\x0cR\x08metadata\"\xe1\x02\n\x0bEventRecord\x12&\n\x0f\
+    event_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12!\n\x0cevent_numbe\
+    r\x18\x02\x20\x02(\x03R\x0beventNumber\x12\x19\n\x08event_id\x18\x03\x20\
+    \x02(\x0cR\x07eventId\x12\x1d\n\nevent_type\x18\x04\x20\x02(\tR\teventTy\
+    pe\x12*\n\x11data_content_type\x18\x05\x20\x02(\x05R\x0fdataContentType\
+    \x122\n\x15metadata_content_type\x18\x06\x20\x02(\x05R\x13metadataConten\
+    tType\x12\x12\n\x04data\x18\x07\x20\x02(\x0cR\x04data\x12\x1a\n\x08metad\
+    ata\x18\x08\x20\x01(\x0cR\x08metadata\x12\x18\n\x07created\x18\t\x20\x01\
+    (\x03R\x07created\x12#\n\rcreated_epoch\x18\n\x20\x01(\x03R\x0ccreatedEp\
+    och\"\x92\x01\n\x14ResolvedIndexedEvent\x12=\n\x05event\x18\x01\x20\x01(\
+    \x0b2'.EventStore.Client.Messages.EventRecordR\x05event\x12;\n\x04link\
+    \x18\x02\x20\x01(\x0b2'.EventStore.Client.Messages.EventRecordR\x04link\
+    \"\xdf\x01\n\rResolvedEvent\x12=\n\x05event\x18\x01\x20\x02(\x0b2'.Event\
+    Store.Client.Messages.EventRecordR\x05event\x12;\n\x04link\x18\x02\x20\
+    \x01(\x0b2'.EventStore.Client.Messages.EventRecordR\x04link\x12'\n\x0fco\
+    mmit_position\x18\x03\x20\x02(\x03R\x0ecommitPosition\x12)\n\x10prepare_\
+    position\x18\x04\x20\x02(\x03R\x0fpreparePosition\"\xc5\x01\n\x0bWriteEv\
+    ents\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12)\n\
+    \x10expected_version\x18\x02\x20\x02(\x03R\x0fexpectedVersion\x12<\n\x06\
+    events\x18\x03\x20\x03(\x0b2$.EventStore.Client.Messages.NewEventR\x06ev\
+    ents\x12%\n\x0erequire_master\x18\x04\x20\x02(\x08R\rrequireMaster\"\xcc\
+    \x02\n\x14WriteEventsCompleted\x12C\n\x06result\x18\x01\x20\x02(\x0e2+.E\
+    ventStore.Client.Messages.OperationResultR\x06result\x12\x18\n\x07messag\
+    e\x18\x02\x20\x01(\tR\x07message\x12,\n\x12first_event_number\x18\x03\
+    \x20\x02(\x03R\x10firstEventNumber\x12*\n\x11last_event_number\x18\x04\
+    \x20\x02(\x03R\x0flastEventNumber\x12)\n\x10prepare_position\x18\x05\x20\
+    \x01(\x03R\x0fpreparePosition\x12'\n\x0fcommit_position\x18\x06\x20\x01(\
+    \x03R\x0ecommitPosition\x12'\n\x0fcurrent_version\x18\x07\x20\x01(\x03R\
+    \x0ecurrentVersion\"\xa9\x01\n\x0cDeleteStream\x12&\n\x0fevent_stream_id\
+    \x18\x01\x20\x02(\tR\reventStreamId\x12)\n\x10expected_version\x18\x02\
+    \x20\x02(\x03R\x0fexpectedVersion\x12%\n\x0erequire_master\x18\x03\x20\
+    \x02(\x08R\rrequireMaster\x12\x1f\n\x0bhard_delete\x18\x04\x20\x01(\x08R\
+    \nhardDelete\"\xca\x01\n\x15DeleteStreamCompleted\x12C\n\x06result\x18\
+    \x01\x20\x02(\x0e2+.EventStore.Client.Messages.OperationResultR\x06resul\
+    t\x12\x18\n\x07message\x18\x02\x20\x01(\tR\x07message\x12)\n\x10prepare_\
+    position\x18\x03\x20\x01(\x03R\x0fpreparePosition\x12'\n\x0fcommit_posit\
+    ion\x18\x04\x20\x01(\x03R\x0ecommitPosition\"\x8c\x01\n\x10TransactionSt\
+    art\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12)\n\
+    \x10expected_version\x18\x02\x20\x02(\x03R\x0fexpectedVersion\x12%\n\x0e\
+    require_master\x18\x03\x20\x02(\x08R\rrequireMaster\"\xa1\x01\n\x19Trans\
+    actionStartCompleted\x12%\n\x0etransaction_id\x18\x01\x20\x02(\x03R\rtra\
+    nsactionId\x12C\n\x06result\x18\x02\x20\x02(\x0e2+.EventStore.Client.Mes\
+    sages.OperationResultR\x06result\x12\x18\n\x07message\x18\x03\x20\x01(\t\
+    R\x07message\"\x9e\x01\n\x10TransactionWrite\x12%\n\x0etransaction_id\
+    \x18\x01\x20\x02(\x03R\rtransactionId\x12<\n\x06events\x18\x02\x20\x03(\
+    \x0b2$.EventStore.Client.Messages.NewEventR\x06events\x12%\n\x0erequire_\
+    master\x18\x03\x20\x02(\x08R\rrequireMaster\"\xa1\x01\n\x19TransactionWr\
+    iteCompleted\x12%\n\x0etransaction_id\x18\x01\x20\x02(\x03R\rtransaction\
+    Id\x12C\n\x06result\x18\x02\x20\x02(\x0e2+.EventStore.Client.Messages.Op\
+    erationResultR\x06result\x12\x18\n\x07message\x18\x03\x20\x01(\tR\x07mes\
+    sage\"a\n\x11TransactionCommit\x12%\n\x0etransaction_id\x18\x01\x20\x02(\
+    \x03R\rtransactionId\x12%\n\x0erequire_master\x18\x02\x20\x02(\x08R\rreq\
+    uireMaster\"\xd0\x02\n\x1aTransactionCommitCompleted\x12%\n\x0etransacti\
+    on_id\x18\x01\x20\x02(\x03R\rtransactionId\x12C\n\x06result\x18\x02\x20\
+    \x02(\x0e2+.EventStore.Client.Messages.OperationResultR\x06result\x12\
+    \x18\n\x07message\x18\x03\x20\x01(\tR\x07message\x12,\n\x12first_event_n\
+    umber\x18\x04\x20\x02(\x03R\x10firstEventNumber\x12*\n\x11last_event_num\
+    ber\x18\x05\x20\x02(\x03R\x0flastEventNumber\x12)\n\x10prepare_position\
+    \x18\x06\x20\x01(\x03R\x0fpreparePosition\x12'\n\x0fcommit_position\x18\
+    \x07\x20\x01(\x03R\x0ecommitPosition\"\xa7\x01\n\tReadEvent\x12&\n\x0fev\
+    ent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12!\n\x0cevent_number\
+    \x18\x02\x20\x02(\x03R\x0beventNumber\x12(\n\x10resolve_link_tos\x18\x03\
+    \x20\x02(\x08R\x0eresolveLinkTos\x12%\n\x0erequire_master\x18\x04\x20\
+    \x02(\x08R\rrequireMaster\"\xb6\x02\n\x12ReadEventCompleted\x12V\n\x06re\
+    sult\x18\x01\x20\x02(\x0e2>.EventStore.Client.Messages.ReadEventComplete\
+    d.ReadEventResultR\x06result\x12F\n\x05event\x18\x02\x20\x02(\x0b20.Even\
+    tStore.Client.Messages.ResolvedIndexedEventR\x05event\x12\x14\n\x05error\
+    \x18\x03\x20\x01(\tR\x05error\"j\n\x0fReadEventResult\x12\x0b\n\x07Succe\
+    ss\x10\0\x12\x0c\n\x08NotFound\x10\x01\x12\x0c\n\x08NoStream\x10\x02\x12\
+    \x11\n\rStreamDeleted\x10\x03\x12\t\n\x05Error\x10\x04\x12\x10\n\x0cAcce\
+    ssDenied\x10\x05\"\xd4\x01\n\x10ReadStreamEvents\x12&\n\x0fevent_stream_\
+    id\x18\x01\x20\x02(\tR\reventStreamId\x12*\n\x11from_event_number\x18\
+    \x02\x20\x02(\x03R\x0ffromEventNumber\x12\x1b\n\tmax_count\x18\x03\x20\
+    \x02(\x05R\x08maxCount\x12(\n\x10resolve_link_tos\x18\x04\x20\x02(\x08R\
+    \x0eresolveLinkTos\x12%\n\x0erequire_master\x18\x05\x20\x02(\x08R\rrequi\
+    reMaster\"\xfe\x03\n\x19ReadStreamEventsCompleted\x12H\n\x06events\x18\
+    \x01\x20\x03(\x0b20.EventStore.Client.Messages.ResolvedIndexedEventR\x06\
+    events\x12^\n\x06result\x18\x02\x20\x02(\x0e2F.EventStore.Client.Message\
+    s.ReadStreamEventsCompleted.ReadStreamResultR\x06result\x12*\n\x11next_e\
+    vent_number\x18\x03\x20\x02(\x03R\x0fnextEventNumber\x12*\n\x11last_even\
+    t_number\x18\x04\x20\x02(\x03R\x0flastEventNumber\x12'\n\x10is_end_of_st\
+    ream\x18\x05\x20\x02(\x08R\risEndOfStream\x120\n\x14last_commit_position\
+    \x18\x06\x20\x02(\x03R\x12lastCommitPosition\x12\x14\n\x05error\x18\x07\
+    \x20\x01(\tR\x05error\"n\n\x10ReadStreamResult\x12\x0b\n\x07Success\x10\
+    \0\x12\x0c\n\x08NoStream\x10\x01\x12\x11\n\rStreamDeleted\x10\x02\x12\
+    \x0f\n\x0bNotModified\x10\x03\x12\t\n\x05Error\x10\x04\x12\x10\n\x0cAcce\
+    ssDenied\x10\x05\"\xd1\x01\n\rReadAllEvents\x12'\n\x0fcommit_position\
+    \x18\x01\x20\x02(\x03R\x0ecommitPosition\x12)\n\x10prepare_position\x18\
+    \x02\x20\x02(\x03R\x0fpreparePosition\x12\x1b\n\tmax_count\x18\x03\x20\
+    \x02(\x05R\x08maxCount\x12(\n\x10resolve_link_tos\x18\x04\x20\x02(\x08R\
+    \x0eresolveLinkTos\x12%\n\x0erequire_master\x18\x05\x20\x02(\x08R\rrequi\
+    reMaster\"\xda\x03\n\x16ReadAllEventsCompleted\x12'\n\x0fcommit_position\
+    \x18\x01\x20\x02(\x03R\x0ecommitPosition\x12)\n\x10prepare_position\x18\
+    \x02\x20\x02(\x03R\x0fpreparePosition\x12A\n\x06events\x18\x03\x20\x03(\
+    \x0b2).EventStore.Client.Messages.ResolvedEventR\x06events\x120\n\x14nex\
+    t_commit_position\x18\x04\x20\x02(\x03R\x12nextCommitPosition\x122\n\x15\
+    next_prepare_position\x18\x05\x20\x02(\x03R\x13nextPreparePosition\x12a\
+    \n\x06result\x18\x06\x20\x01(\x0e2@.EventStore.Client.Messages.ReadAllEv\
+    entsCompleted.ReadAllResult:\x07SuccessR\x06result\x12\x14\n\x05error\
+    \x18\x07\x20\x01(\tR\x05error\"J\n\rReadAllResult\x12\x0b\n\x07Success\
+    \x10\0\x12\x0f\n\x0bNotModified\x10\x01\x12\t\n\x05Error\x10\x02\x12\x10\
+    \n\x0cAccessDenied\x10\x03\"\x81\x06\n\x1cCreatePersistentSubscription\
+    \x126\n\x17subscription_group_name\x18\x01\x20\x02(\tR\x15subscriptionGr\
+    oupName\x12&\n\x0fevent_stream_id\x18\x02\x20\x02(\tR\reventStreamId\x12\
+    (\n\x10resolve_link_tos\x18\x03\x20\x02(\x08R\x0eresolveLinkTos\x12\x1d\
+    \n\nstart_from\x18\x04\x20\x02(\x03R\tstartFrom\x12@\n\x1cmessage_timeou\
+    t_milliseconds\x18\x05\x20\x02(\x05R\x1amessageTimeoutMilliseconds\x12+\
+    \n\x11record_statistics\x18\x06\x20\x02(\x08R\x10recordStatistics\x12(\n\
+    \x10live_buffer_size\x18\x07\x20\x02(\x05R\x0eliveBufferSize\x12&\n\x0fr\
+    ead_batch_size\x18\x08\x20\x02(\x05R\rreadBatchSize\x12\x1f\n\x0bbuffer_\
+    size\x18\t\x20\x02(\x05R\nbufferSize\x12&\n\x0fmax_retry_count\x18\n\x20\
+    \x02(\x05R\rmaxRetryCount\x12,\n\x12prefer_round_robin\x18\x0b\x20\x02(\
+    \x08R\x10preferRoundRobin\x122\n\x15checkpoint_after_time\x18\x0c\x20\
+    \x02(\x05R\x13checkpointAfterTime\x120\n\x14checkpoint_max_count\x18\r\
+    \x20\x02(\x05R\x12checkpointMaxCount\x120\n\x14checkpoint_min_count\x18\
+    \x0e\x20\x02(\x05R\x12checkpointMinCount\x120\n\x14subscriber_max_count\
+    \x18\x0f\x20\x02(\x05R\x12subscriberMaxCount\x126\n\x17named_consumer_st\
+    rategy\x18\x10\x20\x01(\tR\x15namedConsumerStrategy\"~\n\x1cDeletePersis\
+    tentSubscription\x126\n\x17subscription_group_name\x18\x01\x20\x02(\tR\
+    \x15subscriptionGroupName\x12&\n\x0fevent_stream_id\x18\x02\x20\x02(\tR\
+    \reventStreamId\"\x81\x06\n\x1cUpdatePersistentSubscription\x126\n\x17su\
+    bscription_group_name\x18\x01\x20\x02(\tR\x15subscriptionGroupName\x12&\
     \n\x0fevent_stream_id\x18\x02\x20\x02(\tR\reventStreamId\x12(\n\x10resol\
     ve_link_tos\x18\x03\x20\x02(\x08R\x0eresolveLinkTos\x12\x1d\n\nstart_fro\
     m\x18\x04\x20\x02(\x03R\tstartFrom\x12@\n\x1cmessage_timeout_millisecond\
@@ -13774,107 +13782,82 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     eckpointMaxCount\x120\n\x14checkpoint_min_count\x18\x0e\x20\x02(\x05R\
     \x12checkpointMinCount\x120\n\x14subscriber_max_count\x18\x0f\x20\x02(\
     \x05R\x12subscriberMaxCount\x126\n\x17named_consumer_strategy\x18\x10\
-    \x20\x01(\tR\x15namedConsumerStrategy:\x08\x98\xa7\x08\x01\xa0\xa7\x08\
-    \x01\"\x88\x01\n\x1cDeletePersistentSubscription\x126\n\x17subscription_\
-    group_name\x18\x01\x20\x02(\tR\x15subscriptionGroupName\x12&\n\x0fevent_\
-    stream_id\x18\x02\x20\x02(\tR\reventStreamId:\x08\x98\xa7\x08\x01\xa0\
-    \xa7\x08\x01\"\x8b\x06\n\x1cUpdatePersistentSubscription\x126\n\x17subsc\
-    ription_group_name\x18\x01\x20\x02(\tR\x15subscriptionGroupName\x12&\n\
-    \x0fevent_stream_id\x18\x02\x20\x02(\tR\reventStreamId\x12(\n\x10resolve\
-    _link_tos\x18\x03\x20\x02(\x08R\x0eresolveLinkTos\x12\x1d\n\nstart_from\
-    \x18\x04\x20\x02(\x03R\tstartFrom\x12@\n\x1cmessage_timeout_milliseconds\
-    \x18\x05\x20\x02(\x05R\x1amessageTimeoutMilliseconds\x12+\n\x11record_st\
-    atistics\x18\x06\x20\x02(\x08R\x10recordStatistics\x12(\n\x10live_buffer\
-    _size\x18\x07\x20\x02(\x05R\x0eliveBufferSize\x12&\n\x0fread_batch_size\
-    \x18\x08\x20\x02(\x05R\rreadBatchSize\x12\x1f\n\x0bbuffer_size\x18\t\x20\
-    \x02(\x05R\nbufferSize\x12&\n\x0fmax_retry_count\x18\n\x20\x02(\x05R\rma\
-    xRetryCount\x12,\n\x12prefer_round_robin\x18\x0b\x20\x02(\x08R\x10prefer\
-    RoundRobin\x122\n\x15checkpoint_after_time\x18\x0c\x20\x02(\x05R\x13chec\
-    kpointAfterTime\x120\n\x14checkpoint_max_count\x18\r\x20\x02(\x05R\x12ch\
-    eckpointMaxCount\x120\n\x14checkpoint_min_count\x18\x0e\x20\x02(\x05R\
-    \x12checkpointMinCount\x120\n\x14subscriber_max_count\x18\x0f\x20\x02(\
-    \x05R\x12subscriberMaxCount\x126\n\x17named_consumer_strategy\x18\x10\
-    \x20\x01(\tR\x15namedConsumerStrategy:\x08\x98\xa7\x08\x01\xa0\xa7\x08\
-    \x01\"\xb2\x02\n%UpdatePersistentSubscriptionCompleted\x12\x85\x01\n\x06\
-    result\x18\x01\x20\x02(\x0e2d.EventStore.Client.Messages.UpdatePersisten\
-    tSubscriptionCompleted.UpdatePersistentSubscriptionResult:\x07SuccessR\
-    \x06result\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\"_\n\"Updat\
-    ePersistentSubscriptionResult\x12\x0b\n\x07Success\x10\0\x12\x10\n\x0cDo\
-    esNotExist\x10\x01\x12\x08\n\x04Fail\x10\x02\x12\x10\n\x0cAccessDenied\
-    \x10\x03:\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\xb3\x02\n%CreatePersiste\
-    ntSubscriptionCompleted\x12\x85\x01\n\x06result\x18\x01\x20\x02(\x0e2d.E\
-    ventStore.Client.Messages.CreatePersistentSubscriptionCompleted.CreatePe\
-    rsistentSubscriptionResult:\x07SuccessR\x06result\x12\x16\n\x06reason\
-    \x18\x02\x20\x01(\tR\x06reason\"`\n\"CreatePersistentSubscriptionResult\
-    \x12\x0b\n\x07Success\x10\0\x12\x11\n\rAlreadyExists\x10\x01\x12\x08\n\
-    \x04Fail\x10\x02\x12\x10\n\x0cAccessDenied\x10\x03:\x08\x98\xa7\x08\x01\
-    \xa0\xa7\x08\x01\"\xb2\x02\n%DeletePersistentSubscriptionCompleted\x12\
-    \x85\x01\n\x06result\x18\x01\x20\x02(\x0e2d.EventStore.Client.Messages.D\
-    eletePersistentSubscriptionCompleted.DeletePersistentSubscriptionResult:\
-    \x07SuccessR\x06result\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\
-    \"_\n\"DeletePersistentSubscriptionResult\x12\x0b\n\x07Success\x10\0\x12\
-    \x10\n\x0cDoesNotExist\x10\x01\x12\x08\n\x04Fail\x10\x02\x12\x10\n\x0cAc\
-    cessDenied\x10\x03:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\"\xb9\x01\n\x1fC\
-    onnectToPersistentSubscription\x12'\n\x0fsubscription_id\x18\x01\x20\x02\
-    (\tR\x0esubscriptionId\x12&\n\x0fevent_stream_id\x18\x02\x20\x02(\tR\rev\
-    entStreamId\x12;\n\x1aallowed_in_flight_messages\x18\x03\x20\x02(\x05R\
-    \x17allowedInFlightMessages:\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\x84\
-    \x01\n\x1fPersistentSubscriptionAckEvents\x12'\n\x0fsubscription_id\x18\
-    \x01\x20\x02(\tR\x0esubscriptionId\x12.\n\x13processed_event_ids\x18\x02\
-    \x20\x03(\x0cR\x11processedEventIds:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\
-    \"\xc9\x02\n\x1fPersistentSubscriptionNakEvents\x12'\n\x0fsubscription_i\
-    d\x18\x01\x20\x02(\tR\x0esubscriptionId\x12.\n\x13processed_event_ids\
-    \x18\x02\x20\x03(\x0cR\x11processedEventIds\x12\x18\n\x07message\x18\x03\
-    \x20\x01(\tR\x07message\x12f\n\x06action\x18\x04\x20\x02(\x0e2E.EventSto\
-    re.Client.Messages.PersistentSubscriptionNakEvents.NakAction:\x07Unknown\
-    R\x06action\"A\n\tNakAction\x12\x0b\n\x07Unknown\x10\0\x12\x08\n\x04Park\
-    \x10\x01\x12\t\n\x05Retry\x10\x02\x12\x08\n\x04Skip\x10\x03\x12\x08\n\
-    \x04Stop\x10\x04:\x08\xa0\xa7\x08\x01\x98\xa7\x08\x01\"\xb5\x01\n\"Persi\
-    stentSubscriptionConfirmation\x120\n\x14last_commit_position\x18\x01\x20\
-    \x02(\x03R\x12lastCommitPosition\x12'\n\x0fsubscription_id\x18\x02\x20\
-    \x02(\tR\x0esubscriptionId\x12*\n\x11last_event_number\x18\x03\x20\x01(\
-    \x03R\x0flastEventNumber:\x08\x98\xa7\x08\x01\xa0\xa7\x08\x01\"\x93\x01\
-    \n)PersistentSubscriptionStreamEventAppeared\x12F\n\x05event\x18\x01\x20\
-    \x02(\x0b20.EventStore.Client.Messages.ResolvedIndexedEventR\x05event\
-    \x12\x1e\n\nretryCount\x18\x02\x20\x01(\x05R\nretryCount\"o\n\x11Subscri\
-    beToStream\x12&\n\x0fevent_stream_id\x18\x01\x20\x02(\tR\reventStreamId\
-    \x12(\n\x10resolve_link_tos\x18\x02\x20\x02(\x08R\x0eresolveLinkTos:\x08\
-    \xa0\xa7\x08\x01\x98\xa7\x08\x01\"x\n\x18SubscriptionConfirmation\x120\n\
-    \x14last_commit_position\x18\x01\x20\x02(\x03R\x12lastCommitPosition\x12\
-    *\n\x11last_event_number\x18\x02\x20\x01(\x03R\x0flastEventNumber\"V\n\
-    \x13StreamEventAppeared\x12?\n\x05event\x18\x01\x20\x02(\x0b2).EventStor\
-    e.Client.Messages.ResolvedEventR\x05event\"\x17\n\x15UnsubscribeFromStre\
-    am\"\x92\x02\n\x13SubscriptionDropped\x12l\n\x06reason\x18\x01\x20\x01(\
-    \x0e2F.EventStore.Client.Messages.SubscriptionDropped.SubscriptionDropRe\
-    ason:\x0cUnsubscribedR\x06reason\"\x8c\x01\n\x16SubscriptionDropReason\
-    \x12\x10\n\x0cUnsubscribed\x10\0\x12\x10\n\x0cAccessDenied\x10\x01\x12\
-    \x0c\n\x08NotFound\x10\x02\x12!\n\x1dPersistentSubscriptionDeleted\x10\
-    \x03\x12\x1d\n\x19SubscriberMaxCountReached\x10\x04\"\x8b\x04\n\nNotHand\
-    led\x12O\n\x06reason\x18\x01\x20\x02(\x0e27.EventStore.Client.Messages.N\
-    otHandled.NotHandledReasonR\x06reason\x12'\n\x0fadditional_info\x18\x02\
-    \x20\x01(\x0cR\x0eadditionalInfo\x1a\xc4\x02\n\nMasterInfo\x120\n\x14ext\
-    ernal_tcp_address\x18\x01\x20\x02(\tR\x12externalTcpAddress\x12*\n\x11ex\
-    ternal_tcp_port\x18\x02\x20\x02(\x05R\x0fexternalTcpPort\x122\n\x15exter\
-    nal_http_address\x18\x03\x20\x02(\tR\x13externalHttpAddress\x12,\n\x12ex\
-    ternal_http_port\x18\x04\x20\x02(\x05R\x10externalHttpPort\x12=\n\x1bext\
-    ernal_secure_tcp_address\x18\x05\x20\x01(\tR\x18externalSecureTcpAddress\
-    \x127\n\x18external_secure_tcp_port\x18\x06\x20\x01(\x05R\x15externalSec\
-    ureTcpPort\"<\n\x10NotHandledReason\x12\x0c\n\x08NotReady\x10\0\x12\x0b\
-    \n\x07TooBusy\x10\x01\x12\r\n\tNotMaster\x10\x02\"\x12\n\x10ScavengeData\
-    base\"\x9a\x02\n\x19ScavengeDatabaseCompleted\x12\\\n\x06result\x18\x01\
-    \x20\x02(\x0e2D.EventStore.Client.Messages.ScavengeDatabaseCompleted.Sca\
-    vengeResultR\x06result\x12\x14\n\x05error\x18\x02\x20\x01(\tR\x05error\
-    \x12\"\n\rtotal_time_ms\x18\x03\x20\x02(\x05R\x0btotalTimeMs\x12*\n\x11t\
-    otal_space_saved\x18\x04\x20\x02(\x03R\x0ftotalSpaceSaved\"9\n\x0eScaven\
-    geResult\x12\x0b\n\x07Success\x10\0\x12\x0e\n\nInProgress\x10\x01\x12\n\
-    \n\x06Failed\x10\x02\"S\n\x0eIdentifyClient\x12\x18\n\x07version\x18\x01\
-    \x20\x02(\x05R\x07version\x12'\n\x0fconnection_name\x18\x02\x20\x01(\tR\
-    \x0econnectionName\"\x12\n\x10ClientIdentified*\xb0\x01\n\x0fOperationRe\
-    sult\x12\x0b\n\x07Success\x10\0\x12\x12\n\x0ePrepareTimeout\x10\x01\x12\
-    \x11\n\rCommitTimeout\x10\x02\x12\x12\n\x0eForwardTimeout\x10\x03\x12\
-    \x18\n\x14WrongExpectedVersion\x10\x04\x12\x11\n\rStreamDeleted\x10\x05\
-    \x12\x16\n\x12InvalidTransaction\x10\x06\x12\x10\n\x0cAccessDenied\x10\
-    \x07\
+    \x20\x01(\tR\x15namedConsumerStrategy\"\xa8\x02\n%UpdatePersistentSubscr\
+    iptionCompleted\x12\x85\x01\n\x06result\x18\x01\x20\x02(\x0e2d.EventStor\
+    e.Client.Messages.UpdatePersistentSubscriptionCompleted.UpdatePersistent\
+    SubscriptionResult:\x07SuccessR\x06result\x12\x16\n\x06reason\x18\x02\
+    \x20\x01(\tR\x06reason\"_\n\"UpdatePersistentSubscriptionResult\x12\x0b\
+    \n\x07Success\x10\0\x12\x10\n\x0cDoesNotExist\x10\x01\x12\x08\n\x04Fail\
+    \x10\x02\x12\x10\n\x0cAccessDenied\x10\x03\"\xa9\x02\n%CreatePersistentS\
+    ubscriptionCompleted\x12\x85\x01\n\x06result\x18\x01\x20\x02(\x0e2d.Even\
+    tStore.Client.Messages.CreatePersistentSubscriptionCompleted.CreatePersi\
+    stentSubscriptionResult:\x07SuccessR\x06result\x12\x16\n\x06reason\x18\
+    \x02\x20\x01(\tR\x06reason\"`\n\"CreatePersistentSubscriptionResult\x12\
+    \x0b\n\x07Success\x10\0\x12\x11\n\rAlreadyExists\x10\x01\x12\x08\n\x04Fa\
+    il\x10\x02\x12\x10\n\x0cAccessDenied\x10\x03\"\xa8\x02\n%DeletePersisten\
+    tSubscriptionCompleted\x12\x85\x01\n\x06result\x18\x01\x20\x02(\x0e2d.Ev\
+    entStore.Client.Messages.DeletePersistentSubscriptionCompleted.DeletePer\
+    sistentSubscriptionResult:\x07SuccessR\x06result\x12\x16\n\x06reason\x18\
+    \x02\x20\x01(\tR\x06reason\"_\n\"DeletePersistentSubscriptionResult\x12\
+    \x0b\n\x07Success\x10\0\x12\x10\n\x0cDoesNotExist\x10\x01\x12\x08\n\x04F\
+    ail\x10\x02\x12\x10\n\x0cAccessDenied\x10\x03\"\xaf\x01\n\x1fConnectToPe\
+    rsistentSubscription\x12'\n\x0fsubscription_id\x18\x01\x20\x02(\tR\x0esu\
+    bscriptionId\x12&\n\x0fevent_stream_id\x18\x02\x20\x02(\tR\reventStreamI\
+    d\x12;\n\x1aallowed_in_flight_messages\x18\x03\x20\x02(\x05R\x17allowedI\
+    nFlightMessages\"z\n\x1fPersistentSubscriptionAckEvents\x12'\n\x0fsubscr\
+    iption_id\x18\x01\x20\x02(\tR\x0esubscriptionId\x12.\n\x13processed_even\
+    t_ids\x18\x02\x20\x03(\x0cR\x11processedEventIds\"\xbf\x02\n\x1fPersiste\
+    ntSubscriptionNakEvents\x12'\n\x0fsubscription_id\x18\x01\x20\x02(\tR\
+    \x0esubscriptionId\x12.\n\x13processed_event_ids\x18\x02\x20\x03(\x0cR\
+    \x11processedEventIds\x12\x18\n\x07message\x18\x03\x20\x01(\tR\x07messag\
+    e\x12f\n\x06action\x18\x04\x20\x02(\x0e2E.EventStore.Client.Messages.Per\
+    sistentSubscriptionNakEvents.NakAction:\x07UnknownR\x06action\"A\n\tNakA\
+    ction\x12\x0b\n\x07Unknown\x10\0\x12\x08\n\x04Park\x10\x01\x12\t\n\x05Re\
+    try\x10\x02\x12\x08\n\x04Skip\x10\x03\x12\x08\n\x04Stop\x10\x04\"\xab\
+    \x01\n\"PersistentSubscriptionConfirmation\x120\n\x14last_commit_positio\
+    n\x18\x01\x20\x02(\x03R\x12lastCommitPosition\x12'\n\x0fsubscription_id\
+    \x18\x02\x20\x02(\tR\x0esubscriptionId\x12*\n\x11last_event_number\x18\
+    \x03\x20\x01(\x03R\x0flastEventNumber\"\x93\x01\n)PersistentSubscription\
+    StreamEventAppeared\x12F\n\x05event\x18\x01\x20\x02(\x0b20.EventStore.Cl\
+    ient.Messages.ResolvedIndexedEventR\x05event\x12\x1e\n\nretryCount\x18\
+    \x02\x20\x01(\x05R\nretryCount\"e\n\x11SubscribeToStream\x12&\n\x0fevent\
+    _stream_id\x18\x01\x20\x02(\tR\reventStreamId\x12(\n\x10resolve_link_tos\
+    \x18\x02\x20\x02(\x08R\x0eresolveLinkTos\"x\n\x18SubscriptionConfirmatio\
+    n\x120\n\x14last_commit_position\x18\x01\x20\x02(\x03R\x12lastCommitPosi\
+    tion\x12*\n\x11last_event_number\x18\x02\x20\x01(\x03R\x0flastEventNumbe\
+    r\"V\n\x13StreamEventAppeared\x12?\n\x05event\x18\x01\x20\x02(\x0b2).Eve\
+    ntStore.Client.Messages.ResolvedEventR\x05event\"\x17\n\x15UnsubscribeFr\
+    omStream\"\x92\x02\n\x13SubscriptionDropped\x12l\n\x06reason\x18\x01\x20\
+    \x01(\x0e2F.EventStore.Client.Messages.SubscriptionDropped.SubscriptionD\
+    ropReason:\x0cUnsubscribedR\x06reason\"\x8c\x01\n\x16SubscriptionDropRea\
+    son\x12\x10\n\x0cUnsubscribed\x10\0\x12\x10\n\x0cAccessDenied\x10\x01\
+    \x12\x0c\n\x08NotFound\x10\x02\x12!\n\x1dPersistentSubscriptionDeleted\
+    \x10\x03\x12\x1d\n\x19SubscriberMaxCountReached\x10\x04\"\x8b\x04\n\nNot\
+    Handled\x12O\n\x06reason\x18\x01\x20\x02(\x0e27.EventStore.Client.Messag\
+    es.NotHandled.NotHandledReasonR\x06reason\x12'\n\x0fadditional_info\x18\
+    \x02\x20\x01(\x0cR\x0eadditionalInfo\x1a\xc4\x02\n\nMasterInfo\x120\n\
+    \x14external_tcp_address\x18\x01\x20\x02(\tR\x12externalTcpAddress\x12*\
+    \n\x11external_tcp_port\x18\x02\x20\x02(\x05R\x0fexternalTcpPort\x122\n\
+    \x15external_http_address\x18\x03\x20\x02(\tR\x13externalHttpAddress\x12\
+    ,\n\x12external_http_port\x18\x04\x20\x02(\x05R\x10externalHttpPort\x12=\
+    \n\x1bexternal_secure_tcp_address\x18\x05\x20\x01(\tR\x18externalSecureT\
+    cpAddress\x127\n\x18external_secure_tcp_port\x18\x06\x20\x01(\x05R\x15ex\
+    ternalSecureTcpPort\"<\n\x10NotHandledReason\x12\x0c\n\x08NotReady\x10\0\
+    \x12\x0b\n\x07TooBusy\x10\x01\x12\r\n\tNotMaster\x10\x02\"\x12\n\x10Scav\
+    engeDatabase\"\x9a\x02\n\x19ScavengeDatabaseCompleted\x12\\\n\x06result\
+    \x18\x01\x20\x02(\x0e2D.EventStore.Client.Messages.ScavengeDatabaseCompl\
+    eted.ScavengeResultR\x06result\x12\x14\n\x05error\x18\x02\x20\x01(\tR\
+    \x05error\x12\"\n\rtotal_time_ms\x18\x03\x20\x02(\x05R\x0btotalTimeMs\
+    \x12*\n\x11total_space_saved\x18\x04\x20\x02(\x03R\x0ftotalSpaceSaved\"9\
+    \n\x0eScavengeResult\x12\x0b\n\x07Success\x10\0\x12\x0e\n\nInProgress\
+    \x10\x01\x12\n\n\x06Failed\x10\x02\"S\n\x0eIdentifyClient\x12\x18\n\x07v\
+    ersion\x18\x01\x20\x02(\x05R\x07version\x12'\n\x0fconnection_name\x18\
+    \x02\x20\x01(\tR\x0econnectionName\"\x12\n\x10ClientIdentified*\xb0\x01\
+    \n\x0fOperationResult\x12\x0b\n\x07Success\x10\0\x12\x12\n\x0ePrepareTim\
+    eout\x10\x01\x12\x11\n\rCommitTimeout\x10\x02\x12\x12\n\x0eForwardTimeou\
+    t\x10\x03\x12\x18\n\x14WrongExpectedVersion\x10\x04\x12\x11\n\rStreamDel\
+    eted\x10\x05\x12\x16\n\x12InvalidTransaction\x10\x06\x12\x10\n\x0cAccess\
+    Denied\x10\x07\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

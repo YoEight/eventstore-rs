@@ -75,8 +75,10 @@ impl ConnectionBuilder {
     }
 
     /// Default connection name.
-    pub fn with_connection_name(mut self, name: String) -> Self {
-        self.settings.connection_name = Some(name);
+    pub fn with_connection_name<S>(mut self, name: S) -> Self
+        where S: Into<protobuf::Chars>
+    {
+        self.settings.connection_name = Some(name.into());
         self
     }
 

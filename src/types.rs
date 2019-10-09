@@ -141,7 +141,7 @@ pub struct Settings {
     pub default_user: Option<Credentials>,
 
     /// Default connection name.
-    pub connection_name: Option<String>,
+    pub connection_name: Option<protobuf::Chars>,
 
     /// The period used to check pending command. Those checks include if the
     /// the connection has timeout or if the command was issued with a
