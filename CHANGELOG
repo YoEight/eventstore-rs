@@ -1,3 +1,7 @@
+0.4.3
+=====
+* Fix reading a deleted stream event in $streams stream, causing a read command to abort.
+
 0.4.2
 =====
 * Fix compiler warnings.
