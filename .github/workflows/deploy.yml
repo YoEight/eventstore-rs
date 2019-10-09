@@ -14,6 +14,7 @@ jobs:
       image: rust:1.38
 
     steps:
+    - uses: actions/checkout@v1
     - name: Login on Crates.IO
       env:
         TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
