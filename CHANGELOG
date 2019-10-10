@@ -1,6 +1,7 @@
 0.4.4
 =====
 * Remove debugging leftovers.
+* Add `Pinned` system consumer stategy.
 
 0.4.3
 =====

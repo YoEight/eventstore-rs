@@ -1298,12 +1298,27 @@ pub trait SubscriptionConsumer {
 /// System supported consumer strategies for use with persistent subscriptions.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SystemConsumerStrategy {
-    /// Distributes events to a single client until it is full. Then round
-    /// robin to the next client.
+    /// Distributes events to a single client until the bufferSize is reached.
+    /// After which the next client is selected in a round robin style,
+    /// and the process is repeated.
     DispatchToSingle,
 
-    /// Distributes events to each c lient in a round robin fashion.
+    /// Distributes events to all clients evenly. If the client buffer-size
+    /// is reached the client is ignored until events are
+    /// acknowledged/not acknowledged.
     RoundRobin,
+
+    /// For use with an indexing projection such as the system $by_category
+    /// projection. Event Store inspects event for its source stream id,
+    /// hashing the id to one of 1024 buckets assigned to individual clients.
+    /// When a client disconnects it's buckets are assigned to other clients.
+    /// When a client connects, it is assigned some of the existing buckets.
+    /// This naively attempts to maintain a balanced workload.
+    /// The main aim of this strategy is to decrease the likelihood of
+    /// concurrency and ordering issues while maintaining load balancing.
+    /// This is not a guarantee, and you should handle the usual ordering
+    /// and concurrency issues.
+    Pinned,
 }
 
 impl SystemConsumerStrategy {
@@ -1311,6 +1326,7 @@ impl SystemConsumerStrategy {
         match *self {
             SystemConsumerStrategy::DispatchToSingle => "DispatchToSingle",
             SystemConsumerStrategy::RoundRobin       => "RoundRobin",
+            SystemConsumerStrategy::Pinned           => "Pinned",
         }
     }
 }
