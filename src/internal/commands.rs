@@ -6,7 +6,7 @@ use std::vec::IntoIter;
 
 use futures::sync::mpsc::{ self, Sender };
 use futures::{ Future, Sink, Stream, Poll, Async };
-use protobuf::{ Chars, Message };
+use protobuf::Chars;
 use serde::ser::SerializeSeq;
 use serde_json;
 
@@ -768,8 +768,6 @@ impl <'a> ReadStreamEvents<'a> {
         op.set_max_count(self.max_count);
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
-
-        op.inner.write_to_writer(&mut std::io::stdout()).unwrap();
 
         let op = operations::OperationWrapper::new(op,
                                                    self.creds,
