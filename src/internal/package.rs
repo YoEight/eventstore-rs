@@ -6,6 +6,7 @@ use crate::internal::command::Cmd;
 use crate::internal::messages;
 use crate::types::Credentials;
 
+#[derive(Debug)]
 pub struct Pkg {
     pub cmd: Cmd,
     pub creds_opt: Option<Credentials>,

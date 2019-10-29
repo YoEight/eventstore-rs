@@ -8,6 +8,8 @@ use futures::stream::iter_ok;
 use tokio::spawn;
 use tokio::codec::{ Decoder, Encoder };
 use tokio::net::TcpStream;
+use tokio::timer::timeout::Timeout;
+use tokio::prelude;
 use uuid::{ Uuid, BytesError };
 
 use crate::internal::command::Cmd;
@@ -16,7 +18,8 @@ use crate::internal::package::Pkg;
 use crate::types::Credentials;
 
 pub(crate) struct Connection {
-    pub(crate) id:     Uuid,
+    pub(crate) id: Uuid,
+    pub(crate) desc: String,
     sender: Sender<Pkg>,
 }
 
@@ -148,87 +151,75 @@ impl Encoder for PkgCodec {
     }
 }
 
-#[derive(Debug)]
-enum ConnErr {
-    ConnectError(io::Error),
-    MpscClose,
+#[inline]
+fn timeout_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, "Connection timeout")
 }
 
-fn io_error_only<A>(res: Result<A, ConnErr>) -> io::Result<()> {
-    match res {
-        Ok(_)    => Ok(()),
-        Err(typ) => match typ {
-            ConnErr::MpscClose       => Ok(()),
-            ConnErr::ConnectError(e) => Err(e),
-        },
-    }
+#[inline]
+fn bus_closed() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, "Bus closed")
 }
 
 impl Connection {
     pub(crate) fn new(bus: Sender<Msg>, addr: SocketAddr) -> Connection {
+        let bus = bus.sink_map_err(|_| ());
         let (sender, recv) = channel(500);
-        let id             = Uuid::new_v4();
-        let cloned_bus     = bus.clone();
+        let id = Uuid::new_v4();
+        let desc = format!("{:?}", addr);
+        let delay = std::time::Duration::from_secs(5);
 
         let conn_fut =
-                TcpStream::connect(&addr)
-                    .map_err(ConnErr::ConnectError)
-                    .and_then(move |stream|{
-                        bus.send(Msg::Established(id))
-                            .map_err(|_| ConnErr::MpscClose)
-                            .map(|bus| (bus, stream))
-                    });
+            Timeout::new(TcpStream::connect(&addr), delay).then(move |result| {
+                match result {
+                    Ok(stream) => {
+                        let (txing, rcving) = PkgCodec::new().framed(stream).split();
 
-        let conn_fut =
-            conn_fut.and_then(move |(bus, stream)| {
-                let (txing, rcving) = PkgCodec::new().framed(stream).split();
+                        let input =
+                            prelude::stream::once(Ok(Msg::Established(id)))
+                                .select(rcving.map(Msg::Arrived))
+                                .or_else(move |e| Ok(Msg::ConnectionClosed(id, e)));
 
-                let rcving =
-                    rcving.map_err(ConnErr::ConnectError)
-                        .fold(bus.clone(), |bus, pkg| {
-                            bus.send(Msg::Arrived(pkg))
-                                .map_err(|_| ConnErr::MpscClose)
-                        });
+                        let reading = input.forward(bus.clone());
+                        let writing = recv.map_err(|_| bus_closed()).forward(txing);
 
-                let cloned = bus.clone();
-                let rcving =
-                    rcving.then(io_error_only)
-                        .or_else(move |e| {
-                            cloned.send(Msg::ConnectionClosed(id, e))
-                                .then(|_| Ok(()))
-                        });
+                        tokio::spawn(reading.map(|_| ()));
+                        tokio::spawn(writing.then(move |result| {
+                            if let Err(e) = result {
+                                let action =
+                                    bus.send(Msg::ConnectionClosed(id, e))
+                                        .then(|_| Ok::<(), ()>(()));
 
-                let txing =
-                    recv.map_err(|_| ConnErr::MpscClose)
-                        .fold(txing, |sender, pkg| {
-                            sender.send(pkg).map_err(ConnErr::ConnectError)
-                        });
+                                tokio::spawn(action);
+                            }
 
-                let cloned = bus.clone();
-                let txing  =
-                    txing.then(io_error_only)
-                        .or_else(move |e| {
-                            cloned.send(Msg::ConnectionClosed(id, e))
-                                .then(|_| Ok(()))
-                        });
+                            Ok::<(), ()>(())
+                        }));
+                    },
 
-                spawn(rcving);
-                spawn(txing);
+                    Err(err) => {
+                        let real_reason = if let Some(reason) = err.into_inner() {
+                            reason
+                        } else {
+                            timeout_error()
+                        };
 
-                Ok(())
+                        let action =
+                            bus.send(Msg::ConnectionClosed(id, real_reason))
+                                .map(|_| ());
+
+                        tokio::spawn(action);
+                    },
+                };
+
+                Ok::<(), ()>(())
             });
 
-        let conn_fut =
-            conn_fut.then(io_error_only)
-                .or_else(move |e| {
-                    cloned_bus.send(Msg::ConnectionClosed(id, e))
-                        .then(|_| Ok(()))
-                });
-
-        spawn(conn_fut);
+        tokio::spawn(conn_fut);
 
         Connection {
             id,
+            desc,
             sender,
         }
     }

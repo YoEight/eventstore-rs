@@ -1,4 +1,5 @@
 use std::io::Error;
+use std::fmt;
 
 use uuid::Uuid;
 
@@ -17,6 +18,25 @@ pub(crate) enum Msg {
     NewOp(operations::OperationWrapper),
     Send(Pkg),
     Marker, // Use as checkpoint detection.
+}
+
+impl fmt::Debug for Msg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Msg::*;
+
+        match self {
+            Start => writeln!(f, "Start"),
+            Shutdown => writeln!(f, "Shutdown"),
+            Tick => writeln!(f, "Tick"),
+            Establish(ept) => writeln!(f, "Establish({:?})", ept),
+            Established(id) => writeln!(f, "Established({:?})", id),
+            Arrived(pkg) => writeln!(f, "Arrived({:?})", pkg),
+            ConnectionClosed(id, e) => writeln!(f, "ConnectionClosed({:?}, {:?})", id, e),
+            NewOp(op) => writeln!(f, "NewOp({:?})", op.id),
+            Send(pkg) => writeln!(f, "Send({:?})", pkg),
+            Marker => writeln!(f, "Marker"),
+        }
+    }
 }
 
 impl Msg {

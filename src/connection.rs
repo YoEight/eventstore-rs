@@ -134,6 +134,7 @@ const DEFAULT_BOX_SIZE: usize = 500;
 fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
     -> impl Future<Item=(), Error=()>
 {
+    #[derive(Debug)]
     enum State {
         Live,
         Clearing,
@@ -159,6 +160,8 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
     }
 
     recv.fold(State::Live, move |acc, msg| {
+        debug!("Bus loop received state {:?}: {:?}", acc, msg);
+
         if let State::Live = &acc {
             match msg {
                 Msg::Start => driver.start(),

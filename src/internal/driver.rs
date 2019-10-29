@@ -96,7 +96,7 @@ impl HealthTracker {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 enum ConnectionState {
     Init,
     Connecting,
@@ -124,7 +124,7 @@ impl InitReq {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Phase {
     Reconnecting,
     EndpointDiscovery,
@@ -276,7 +276,8 @@ impl Driver
                 };
 
             if same_connection {
-                info!("Connection established: {}.", id);
+                let conn = self.candidate.as_ref().expect("If same connection, it means it's defined!");
+                info!("Connection established: {} on {}.", id, conn.desc);
                 self.tracker.reset();
 
                 match self.default_user.clone() {
@@ -310,6 +311,8 @@ impl Driver
             info!("Connection [{}] error. Cause: {}.", conn_id, err);
         }
 
+        debug!("Closing on state {:?} and phase {:?}", self.state, self.phase);
+
         match self.state {
             ConnectionState::Connected => {
                 self.attempt_opt = Some(Attempt::new());
@@ -336,6 +339,8 @@ impl Driver
 
             if let Some(ref conn) = self.candidate {
                 conn.enqueue(resp);
+            } else {
+                warn!("We received an heartbeat request when having no active connection on our side!");
             }
         } else if pkg.cmd == Cmd::HeartbeatResponse {
             // No need to do anything in that situation.
@@ -343,7 +348,7 @@ impl Driver
             if let Some(req) = self.init_req_opt.take() {
                 if req.correlation == pkg.correlation {
                     if let Some(ref conn) = self.candidate {
-                        info!("Connection identified: {}.", conn.id);
+                        info!("Connection identified: {} on {}.", conn.id, conn.desc);
 
                         // HACK: It can happen the user submitted operations before the connection was
                         // available. Those operations are only check on every 's_operationTimeout'

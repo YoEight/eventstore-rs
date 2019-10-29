@@ -153,7 +153,7 @@ pub(crate) struct OperationWrapper {
     creds: Option<types::Credentials>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct Tracking {
     id: Uuid,
     cmd: Cmd,
@@ -337,6 +337,7 @@ impl OperationWrapper {
 
         tracker.attempts += 1;
         tracker.id       = Uuid::new_v4();
+        tracker.started  = Instant::now();
 
         let req      = self.inner.retry(tracker.cmd);
         let decision = req.send(tracker.id, self.creds.clone(), dest);
