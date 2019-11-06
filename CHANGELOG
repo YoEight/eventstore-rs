@@ -1,3 +1,9 @@
+0.4.5
+=====
+* Update persistent subscription default settings.
+* Internal connection refactoring.
+* Implement `iterate_over_batch`.
+
 0.4.4
 =====
 * Remove debugging leftovers.
