@@ -1386,10 +1386,10 @@ impl PersistentSubscriptionSettings {
             start_from: -1, // Means the stream doesn't exist yet.
             extra_stats: false,
             msg_timeout: Duration::from_secs(30),
-            max_retry_count: 500,
+            max_retry_count: 10,
             live_buf_size: 500,
-            read_batch_size: 10,
-            history_buf_size: 20,
+            read_batch_size: 20,
+            history_buf_size: 500,
             checkpoint_after: Duration::from_secs(2),
             min_checkpoint_count: 10,
             max_checkpoint_count: 1000,
