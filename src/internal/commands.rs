@@ -2,7 +2,6 @@
 use std::collections::HashMap;
 use std::mem;
 use std::ops::Deref;
-use std::vec::IntoIter;
 
 use futures::sync::mpsc::{ self, Sender };
 use futures::{ Future, Sink, Stream, Poll, Async };
@@ -783,9 +782,10 @@ impl <'a> ReadStreamEvents<'a> {
     /// the direction is `Forward`, it ends when the last stream event is reached.
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
-    /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self)
-        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
+    /// (link resolution, require master, starting point, batch size, …etc). Each
+    /// element corresponds to a page with a length <= `max_count`.
+    pub fn iterate_over_batch(self)
+        -> impl Stream<Item=Vec<types::ResolvedEvent>, Error=OperationError> + 'a
     {
         let params = IterParams {
             sender: self.sender,
@@ -808,6 +808,21 @@ impl <'a> ReadStreamEvents<'a> {
             state: Fetch::Needed,
         }
     }
+
+    /// Returns a `Stream` that consumes a stream entirely. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc).
+    pub fn iterate_over(self)
+        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
+    {
+        use futures::stream;
+
+        self.iterate_over_batch()
+            .map(stream::iter_ok)
+            .flatten()
+    }
 }
 
 struct Fetcher<F> where F: FetchStream
@@ -819,7 +834,7 @@ struct Fetcher<F> where F: FetchStream
 
 impl<F> Stream for Fetcher<F> where F: FetchStream
 {
-    type Item = types::ResolvedEvent;
+    type Item = Vec<types::ResolvedEvent>;
     type Error = OperationError;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -830,17 +845,11 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                     self.state = Fetch::Fetching(fut);
                 },
 
-                Fetch::Fetched(mut events, next) => {
-                    if let Some(event) = events.next() {
-                        self.state = Fetch::Fetched(events, next);
-
-                        return Ok(Async::Ready(Some(event)));
-                    } else if let Some(pos) = next {
+                Fetch::Next(next) => {
+                    if let Some(pos) = next {
                         self.pos = pos;
                         self.state = Fetch::Needed;
                     } else {
-                        self.state = Fetch::Fetched(events, next);
-
                         return Ok(Async::Ready(None));
                     }
                 },
@@ -866,8 +875,6 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                                         // Other `types::ReadStreamError` aren't blocking errors
                                         // so we consider the stream as an empty one.
                                         _ => {
-                                            self.state = Fetch::Fetched(vec![].into_iter(), None);
-
                                             return Ok(Async::Ready(None));
                                         }
                                     }
@@ -876,13 +883,13 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                                 types::ReadStreamStatus::Success(slice) =>
                                     match slice.events() {
                                         types::LocatedEvents::EndOfStream => {
-                                            self.state = Fetch::Fetched(vec![].into_iter(), None);
-
                                             return Ok(Async::Ready(None));
                                         },
 
                                         types::LocatedEvents::Events { events, next } => {
-                                            self.state = Fetch::Fetched(events.into_iter(), next);
+                                            self.state = Fetch::Next(next);
+
+                                            return Ok(Async::Ready(Some(events)));
                                         }
                                     }
                             }
@@ -956,7 +963,7 @@ impl<'a> FetchStream for FetchAllStream<'a> {
 enum Fetch<S, P> {
     Needed,
     Fetching(Box<dyn Future<Item=types::ReadStreamStatus<S>, Error=OperationError>>),
-    Fetched(IntoIter<types::ResolvedEvent>, Option<P>),
+    Next(Option<P>),
 }
 
 /// Like `ReadStreamEvents` but specialized to system stream '$all'.
@@ -1073,9 +1080,10 @@ impl <'a> ReadAllEvents<'a> {
     /// the direction is `Forward`, it ends when the last stream event is reached.
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
-    /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self)
-        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
+    /// (link resolution, require master, starting point, batch size, …etc). Each
+    /// element corresponds to a page with a length <= `max_count`.
+    pub fn iterate_over_batch(self)
+        -> impl Stream<Item=Vec<types::ResolvedEvent>, Error=OperationError> + 'a
     {
         let params = IterParams {
             sender: self.sender,
@@ -1096,6 +1104,21 @@ impl <'a> ReadAllEvents<'a> {
             fetcher,
             state: Fetch::Needed,
         }
+    }
+
+    /// Returns a `Stream` that consumes a stream entirely. For example, if
+    /// the direction is `Forward`, it ends when the last stream event is reached.
+    /// However, if the direction is `Backward`, the iterator ends when the
+    /// first event is reached. All the configuration is pass to the iterator
+    /// (link resolution, require master, starting point, batch size, …etc).
+    pub fn iterate_over(self)
+        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
+    {
+        use futures::stream;
+
+        self.iterate_over_batch()
+            .map(stream::iter_ok)
+            .flatten()
     }
 }
 
