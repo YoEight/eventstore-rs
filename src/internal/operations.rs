@@ -1602,7 +1602,7 @@ impl<A: Catchup> CatchupWrapper<A> {
         // It would not be possible to do it without tricking the
         // Rust move semantic.
         unsafe {
-            let mut recv = mem::replace(&mut self.recv, mem::uninitialized());
+            let mut recv = mem::replace(&mut self.recv, mem::MaybeUninit::uninit().assume_init());
             let mut cpt  = 0;
 
             while cpt < self.flying_event_count {

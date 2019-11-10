@@ -1,3 +1,7 @@
+0.4.6
+=====
+* Support Rust 1.39
+
 0.4.5
 =====
 * Update persistent subscription default settings.
