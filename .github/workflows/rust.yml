@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: rust:1.38
+      image: rust:1.39
 
     services:
       eventstore:
