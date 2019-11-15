@@ -45,10 +45,10 @@ pub struct WriteEvents<'a> {
 
 impl <'a> WriteEvents<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> WriteEvents
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         WriteEvents {
-            stream: stream.into(),
+            stream: stream.as_ref().into(),
             events: Vec::new(),
             require_master: false,
             version: types::ExpectedVersion::Any,
@@ -136,10 +136,10 @@ impl <'a> ReadEvent<'a> {
         stream: S,
         event_number: i64,
         settings: &types::Settings) -> ReadEvent
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         ReadEvent {
-            stream: stream.into(),
+            stream: stream.as_ref().into(),
             event_number,
             sender,
             resolve_link_tos: false,
@@ -394,11 +394,11 @@ impl <'a> WriteStreamMetadata<'a> {
         stream: S,
         metadata: types::StreamMetadata,
         settings: &types::Settings) -> WriteStreamMetadata
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         WriteStreamMetadata {
             metadata,
-            inner: WriteEvents::new(sender, format!("$${}", stream.into().deref()), settings),
+            inner: WriteEvents::new(sender, format!("$${}", stream.as_ref()), settings),
         }
     }
 
@@ -443,13 +443,13 @@ pub struct ReadStreamMetadata<'a> {
 
 impl <'a> ReadStreamMetadata<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> ReadStreamMetadata
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
-        let stream_chars = stream.into();
-        let name         = format!("$${}", stream_chars.deref());
+        let name = format!("$${}", stream.as_ref());
+        let stream: Chars = stream.as_ref().into();
 
         ReadStreamMetadata {
-            stream: stream_chars,
+            stream,
             inner: ReadEvent::new(sender, name, -1, settings),
         }
     }
@@ -471,7 +471,7 @@ impl <'a> ReadStreamMetadata<'a> {
 
     /// Sends asynchronously the read command to the server.
     pub fn execute(self) -> impl Future<Item=types::StreamMetadataResult, Error=OperationError> {
-        let stream = self.stream;
+        let stream = self.stream.deref().to_owned();
 
         self.inner.execute().map(|res| {
             match res {
@@ -519,10 +519,10 @@ impl <'a> TransactionStart<'a> {
         sender: Sender<Msg>,
         stream: S,
         settings: &'a types::Settings) -> TransactionStart
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         TransactionStart {
-            stream: stream.into(),
+            stream: stream.as_ref().into(),
             require_master: false,
             version: types::ExpectedVersion::Any,
             creds_opt: None,
@@ -678,10 +678,10 @@ pub struct ReadStreamEvents<'a> {
 
 impl <'a> ReadStreamEvents<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> ReadStreamEvents
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         ReadStreamEvents {
-            stream: stream.into(),
+            stream: stream.as_ref().into(),
             max_count: 500,
             start: 0,
             require_master: false,
@@ -926,7 +926,7 @@ impl<'a> FetchStream for FetchRegularStream<'a> {
     fn fetch(&self, pos: i64)
         -> Box<dyn Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError>>
     {
-        let fut = ReadStreamEvents::new(self.params.sender.clone(), self.stream_name.clone(), self.params.settings)
+        let fut = ReadStreamEvents::new(self.params.sender.clone(), self.stream_name.deref(), self.params.settings)
             .resolve_link_tos(self.params.link_tos)
             .start_from(pos)
             .max_count(self.params.max_count)
@@ -1137,10 +1137,10 @@ pub struct DeleteStream<'a> {
 
 impl <'a> DeleteStream<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> DeleteStream
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         DeleteStream {
-            stream: stream.into(),
+            stream: stream.as_ref().into(),
             require_master: false,
             hard_delete: false,
             version: types::ExpectedVersion::Any,
@@ -1225,10 +1225,10 @@ pub struct SubscribeToStream<'a> {
 impl <'a> SubscribeToStream<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream_id: S, settings: &types::Settings)
         -> SubscribeToStream
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         SubscribeToStream {
-            stream_id: stream_id.into(),
+            stream_id: stream_id.as_ref().into(),
             resolve_link_tos: false,
             creds: None,
             sender,
@@ -1308,9 +1308,9 @@ pub struct RegularCatchupSubscribe<'a> {
 }
 
 impl <'a> RegularCatchupSubscribe<'a> {
-    pub(crate) fn new<S: Into<Chars>>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> RegularCatchupSubscribe {
+    pub(crate) fn new<S: AsRef<str>>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> RegularCatchupSubscribe {
         RegularCatchupSubscribe {
-            stream_id: stream.into(),
+            stream_id: stream.as_ref().into(),
             resolve_link_tos: false,
             require_master: false,
             batch_size: 500,
@@ -1498,11 +1498,11 @@ impl<'a> CreatePersistentSubscription<'a> {
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> CreatePersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         CreatePersistentSubscription {
-            stream_id: stream_id.into(),
-            group_name: group_name.into(),
+            stream_id: stream_id.as_ref().into(),
+            group_name: group_name.as_ref().into(),
             sender,
             settings,
             creds: None,
@@ -1570,11 +1570,11 @@ impl<'a> UpdatePersistentSubscription<'a> {
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> UpdatePersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         UpdatePersistentSubscription {
-            stream_id: stream_id.into(),
-            group_name: group_name.into(),
+            stream_id: stream_id.as_ref().into(),
+            group_name: group_name.as_ref().into(),
             sender,
             settings,
             creds: None,
@@ -1641,11 +1641,11 @@ impl<'a> DeletePersistentSubscription<'a> {
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> DeletePersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         DeletePersistentSubscription {
-            stream_id: stream_id.into(),
-            group_name: group_name.into(),
+            stream_id: stream_id.as_ref().into(),
+            group_name: group_name.as_ref().into(),
             sender,
             settings,
             creds: None,
@@ -1703,11 +1703,11 @@ impl<'a> ConnectToPersistentSubscription<'a> {
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> ConnectToPersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         ConnectToPersistentSubscription {
-            stream_id: stream_id.into(),
-            group_name: group_name.into(),
+            stream_id: stream_id.as_ref().into(),
+            group_name: group_name.as_ref().into(),
             sender,
             settings,
             batch_size: 10,

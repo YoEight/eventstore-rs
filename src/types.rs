@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::{ SocketAddr, ToSocketAddrs };
+use std::ops::Deref;
 use std::time::Duration;
 
 use bytes::{ Bytes, BytesMut, BufMut, Buf };
@@ -141,7 +142,7 @@ pub struct Settings {
     pub default_user: Option<Credentials>,
 
     /// Default connection name.
-    pub connection_name: Option<protobuf::Chars>,
+    pub connection_name: Option<String>,
 
     /// The period used to check pending command. Those checks include if the
     /// the connection has timeout or if the command was issued with a
@@ -287,7 +288,7 @@ pub struct ReadEventResult {
 #[derive(Debug)]
 pub struct RecordedEvent {
     /// The event stream that events belongs to.
-    pub event_stream_id: Chars,
+    pub event_stream_id: String,
 
     /// Unique identifier representing this event.
     pub event_id: Uuid,
@@ -296,7 +297,7 @@ pub struct RecordedEvent {
     pub event_number: i64,
 
     /// Type of this event.
-    pub event_type: Chars,
+    pub event_type: String,
 
     /// Payload of this event.
     pub data: Bytes,
@@ -322,10 +323,10 @@ fn decode_bytes_error(err: BytesError) -> ::std::io::Error {
 
 impl RecordedEvent {
     pub(crate) fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
-        let event_stream_id = event.take_event_stream_id();
+        let event_stream_id = event.take_event_stream_id().deref().to_owned();
         let event_id        = Uuid::from_slice(event.get_event_id()).map_err(decode_bytes_error)?;
         let event_number    = event.get_event_number();
-        let event_type      = event.take_event_type();
+        let event_type      = event.take_event_type().deref().to_owned();
         let data            = event.take_data();
         let metadata        = event.take_metadata();
 
@@ -465,8 +466,8 @@ impl ResolvedEvent {
     }
 
     /// Returns the stream id of the original event.
-    pub fn get_original_stream_id(&self) -> Option<&Chars> {
-        self.get_original_event().map(|event| &event.event_stream_id)
+    pub fn get_original_stream_id(&self) -> Option<&str> {
+        self.get_original_event().map(|event| event.event_stream_id.deref())
     }
 }
 
@@ -474,8 +475,8 @@ impl ResolvedEvent {
 /// user-defined metadata.
 #[derive(Debug, Clone)]
 pub enum StreamMetadataResult {
-    Deleted { stream: Chars },
-    NotFound { stream: Chars },
+    Deleted { stream: String },
+    NotFound { stream: String },
     Success(Box<VersionedMetadata>),
 }
 
@@ -483,7 +484,7 @@ pub enum StreamMetadataResult {
 #[derive(Debug, Clone)]
 pub struct VersionedMetadata {
     /// Metadata's stream.
-    pub stream: Chars,
+    pub stream: String,
 
     /// Metadata's version.
     pub version: i64,
@@ -553,11 +554,11 @@ pub trait Slice {
 /// Represents the errors that can arise when reading a stream.
 #[derive(Debug, Clone)]
 pub enum ReadStreamError {
-    NoStream(Chars),
-    StreamDeleted(Chars),
-    NotModified(Chars),
-    Error(Chars),
-    AccessDenied(Chars),
+    NoStream(String),
+    StreamDeleted(String),
+    NotModified(String),
+    Error(String),
+    AccessDenied(String),
 }
 
 /// Represents the result of reading a stream.
@@ -687,13 +688,13 @@ impl EventData {
     /// Creates an event with a JSON payload.
     pub fn json<P, S>(event_type: S, payload: P) -> serde_json::Result<EventData>
         where P: Serialize,
-              S: Into<Chars>
+              S: AsRef<str>
     {
         let data = serde_json::to_vec(&payload)?;
         let bytes = Bytes::from(data);
 
         Ok(EventData {
-            event_type: event_type.into(),
+            event_type: event_type.as_ref().into(),
             payload: Payload::Json(bytes),
             id_opt: None,
             metadata_payload_opt: None,
@@ -702,10 +703,10 @@ impl EventData {
 
     /// Creates an event with a raw binary payload.
     pub fn binary<S>(event_type: S, payload: Bytes) -> EventData
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         EventData {
-            event_type: event_type.into(),
+            event_type: event_type.as_ref().into(),
             payload: Payload::Binary(payload),
             id_opt: None,
             metadata_payload_opt: None,
@@ -908,7 +909,7 @@ pub(crate) enum SubEvent {
         last_commit_position: i64,
         last_event_number: i64,
         // If defined, it means we are in a persistent subscription.
-        persistent_id: Option<Chars>,
+        persistent_id: Option<String>,
     },
 
     EventAppeared {
@@ -939,7 +940,7 @@ impl SubEvent {
 struct State<A: SubscriptionConsumer> {
     consumer: A,
     confirmation_id: Option<Uuid>,
-    persistent_id: Option<Chars>,
+    persistent_id: Option<String>,
     confirmation_requests: Vec<oneshot::Sender<()>>,
     buffer: BytesMut,
 }
@@ -1036,7 +1037,7 @@ fn on_event<C>(
                     if !acks.is_empty() {
                         let mut msg = messages::PersistentSubscriptionAckEvents::new();
 
-                        msg.set_subscription_id(sub_id.clone());
+                        msg.set_subscription_id(sub_id.as_str().into());
 
                         for id in acks {
                             // Reserves enough to store an UUID (which is 16 bytes long).
@@ -1064,7 +1065,7 @@ fn on_event<C>(
                             let mut msg       = messages::PersistentSubscriptionNakEvents::new();
                             let mut bytes_vec = Vec::with_capacity(naked.ids.len());
 
-                            msg.set_subscription_id(sub_id.clone());
+                            msg.set_subscription_id(sub_id.as_str().into());
 
                             for id in naked.ids {
                                 // Reserves enough to store an UUID (which is 16 bytes long).
@@ -1217,7 +1218,7 @@ pub trait SubscriptionEnv {
     ///
     /// * Notes
     /// For persistent subscription only.
-    fn push_nak_with_message<S: Into<Chars>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S);
+    fn push_nak_with_message<S: AsRef<str>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S);
 
     /// Get the number of time that event has been retried.
     ///
@@ -1235,7 +1236,7 @@ struct NoopSubscriptionEnv;
 
 impl SubscriptionEnv for NoopSubscriptionEnv {
     fn push_ack(&mut self, _: Uuid) {}
-    fn push_nak_with_message<S: Into<Chars>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S) {}
+    fn push_nak_with_message<S: AsRef<str>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S) {}
     fn current_event_retry_count(&self) -> usize { 0 }
 }
 
@@ -1260,11 +1261,11 @@ impl SubscriptionEnv for PersistentSubscriptionEnv {
         self.acks.push(id);
     }
 
-    fn push_nak_with_message<S: Into<Chars>>(&mut self, ids: Vec<Uuid>, action: NakAction, message: S) {
+    fn push_nak_with_message<S: AsRef<str>>(&mut self, ids: Vec<Uuid>, action: NakAction, message: S) {
         let naked = NakedEvents {
             ids,
             action,
-            message: message.into(),
+            message: message.as_ref().into(),
         };
 
         self.naks.push(naked);

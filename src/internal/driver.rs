@@ -179,6 +179,10 @@ impl Driver
     pub(crate) fn new(setts: &Settings, disc: Sender<Option<Endpoint>>, sender: Sender<Msg>)
         -> Driver
     {
+        let connection_name: Option<protobuf::Chars> = setts.connection_name
+                .as_ref()
+                .map(|c| c.as_str().into());
+
         Driver {
             registry: Registry::new(),
             candidate: None,
@@ -188,7 +192,7 @@ impl Driver
             phase: Phase::Reconnecting,
             last_endpoint: None,
             discovery: disc,
-            connection_name: setts.connection_name.clone(),
+            connection_name,
             default_user: setts.default_user.clone(),
             operation_timeout: setts.operation_timeout,
             init_req_opt: None,
