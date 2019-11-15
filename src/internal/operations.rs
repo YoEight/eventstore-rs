@@ -26,14 +26,14 @@ use self::messages::{
 
 #[derive(Debug, Clone)]
 pub enum OperationError {
-    WrongExpectedVersion(Chars, types::ExpectedVersion),
-    StreamDeleted(Chars),
+    WrongExpectedVersion(String, types::ExpectedVersion),
+    StreamDeleted(String),
     InvalidTransaction,
-    AccessDenied(Chars),
+    AccessDenied(String),
     ProtobufDecodingError(String),
-    ServerError(Option<Chars>),
+    ServerError(Option<String>),
     InvalidOperation(String),
-    StreamNotFound(Chars),
+    StreamNotFound(String),
     AuthenticationRequired,
     Aborted,
     WrongClientImpl(Option<Cmd>),
@@ -576,7 +576,7 @@ impl OperationImpl for WriteEvents {
             }
 
             OperationResult::WrongExpectedVersion => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
                 let exp_i64   = self.inner.get_expected_version();
                 let exp       = types::ExpectedVersion::from_i64(exp_i64);
 
@@ -586,7 +586,7 @@ impl OperationImpl for WriteEvents {
             },
 
             OperationResult::StreamDeleted => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
 
                 self.promise.reject(OperationError::StreamDeleted(stream_id));
 
@@ -600,7 +600,7 @@ impl OperationImpl for WriteEvents {
             }
 
             OperationResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
 
                 self.promise.reject(OperationError::AccessDenied(stream_id));
 
@@ -717,14 +717,14 @@ impl OperationImpl for ReadEvent {
             },
 
             messages::ReadEventCompleted_ReadEventResult::Error => {
-                let error = response.take_error();
+                let error = response.take_error().to_string();
                 let error = OperationError::ServerError(Some(error));
 
                 self.promise.reject(error);
             },
 
             messages::ReadEventCompleted_ReadEventResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
                 let error     = OperationError::AccessDenied(stream_id);
 
                 self.promise.reject(error);
@@ -770,7 +770,7 @@ impl OperationImpl for TransactionStart {
             },
 
             OperationResult::WrongExpectedVersion => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
                 let exp_i64   = self.inner.get_expected_version();
                 let exp       = types::ExpectedVersion::from_i64(exp_i64);
 
@@ -780,7 +780,7 @@ impl OperationImpl for TransactionStart {
             },
 
             OperationResult::StreamDeleted => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
 
                 self.promise.reject(OperationError::StreamDeleted(stream_id));
 
@@ -794,7 +794,7 @@ impl OperationImpl for TransactionStart {
             }
 
             OperationResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
 
                 self.promise.reject(OperationError::AccessDenied(stream_id));
 
@@ -878,7 +878,7 @@ impl OperationImpl for TransactionWrite {
             },
 
             OperationResult::StreamDeleted => {
-                let stream = self.stream.clone();
+                let stream = self.stream.deref().into();
                 self.promise.reject(OperationError::StreamDeleted(stream));
 
                 ImplResult::done()
@@ -891,7 +891,7 @@ impl OperationImpl for TransactionWrite {
             }
 
             OperationResult::AccessDenied => {
-                let stream = self.stream.clone();
+                let stream = self.stream.deref().into();
                 self.promise.reject(OperationError::AccessDenied(stream));
 
                 ImplResult::done()
@@ -972,7 +972,7 @@ impl OperationImpl for TransactionCommit {
             }
 
             OperationResult::WrongExpectedVersion => {
-                let stream = self.stream.clone();
+                let stream = self.stream.deref().into();
 
                 self.promise.reject(OperationError::WrongExpectedVersion(stream, self.version));
 
@@ -980,7 +980,7 @@ impl OperationImpl for TransactionCommit {
             },
 
             OperationResult::StreamDeleted => {
-                let stream = Chars::from(self.stream.deref());
+                let stream = self.stream.deref().into();
 
                 self.promise.reject(OperationError::StreamDeleted(stream));
 
@@ -994,7 +994,7 @@ impl OperationImpl for TransactionCommit {
             }
 
             OperationResult::AccessDenied => {
-                let stream = self.stream.clone();
+                let stream = self.stream.deref().into();
 
                 self.promise.reject(OperationError::AccessDenied(stream));
 
@@ -1110,31 +1110,31 @@ impl OperationImpl for ReadStreamEvents {
             },
 
             ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
-                let stream = self.inner.take_event_stream_id();
+                let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::NoStream(stream));
             },
 
             ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
-                let stream = self.inner.take_event_stream_id();
+                let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::StreamDeleted(stream));
             },
 
             ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
-                let stream = self.inner.take_event_stream_id();
+                let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::AccessDenied(stream));
             },
 
             ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
-                let stream = self.inner.take_event_stream_id();
+                let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::NotModified(stream));
             },
 
             ReadStreamEventsCompleted_ReadStreamResult::Error => {
-                let error_msg = response.take_error();
+                let error_msg = response.take_error().to_string();
 
                 self.report_error(types::ReadStreamError::Error(error_msg));
             },
@@ -1263,7 +1263,7 @@ impl OperationImpl for ReadAllEvents {
             ReadAllEventsCompleted_ReadAllResult::Error => {
                 let error_msg = response.take_error();
 
-                self.report_error(types::ReadStreamError::Error(error_msg));
+                self.report_error(types::ReadStreamError::Error(error_msg.to_string()));
             },
         };
 
@@ -1338,7 +1338,7 @@ impl OperationImpl for DeleteStream {
             }
 
             OperationResult::WrongExpectedVersion => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
                 let exp_i64   = self.inner.get_expected_version();
                 let exp       = types::ExpectedVersion::from_i64(exp_i64);
 
@@ -1348,7 +1348,7 @@ impl OperationImpl for DeleteStream {
             },
 
             OperationResult::StreamDeleted => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
 
                 self.promise.reject(OperationError::StreamDeleted(stream_id));
 
@@ -1362,7 +1362,7 @@ impl OperationImpl for DeleteStream {
             }
 
             OperationResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id();
+                let stream_id = self.inner.take_event_stream_id().to_string();
 
                 self.promise.reject(OperationError::AccessDenied(stream_id));
 
@@ -2403,7 +2403,7 @@ impl OperationImpl for ConnectToPersistentSubscription {
 
                 let last_commit_position = response.get_last_commit_position();
                 let last_event_number    = response.get_last_event_number();
-                let persistent_id        = response.take_subscription_id();
+                let persistent_id        = response.take_subscription_id().to_string();
 
                 let confirmed = types::SubEvent::Confirmed {
                     id: pkg.correlation,

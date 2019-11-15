@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::{ Receiver, Sender, channel };
-use protobuf::Chars;
 use tokio::runtime::{ Runtime, Shutdown };
 
 use crate::discovery;
@@ -76,9 +75,9 @@ impl ConnectionBuilder {
 
     /// Default connection name.
     pub fn with_connection_name<S>(mut self, name: S) -> Self
-        where S: Into<protobuf::Chars>
+        where S: AsRef<str>
     {
-        self.settings.connection_name = Some(name.into());
+        self.settings.connection_name = Some(name.as_ref().to_owned());
         self
     }
 
@@ -277,7 +276,7 @@ impl Connection {
 
     /// Sends events to a given stream.
     pub fn write_events<S>(&self, stream: S) -> commands::WriteEvents
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::WriteEvents::new(self.sender.clone(), stream, &self.settings)
     }
@@ -285,28 +284,28 @@ impl Connection {
     /// Sets the metadata for a stream.
     pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata)
         -> commands::WriteStreamMetadata
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::WriteStreamMetadata::new(self.sender.clone(), stream, metadata, &self.settings)
     }
 
     /// Reads a single event from a given stream.
     pub fn read_event<S>(&self, stream: S, event_number: i64) -> commands::ReadEvent
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::ReadEvent::new(self.sender.clone(), stream, event_number, &self.settings)
     }
 
     /// Gets the metadata of a stream.
     pub fn read_stream_metadata<S>(&self, stream: S) -> commands::ReadStreamMetadata
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::ReadStreamMetadata::new(self.sender.clone(), stream, &self.settings)
     }
 
     /// Starts a transaction on a given stream.
     pub fn start_transaction<S>(&self, stream: S) -> commands::TransactionStart
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::TransactionStart::new(self.sender.clone(), stream, &self.settings)
     }
@@ -314,7 +313,7 @@ impl Connection {
     /// Reads events from a given stream. The reading can be done forward and
     /// backward.
     pub fn read_stream<S>(&self, stream: S) -> commands::ReadStreamEvents
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::ReadStreamEvents::new(self.sender.clone(), stream, &self.settings)
     }
@@ -331,7 +330,7 @@ impl Connection {
     ///
     /// [Deleting stream and events]: https://eventstore.org/docs/server/deleting-streams-and-events/index.html
     pub fn delete_stream<S>(&self, stream: S) -> commands::DeleteStream
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::DeleteStream::new(self.sender.clone(), stream, &self.settings)
     }
@@ -339,7 +338,7 @@ impl Connection {
     /// Subscribes to a given stream. You will get notified of each new events
     /// written to this stream.
     pub fn subcribe_to_stream<S>(&self, stream_id: S) -> commands::SubscribeToStream
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::SubscribeToStream::new(self.sender.clone(), stream_id, &self.settings)
     }
@@ -359,7 +358,7 @@ impl Connection {
     ///
     /// [`subscribe_to_all_from`]: #method.subscribe_to_all_from
     pub fn subscribe_to_stream_from<S>(&self, stream: S) -> commands::RegularCatchupSubscribe
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::RegularCatchupSubscribe::new(self.sender.clone(), stream, &self.settings)
     }
@@ -379,28 +378,28 @@ impl Connection {
     /// different modes of operations compared to a regular or catchup
     /// subscription where the client holds the subscription state.
     pub fn create_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::CreatePersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::CreatePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
     }
 
     /// Updates a persistent subscription group on a stream.
     pub fn update_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::UpdatePersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::UpdatePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
     }
 
     /// Deletes a persistent subscription group on a stream.
     pub fn delete_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::DeletePersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::DeletePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
     }
 
     /// Connects to a persistent subscription group on a stream.
     pub fn connect_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::ConnectToPersistentSubscription
-        where S: Into<Chars>
+        where S: AsRef<str>
     {
         commands::ConnectToPersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
     }
