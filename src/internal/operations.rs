@@ -1,27 +1,25 @@
 use std::error::Error;
 use std::fmt;
 use std::ops::Deref;
-use std::time::{ Duration, Instant };
+use std::time::{Duration, Instant};
 
-use bytes::{ BufMut, BytesMut };
-use futures::{ Future, Stream, Sink };
+use bytes::{BufMut, BytesMut};
 use futures::stream::iter_ok;
 use futures::sync::mpsc;
-use protobuf::{ Chars, RepeatedField };
+use futures::{Future, Sink, Stream};
+use protobuf::{Chars, RepeatedField};
 use uuid::Uuid;
 
 use crate::internal::command::Cmd;
 use crate::internal::messages;
 use crate::internal::package::Pkg;
-use crate::types::{ self, Slice };
+use crate::types::{self, Slice};
 
 use self::messages::{
-    OperationResult,
-    ReadStreamEventsCompleted_ReadStreamResult,
-    ReadAllEventsCompleted_ReadAllResult,
     CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult,
+    DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult, OperationResult,
+    ReadAllEventsCompleted_ReadAllResult, ReadStreamEventsCompleted_ReadStreamResult,
     UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult,
-    DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult
 };
 
 #[derive(Debug, Clone)]
@@ -60,7 +58,7 @@ impl fmt::Display for OperationError {
         match self {
             WrongExpectedVersion(stream, exp) => {
                 writeln!(f, "expected version {:?} for stream {}", exp, stream)
-            },
+            }
             StreamDeleted(stream) => writeln!(f, "stream {} deleted", stream),
             InvalidTransaction => writeln!(f, "invalid transaction"),
             AccessDenied(info) => writeln!(f, "access denied: {}", info),
@@ -85,7 +83,7 @@ pub enum Outcome {
 impl Outcome {
     pub fn produced_pkgs(self) -> Vec<Pkg> {
         match self {
-            Outcome::Done           => Vec::new(),
+            Outcome::Done => Vec::new(),
             Outcome::Continue(pkgs) => pkgs,
         }
     }
@@ -93,7 +91,7 @@ impl Outcome {
     pub fn is_done(&self) -> bool {
         match *self {
             Outcome::Done => true,
-            _             => false,
+            _ => false,
         }
     }
 }
@@ -106,10 +104,10 @@ pub struct Promise<A> {
 
 pub type Receiver<A> = mpsc::Receiver<Result<A, OperationError>>;
 
-impl <A> Promise<A> {
+impl<A> Promise<A> {
     pub fn new(buffer: usize) -> (Receiver<A>, Promise<A>) {
         let (tx, rcv) = mpsc::channel(buffer);
-        let this      = Promise { inner: tx };
+        let this = Promise { inner: tx };
 
         (rcv, this)
     }
@@ -202,9 +200,11 @@ struct VecReqBuffer<'a, A: 'a + Session> {
 }
 
 impl<'a, A: Session> VecReqBuffer<'a, A> {
-    fn new(session: &'a mut A, dest: &'a mut BytesMut, creds: Option<types::Credentials>)
-        -> VecReqBuffer<'a, A>
-    {
+    fn new(
+        session: &'a mut A,
+        dest: &'a mut BytesMut,
+        creds: Option<types::Credentials>,
+    ) -> VecReqBuffer<'a, A> {
         VecReqBuffer {
             session,
             dest,
@@ -216,7 +216,7 @@ impl<'a, A: Session> VecReqBuffer<'a, A> {
 
 impl<'a, A: Session> ReqBuffer for VecReqBuffer<'a, A> {
     fn push_req(&mut self, req: Request) -> ::std::io::Result<()> {
-        let id  = self.session.new_request(req.cmd);
+        let id = self.session.new_request(req.cmd);
         let pkg = req.produce_pkg(id, self.creds.clone(), self.dest)?;
 
         self.pkgs.push(pkg);
@@ -241,8 +241,10 @@ impl OperationWrapper {
         op: A,
         creds: Option<types::Credentials>,
         max_retry: usize,
-        timeout: Duration) -> OperationWrapper
-        where A: OperationImpl + Sync + Send + 'static
+        timeout: Duration,
+    ) -> OperationWrapper
+    where
+        A: OperationImpl + Sync + Send + 'static,
     {
         OperationWrapper {
             id: OperationId::new(),
@@ -253,19 +255,25 @@ impl OperationWrapper {
         }
     }
 
-    pub(crate) fn send<A: Session>(&mut self, dest: &mut BytesMut, session: A)
-        -> Decision
-    {
+    pub(crate) fn send<A: Session>(&mut self, dest: &mut BytesMut, session: A) -> Decision {
         self.poll(dest, session, None)
     }
 
-    pub(crate) fn receive<A: Session>(&mut self, dest: &mut BytesMut, session: A, pkg: Pkg)
-        -> Decision
-    {
+    pub(crate) fn receive<A: Session>(
+        &mut self,
+        dest: &mut BytesMut,
+        session: A,
+        pkg: Pkg,
+    ) -> Decision {
         self.poll(dest, session, Some(pkg))
     }
 
-    fn poll<A: Session>(&mut self, dest: &mut BytesMut, mut session: A, input: Option<Pkg>) -> Decision {
+    fn poll<A: Session>(
+        &mut self,
+        dest: &mut BytesMut,
+        mut session: A,
+        input: Option<Pkg>,
+    ) -> Decision {
         match input {
             // It means this operation was newly created and has to issue its
             // first package to the server.
@@ -274,7 +282,7 @@ impl OperationWrapper {
                 let id = session.new_request(req.cmd);
 
                 req.send(id, self.creds.clone(), dest)
-            },
+            }
 
             // At this point, it means this operation send a package to
             // the server already.
@@ -284,31 +292,29 @@ impl OperationWrapper {
                 if self.inner.is_valid_response(pkg.cmd) {
                     let (pkgs, result) = {
                         let mut buffer = VecReqBuffer::new(&mut session, dest, self.creds.clone());
-                        let     result = self.inner.respond(&mut buffer, pkg)?;
+                        let result = self.inner.respond(&mut buffer, pkg)?;
 
                         (buffer.pkgs, result)
                     };
 
                     match result {
-                        ImplResult::Retry => {
-                            return self.retry(dest, &mut session, corr_id)
-                        },
+                        ImplResult::Retry => return self.retry(dest, &mut session, corr_id),
 
                         ImplResult::Done => {
                             session.pop(&corr_id)?;
-                        },
+                        }
 
                         ImplResult::Awaiting => {
                             let tracker = session.using(&corr_id)?;
 
                             tracker.lasting = true;
-                        },
+                        }
 
                         ImplResult::Terminate => {
                             session.terminate();
 
                             return op_done();
-                        },
+                        }
                     };
 
                     op_send_pkgs(pkgs)
@@ -317,7 +323,7 @@ impl OperationWrapper {
 
                     op_done()
                 }
-            },
+            }
         }
     }
 
@@ -325,7 +331,12 @@ impl OperationWrapper {
         self.inner.report_operation_error(error);
     }
 
-    pub(crate) fn retry<A: Session>(&mut self, dest: &mut BytesMut, session: &mut A, id: Uuid) -> Decision {
+    pub(crate) fn retry<A: Session>(
+        &mut self,
+        dest: &mut BytesMut,
+        session: &mut A,
+        id: Uuid,
+    ) -> Decision {
         let mut tracker = session.pop(&id)?;
 
         if tracker.attempts + 1 >= self.max_retry {
@@ -336,10 +347,10 @@ impl OperationWrapper {
         }
 
         tracker.attempts += 1;
-        tracker.id       = Uuid::new_v4();
-        tracker.started  = Instant::now();
+        tracker.id = Uuid::new_v4();
+        tracker.started = Instant::now();
 
-        let req      = self.inner.retry(tracker.cmd);
+        let req = self.inner.retry(tracker.cmd);
         let decision = req.send(tracker.id, self.creds.clone(), dest);
 
         session.reuse(tracker);
@@ -347,13 +358,9 @@ impl OperationWrapper {
         decision
     }
 
-    pub(crate) fn check_and_retry<A>(
-        &mut self,
-        dest: &mut BytesMut,
-        mut session: A
-    ) -> Decision
+    pub(crate) fn check_and_retry<A>(&mut self, dest: &mut BytesMut, mut session: A) -> Decision
     where
-        A: Session
+        A: Session,
     {
         enum State {
             HasDropped(Uuid),
@@ -361,7 +368,7 @@ impl OperationWrapper {
         }
 
         let mut process = Vec::new();
-        let mut pkgs    = Vec::new();
+        let mut pkgs = Vec::new();
 
         for tracker in session.requests() {
             if tracker.conn_id != session.connection_id() {
@@ -376,25 +383,19 @@ impl OperationWrapper {
                 State::HasDropped(id) => {
                     let tracker = session.pop(&id)?;
 
-                    let mut buffer = VecReqBuffer::new(
-                        &mut session,
-                        dest,
-                        self.creds.clone()
-                    );
+                    let mut buffer = VecReqBuffer::new(&mut session, dest, self.creds.clone());
 
-                    self.inner.connection_has_dropped(
-                        &mut buffer,
-                        tracker.cmd
-                    )?;
+                    self.inner
+                        .connection_has_dropped(&mut buffer, tracker.cmd)?;
 
                     pkgs.append(&mut buffer.pkgs);
-                },
+                }
 
                 State::Retry(id) => {
                     let outcome = self.retry(dest, &mut session, id)?;
 
                     pkgs.append(&mut outcome.produced_pkgs());
-                },
+                }
             };
         }
 
@@ -411,10 +412,13 @@ pub(crate) struct Request<'a> {
     msg: &'a dyn ::protobuf::Message,
 }
 
-impl <'a> Request<'a> {
-    fn produce_pkg(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut)
-        -> ::std::io::Result<Pkg>
-    {
+impl<'a> Request<'a> {
+    fn produce_pkg(
+        self,
+        id: Uuid,
+        creds: Option<types::Credentials>,
+        dest: &mut BytesMut,
+    ) -> ::std::io::Result<Pkg> {
         dest.reserve(self.msg.compute_size() as usize);
 
         self.msg.write_to_writer(&mut dest.writer())?;
@@ -429,9 +433,7 @@ impl <'a> Request<'a> {
         Ok(pkg)
     }
 
-    fn send(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut)
-        -> Decision
-    {
+    fn send(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut) -> Decision {
         let pkg = self.produce_pkg(id, creds, dest)?;
 
         op_send(pkg)
@@ -465,11 +467,10 @@ impl ImplResult {
     fn is_done(&self) -> bool {
         match *self {
             ImplResult::Done => true,
-            _                => false,
+            _ => false,
         }
     }
 }
-
 
 pub(crate) trait OperationImpl {
     /// Issues a new `Request` for the server. `prev_id` indicates what was
@@ -490,12 +491,7 @@ pub(crate) trait OperationImpl {
         self.initial_request()
     }
 
-    fn connection_has_dropped(
-        &mut self,
-        _: &mut dyn ReqBuffer,
-        _: Cmd
-    ) -> ::std::io::Result<()>
-    {
+    fn connection_has_dropped(&mut self, _: &mut dyn ReqBuffer, _: Cmd) -> ::std::io::Result<()> {
         self.report_operation_error(OperationError::ConnectionHasDropped);
 
         Ok(())
@@ -551,8 +547,7 @@ impl OperationImpl for WriteEvents {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::WriteEventsCompleted =
-                pkg.to_message()?;
+        let response: messages::WriteEventsCompleted = pkg.to_message()?;
 
         match response.get_result() {
             OperationResult::Success => {
@@ -569,29 +564,31 @@ impl OperationImpl for WriteEvents {
                 self.promise.accept(result);
 
                 ImplResult::done()
-            },
-
-            OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
-                ImplResult::retrying()
             }
+
+            OperationResult::PrepareTimeout
+            | OperationResult::ForwardTimeout
+            | OperationResult::CommitTimeout => ImplResult::retrying(),
 
             OperationResult::WrongExpectedVersion => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
-                let exp_i64   = self.inner.get_expected_version();
-                let exp       = types::ExpectedVersion::from_i64(exp_i64);
+                let exp_i64 = self.inner.get_expected_version();
+                let exp = types::ExpectedVersion::from_i64(exp_i64);
 
-                self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
+                self.promise
+                    .reject(OperationError::WrongExpectedVersion(stream_id, exp));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::StreamDeleted => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
 
-                self.promise.reject(OperationError::StreamDeleted(stream_id));
+                self.promise
+                    .reject(OperationError::StreamDeleted(stream_id));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::InvalidTransaction => {
                 self.promise.reject(OperationError::InvalidTransaction);
@@ -605,7 +602,7 @@ impl OperationImpl for WriteEvents {
                 self.promise.reject(OperationError::AccessDenied(stream_id));
 
                 ImplResult::done()
-            },
+            }
         }
     }
 
@@ -683,15 +680,14 @@ impl OperationImpl for ReadEvent {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let mut response: messages::ReadEventCompleted =
-                pkg.to_message()?;
+        let mut response: messages::ReadEventCompleted = pkg.to_message()?;
 
         match response.get_result() {
             messages::ReadEventCompleted_ReadEventResult::Success => {
-                let event        = response.take_event();
-                let event        = types::ResolvedEvent::new_from_indexed(event)?;
+                let event = response.take_event();
+                let event = types::ResolvedEvent::new_from_indexed(event)?;
                 let event_number = self.inner.get_event_number();
-                let stream_id    = self.inner.get_event_stream_id().to_owned();
+                let stream_id = self.inner.get_event_stream_id().to_owned();
 
                 let result = types::ReadEventResult {
                     stream_id,
@@ -702,33 +698,33 @@ impl OperationImpl for ReadEvent {
                 let result = types::ReadEventStatus::Success(result);
 
                 self.promise.accept(result);
-            },
+            }
 
             messages::ReadEventCompleted_ReadEventResult::NotFound => {
                 self.promise.accept(types::ReadEventStatus::NotFound);
-            },
+            }
 
             messages::ReadEventCompleted_ReadEventResult::NoStream => {
                 self.promise.accept(types::ReadEventStatus::NoStream);
-            },
+            }
 
             messages::ReadEventCompleted_ReadEventResult::StreamDeleted => {
                 self.promise.accept(types::ReadEventStatus::Deleted);
-            },
+            }
 
             messages::ReadEventCompleted_ReadEventResult::Error => {
                 let error = response.take_error().to_string();
                 let error = OperationError::ServerError(Some(error));
 
                 self.promise.reject(error);
-            },
+            }
 
             messages::ReadEventCompleted_ReadEventResult::AccessDenied => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
-                let error     = OperationError::AccessDenied(stream_id);
+                let error = OperationError::AccessDenied(stream_id);
 
                 self.promise.reject(error);
-            },
+            }
         }
 
         ImplResult::done()
@@ -738,8 +734,6 @@ impl OperationImpl for ReadEvent {
         self.promise.reject(error)
     }
 }
-
-
 
 impl OperationImpl for TransactionStart {
     fn initial_request(&self) -> Request {
@@ -754,8 +748,7 @@ impl OperationImpl for TransactionStart {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::TransactionStartCompleted =
-                 pkg.to_message()?;
+        let response: messages::TransactionStartCompleted = pkg.to_message()?;
 
         match response.get_result() {
             OperationResult::Success => {
@@ -763,29 +756,31 @@ impl OperationImpl for TransactionStart {
                 self.promise.accept(types::TransactionId::new(id));
 
                 ImplResult::done()
-            },
+            }
 
-            OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
-                ImplResult::retrying()
-            },
+            OperationResult::PrepareTimeout
+            | OperationResult::ForwardTimeout
+            | OperationResult::CommitTimeout => ImplResult::retrying(),
 
             OperationResult::WrongExpectedVersion => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
-                let exp_i64   = self.inner.get_expected_version();
-                let exp       = types::ExpectedVersion::from_i64(exp_i64);
+                let exp_i64 = self.inner.get_expected_version();
+                let exp = types::ExpectedVersion::from_i64(exp_i64);
 
-                self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
+                self.promise
+                    .reject(OperationError::WrongExpectedVersion(stream_id, exp));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::StreamDeleted => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
 
-                self.promise.reject(OperationError::StreamDeleted(stream_id));
+                self.promise
+                    .reject(OperationError::StreamDeleted(stream_id));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::InvalidTransaction => {
                 self.promise.reject(OperationError::InvalidTransaction);
@@ -799,7 +794,7 @@ impl OperationImpl for TransactionStart {
                 self.promise.reject(OperationError::AccessDenied(stream_id));
 
                 ImplResult::done()
-            },
+            }
         }
     }
 
@@ -828,7 +823,8 @@ impl TransactionWrite {
     }
 
     pub fn set_events<I>(&mut self, events: I)
-        where I: IntoIterator<Item=types::EventData>
+    where
+        I: IntoIterator<Item = types::EventData>,
     {
         let mut repeated = RepeatedField::new();
 
@@ -857,32 +853,31 @@ impl OperationImpl for TransactionWrite {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::TransactionWriteCompleted =
-                pkg.to_message()?;
+        let response: messages::TransactionWriteCompleted = pkg.to_message()?;
 
         match response.get_result() {
             OperationResult::Success => {
                 self.promise.accept(());
 
                 ImplResult::done()
-            },
+            }
 
-            OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
-                ImplResult::retrying()
-            },
+            OperationResult::PrepareTimeout
+            | OperationResult::ForwardTimeout
+            | OperationResult::CommitTimeout => ImplResult::retrying(),
 
             OperationResult::WrongExpectedVersion => {
                 // You can't have a wrong expected version on a transaction
                 // because, the write hasn't been committed yet.
                 unreachable!()
-            },
+            }
 
             OperationResult::StreamDeleted => {
                 let stream = self.stream.deref().into();
                 self.promise.reject(OperationError::StreamDeleted(stream));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::InvalidTransaction => {
                 self.promise.reject(OperationError::InvalidTransaction);
@@ -895,7 +890,7 @@ impl OperationImpl for TransactionWrite {
                 self.promise.reject(OperationError::AccessDenied(stream));
 
                 ImplResult::done()
-            },
+            }
         }
     }
 
@@ -915,8 +910,8 @@ impl TransactionCommit {
     pub fn new(
         promise: Promise<types::WriteResult>,
         stream: Chars,
-        version: types::ExpectedVersion) -> TransactionCommit
-    {
+        version: types::ExpectedVersion,
+    ) -> TransactionCommit {
         TransactionCommit {
             stream,
             promise,
@@ -947,8 +942,7 @@ impl OperationImpl for TransactionCommit {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::TransactionCommitCompleted =
-                pkg.to_message()?;
+        let response: messages::TransactionCommitCompleted = pkg.to_message()?;
 
         match response.get_result() {
             OperationResult::Success => {
@@ -965,19 +959,20 @@ impl OperationImpl for TransactionCommit {
                 self.promise.accept(result);
 
                 ImplResult::done()
-            },
-
-            OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
-                ImplResult::retrying()
             }
+
+            OperationResult::PrepareTimeout
+            | OperationResult::ForwardTimeout
+            | OperationResult::CommitTimeout => ImplResult::retrying(),
 
             OperationResult::WrongExpectedVersion => {
                 let stream = self.stream.deref().into();
 
-                self.promise.reject(OperationError::WrongExpectedVersion(stream, self.version));
+                self.promise
+                    .reject(OperationError::WrongExpectedVersion(stream, self.version));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::StreamDeleted => {
                 let stream = self.stream.deref().into();
@@ -985,7 +980,7 @@ impl OperationImpl for TransactionCommit {
                 self.promise.reject(OperationError::StreamDeleted(stream));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::InvalidTransaction => {
                 self.promise.reject(OperationError::InvalidTransaction);
@@ -999,7 +994,7 @@ impl OperationImpl for TransactionCommit {
                 self.promise.reject(OperationError::AccessDenied(stream));
 
                 ImplResult::done()
-            },
+            }
         }
     }
 
@@ -1019,10 +1014,10 @@ pub struct ReadStreamEvents {
 impl ReadStreamEvents {
     pub fn new(
         promise: Promise<types::ReadStreamStatus<types::StreamSlice>>,
-        direction: types::ReadDirection) -> ReadStreamEvents
-    {
+        direction: types::ReadDirection,
+    ) -> ReadStreamEvents {
         let request_cmd = match direction {
-            types::ReadDirection::Forward  => Cmd::ReadStreamEventsForward,
+            types::ReadDirection::Forward => Cmd::ReadStreamEventsForward,
             types::ReadDirection::Backward => Cmd::ReadStreamEventsBackward,
         };
 
@@ -1078,13 +1073,12 @@ impl OperationImpl for ReadStreamEvents {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let mut response: messages::ReadStreamEventsCompleted =
-                pkg.to_message()?;
+        let mut response: messages::ReadStreamEventsCompleted = pkg.to_message()?;
 
         match response.get_result() {
             ReadStreamEventsCompleted_ReadStreamResult::Success => {
-                let     is_eof    = response.get_is_end_of_stream();
-                let     events    = response.take_events().into_vec();
+                let is_eof = response.get_is_end_of_stream();
+                let events = response.take_events().into_vec();
                 let mut resolveds = Vec::with_capacity(events.len());
 
                 for event in events {
@@ -1101,43 +1095,42 @@ impl OperationImpl for ReadStreamEvents {
                     }
                 };
 
-                let from  = self.inner.get_from_event_number();
-                let slice = types::StreamSlice::new(
-                    self.direction, from, resolveds, next_num_opt);
+                let from = self.inner.get_from_event_number();
+                let slice = types::StreamSlice::new(self.direction, from, resolveds, next_num_opt);
                 let result = types::ReadStreamStatus::Success(slice);
 
                 self.promise.accept(result);
-            },
+            }
 
             ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
                 let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::NoStream(stream));
-            },
+            }
 
             ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
                 let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::StreamDeleted(stream));
-            },
+            }
 
             ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
                 let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::AccessDenied(stream));
-            },
+            }
 
             ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
                 let stream = self.inner.take_event_stream_id().to_string();
 
                 self.report_error(types::ReadStreamError::NotModified(stream));
-            },
+            }
 
             ReadStreamEventsCompleted_ReadStreamResult::Error => {
                 let error_msg = response.take_error().to_string();
 
                 self.report_error(types::ReadStreamError::Error(error_msg));
-            },
+            }
         };
 
         ImplResult::done()
@@ -1159,10 +1152,10 @@ pub struct ReadAllEvents {
 impl ReadAllEvents {
     pub fn new(
         promise: Promise<types::ReadStreamStatus<types::AllSlice>>,
-        direction: types::ReadDirection) -> ReadAllEvents
-    {
+        direction: types::ReadDirection,
+    ) -> ReadAllEvents {
         let request_cmd = match direction {
-            types::ReadDirection::Forward  => Cmd::ReadAllEventsForward,
+            types::ReadDirection::Forward => Cmd::ReadAllEventsForward,
             types::ReadDirection::Backward => Cmd::ReadAllEventsBackward,
         };
 
@@ -1215,17 +1208,16 @@ impl OperationImpl for ReadAllEvents {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let mut response: messages::ReadAllEventsCompleted =
-                pkg.to_message()?;
+        let mut response: messages::ReadAllEventsCompleted = pkg.to_message()?;
 
         match response.get_result() {
             ReadAllEventsCompleted_ReadAllResult::Success => {
-                let     commit      = response.get_commit_position();
-                let     prepare     = response.get_prepare_position();
-                let     nxt_commit  = response.get_next_commit_position();
-                let     nxt_prepare = response.get_next_prepare_position();
-                let     events      = response.take_events().into_vec();
-                let mut resolveds   = Vec::with_capacity(events.len());
+                let commit = response.get_commit_position();
+                let prepare = response.get_prepare_position();
+                let nxt_commit = response.get_next_commit_position();
+                let nxt_prepare = response.get_next_prepare_position();
+                let events = response.take_events().into_vec();
+                let mut resolveds = Vec::with_capacity(events.len());
 
                 for event in events {
                     let resolved = types::ResolvedEvent::new(event)?;
@@ -1233,38 +1225,32 @@ impl OperationImpl for ReadAllEvents {
                     resolveds.push(resolved);
                 }
 
-                let from = types::Position {
-                    commit,
-                    prepare,
-                };
+                let from = types::Position { commit, prepare };
 
                 let next = types::Position {
                     commit: nxt_commit,
                     prepare: nxt_prepare,
                 };
 
-                let slice = types::AllSlice::new(
-                    self.direction, from, resolveds, next);
+                let slice = types::AllSlice::new(self.direction, from, resolveds, next);
                 let result = types::ReadStreamStatus::Success(slice);
 
                 self.promise.accept(result);
-            },
+            }
 
             ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
-                self.report_error(
-                    types::ReadStreamError::AccessDenied("$all".into()));
-            },
+                self.report_error(types::ReadStreamError::AccessDenied("$all".into()));
+            }
 
             ReadAllEventsCompleted_ReadAllResult::NotModified => {
-                self.report_error(
-                    types::ReadStreamError::NotModified("$all".into()));
-            },
+                self.report_error(types::ReadStreamError::NotModified("$all".into()));
+            }
 
             ReadAllEventsCompleted_ReadAllResult::Error => {
                 let error_msg = response.take_error();
 
                 self.report_error(types::ReadStreamError::Error(error_msg.to_string()));
-            },
+            }
         };
 
         ImplResult::done()
@@ -1318,8 +1304,7 @@ impl OperationImpl for DeleteStream {
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::DeleteStreamCompleted =
-                pkg.to_message()?;
+        let response: messages::DeleteStreamCompleted = pkg.to_message()?;
 
         match response.get_result() {
             OperationResult::Success => {
@@ -1331,29 +1316,31 @@ impl OperationImpl for DeleteStream {
                 self.promise.accept(position);
 
                 ImplResult::done()
-            },
-
-            OperationResult::PrepareTimeout | OperationResult::ForwardTimeout | OperationResult::CommitTimeout => {
-                ImplResult::retrying()
             }
+
+            OperationResult::PrepareTimeout
+            | OperationResult::ForwardTimeout
+            | OperationResult::CommitTimeout => ImplResult::retrying(),
 
             OperationResult::WrongExpectedVersion => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
-                let exp_i64   = self.inner.get_expected_version();
-                let exp       = types::ExpectedVersion::from_i64(exp_i64);
+                let exp_i64 = self.inner.get_expected_version();
+                let exp = types::ExpectedVersion::from_i64(exp_i64);
 
-                self.promise.reject(OperationError::WrongExpectedVersion(stream_id, exp));
+                self.promise
+                    .reject(OperationError::WrongExpectedVersion(stream_id, exp));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::StreamDeleted => {
                 let stream_id = self.inner.take_event_stream_id().to_string();
 
-                self.promise.reject(OperationError::StreamDeleted(stream_id));
+                self.promise
+                    .reject(OperationError::StreamDeleted(stream_id));
 
                 ImplResult::done()
-            },
+            }
 
             OperationResult::InvalidTransaction => {
                 self.promise.reject(OperationError::InvalidTransaction);
@@ -1367,7 +1354,7 @@ impl OperationImpl for DeleteStream {
                 self.promise.reject(OperationError::AccessDenied(stream_id));
 
                 ImplResult::done()
-            },
+            }
         }
     }
 
@@ -1388,9 +1375,7 @@ pub struct SubscribeToStream {
 }
 
 impl SubscribeToStream {
-    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>)
-        -> SubscribeToStream
-    {
+    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>) -> SubscribeToStream {
         SubscribeToStream {
             sub_bus,
             inner: messages::SubscribeToStream::new(),
@@ -1406,15 +1391,8 @@ impl SubscribeToStream {
         self.inner.set_resolve_link_tos(value);
     }
 
-    fn publish(
-        &mut self,
-        event: types::SubEvent
-    ) -> ::std::io::Result<ImplResult>
-    {
-        let result = self.sub_bus
-            .clone()
-            .send(event)
-            .wait();
+    fn publish(&mut self, event: types::SubEvent) -> ::std::io::Result<ImplResult> {
+        let result = self.sub_bus.clone().send(event).wait();
 
         if result.is_ok() {
             ImplResult::awaiting()
@@ -1434,23 +1412,22 @@ impl OperationImpl for SubscribeToStream {
 
     fn is_valid_response(&self, cmd: Cmd) -> bool {
         if Cmd::SubscriptionDropped == cmd {
-            return true
+            return true;
         }
 
         match self.state {
             SubState::Requesting => Cmd::SubscriptionConfirmed == cmd,
-            SubState::Confirmed  => Cmd::StreamEventAppeared == cmd,
+            SubState::Confirmed => Cmd::StreamEventAppeared == cmd,
         }
     }
 
     fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         match pkg.cmd {
             Cmd::SubscriptionConfirmed => {
-                let response: messages::SubscriptionConfirmation =
-                    pkg.to_message()?;
+                let response: messages::SubscriptionConfirmation = pkg.to_message()?;
 
                 let last_commit_position = response.get_last_commit_position();
-                let last_event_number    = response.get_last_event_number();
+                let last_event_number = response.get_last_event_number();
 
                 let confirmed = types::SubEvent::Confirmed {
                     id: pkg.correlation,
@@ -1461,13 +1438,12 @@ impl OperationImpl for SubscribeToStream {
 
                 self.state = SubState::Confirmed;
                 self.publish(confirmed)
-            },
+            }
 
             Cmd::StreamEventAppeared => {
-                let mut response: messages::StreamEventAppeared =
-                    pkg.to_message()?;
+                let mut response: messages::StreamEventAppeared = pkg.to_message()?;
 
-                let event    = types::ResolvedEvent::new(response.take_event())?;
+                let event = types::ResolvedEvent::new(response.take_event())?;
                 let appeared = types::SubEvent::EventAppeared {
                     event: Box::new(event),
                     retry_count: 0,
@@ -1479,14 +1455,14 @@ impl OperationImpl for SubscribeToStream {
             Cmd::SubscriptionDropped => {
                 let _ = self.publish(types::SubEvent::Dropped)?;
                 ImplResult::done()
-            },
+            }
 
             _ => {
                 // Will never happened, has error in subscription is
                 // reported through `Cmd::SubscriptionDropped`
                 // command.
                 unreachable!()
-            },
+            }
         }
     }
 
@@ -1495,14 +1471,13 @@ impl OperationImpl for SubscribeToStream {
     }
 }
 
-fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationError>
-    where S: Stream<Item = Result<A, OperationError>, Error = ()>
+fn single_value_future<S, A>(stream: S) -> impl Future<Item = A, Error = OperationError>
+where
+    S: Stream<Item = Result<A, OperationError>, Error = ()>,
 {
-    stream.into_future().then(|res| {
-        match res {
-            Ok((Some(x), _)) => x,
-            _                => unreachable!(),
-        }
+    stream.into_future().then(|res| match res {
+        Ok((Some(x), _)) => x,
+        _ => unreachable!(),
     })
 }
 
@@ -1511,7 +1486,7 @@ pub(crate) struct OperationExtractor<A, O: OperationImpl> {
     inner: O,
 }
 
-impl <A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
+impl<A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
     fn initial_request(&self) -> Request {
         self.inner.initial_request()
     }
@@ -1535,9 +1510,10 @@ impl <A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
 
 pub const DEFAULT_BOUNDED_SIZE: usize = 500;
 
-impl <A, O: OperationImpl> OperationExtractor<A, O> {
+impl<A, O: OperationImpl> OperationExtractor<A, O> {
     fn new<F>(maker: F) -> OperationExtractor<A, O>
-        where F: FnOnce(Promise<A>) -> O
+    where
+        F: FnOnce(Promise<A>) -> O,
     {
         let (recv, promise) = Promise::new(DEFAULT_BOUNDED_SIZE);
 
@@ -1569,11 +1545,10 @@ impl<A: Catchup> CatchupWrapper<A> {
         inner: A,
         stream_id: &Chars,
         resolve_link_tos: bool,
-        sender: mpsc::Sender<types::SubEvent>
-    ) -> CatchupWrapper<A>
-    {
+        sender: mpsc::Sender<types::SubEvent>,
+    ) -> CatchupWrapper<A> {
         let (tx, recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
-        let mut sub    = SubscribeToStream::new(tx);
+        let mut sub = SubscribeToStream::new(tx);
         let checkpoint = inner.starting_checkpoint();
 
         sub.set_event_stream_id(stream_id.clone());
@@ -1591,9 +1566,7 @@ impl<A: Catchup> CatchupWrapper<A> {
         }
     }
 
-    fn propagate_events(&mut self)
-        -> Result<(), mpsc::SendError<types::SubEvent>>
-    {
+    fn propagate_events(&mut self) -> Result<(), mpsc::SendError<types::SubEvent>> {
         use std::mem;
 
         let mut events = Vec::new();
@@ -1603,37 +1576,32 @@ impl<A: Catchup> CatchupWrapper<A> {
         // Rust move semantic.
         unsafe {
             let mut recv = mem::replace(&mut self.recv, mem::MaybeUninit::uninit().assume_init());
-            let mut cpt  = 0;
+            let mut cpt = 0;
 
             while cpt < self.flying_event_count {
                 let (evt_opt, next) = recv.into_future().wait().ok().unwrap();
-                let evt             = evt_opt.unwrap();
+                let evt = evt_opt.unwrap();
 
-                recv =  next;
-                cpt  += 1;
+                recv = next;
+                cpt += 1;
 
                 let can_be_dispatched = match evt.event_appeared() {
                     Some(event) => {
-                        let can_be_dispatched = self.inner.can_be_dispatched(
-                            &self.checkpoint,
-                            &event,
-                        );
+                        let can_be_dispatched =
+                            self.inner.can_be_dispatched(&self.checkpoint, &event);
 
                         // We update catchup tracking state if we can dispatch
                         // that event.
                         if can_be_dispatched {
-                            self.checkpoint.position = event
-                                .position
-                                .unwrap_or_else(types::Position::start);
+                            self.checkpoint.position =
+                                event.position.unwrap_or_else(types::Position::start);
 
-                            self.checkpoint.event_number = event
-                                .get_original_event()
-                                .map(|e| e.event_number)
-                                .unwrap();
+                            self.checkpoint.event_number =
+                                event.get_original_event().map(|e| e.event_number).unwrap();
                         }
 
                         can_be_dispatched
-                    },
+                    }
 
                     None => true,
                 };
@@ -1649,15 +1617,17 @@ impl<A: Catchup> CatchupWrapper<A> {
         self.flying_event_count = 0;
 
         if !events.is_empty() {
-            self.sender.clone().send_all(iter_ok(events)).wait().map(|_| ())
+            self.sender
+                .clone()
+                .send_all(iter_ok(events))
+                .wait()
+                .map(|_| ())
         } else {
             Ok(())
         }
     }
 
-    fn pull(&mut self, buffer: &mut dyn ReqBuffer)
-        -> ::std::io::Result<()>
-    {
+    fn pull(&mut self, buffer: &mut dyn ReqBuffer) -> ::std::io::Result<()> {
         let extractor = self.inner.create_next_puller(&self.checkpoint);
 
         buffer.push_req(extractor.initial_request())?;
@@ -1668,8 +1638,9 @@ impl<A: Catchup> CatchupWrapper<A> {
 
     fn is_sub_pkg(&self, cmd: Cmd) -> bool {
         match cmd {
-            Cmd::SubscriptionDropped | Cmd::StreamEventAppeared | Cmd::SubscriptionConfirmed
-                => true,
+            Cmd::SubscriptionDropped | Cmd::StreamEventAppeared | Cmd::SubscriptionConfirmed => {
+                true
+            }
 
             _ => false,
         }
@@ -1709,10 +1680,7 @@ pub(crate) trait Catchup {
 
     fn starting_checkpoint(&self) -> Checkpoint;
 
-    fn create_next_puller(
-        &self,
-        _: &Checkpoint
-    ) -> OperationExtractor<Self::Item, Self::Puller>;
+    fn create_next_puller(&self, _: &Checkpoint) -> OperationExtractor<Self::Item, Self::Puller>;
 
     fn can_be_dispatched(&self, _: &Checkpoint, _: &types::ResolvedEvent) -> bool;
 
@@ -1734,8 +1702,7 @@ impl RegularCatchup {
         require_master: bool,
         resolve_link_tos: bool,
         max_count: u16,
-    ) -> RegularCatchup
-    {
+    ) -> RegularCatchup {
         RegularCatchup {
             stream_id,
             start_event_number,
@@ -1748,7 +1715,7 @@ impl RegularCatchup {
 
 impl Catchup for RegularCatchup {
     type Puller = ReadStreamEvents;
-    type Item   = types::ReadStreamStatus<types::StreamSlice>;
+    type Item = types::ReadStreamStatus<types::StreamSlice>;
 
     fn starting_checkpoint(&self) -> Checkpoint {
         Checkpoint::from_event_number(self.start_event_number)
@@ -1757,12 +1724,11 @@ impl Catchup for RegularCatchup {
     fn create_next_puller(
         &self,
         checkpoint: &Checkpoint,
-    ) -> OperationExtractor<types::ReadStreamStatus<types::StreamSlice>, ReadStreamEvents>
-    {
-        let stream_id        = self.stream_id.clone();
-        let event_number     = checkpoint.event_number;
-        let max_count        = self.max_count;
-        let require_master   = self.require_master;
+    ) -> OperationExtractor<types::ReadStreamStatus<types::StreamSlice>, ReadStreamEvents> {
+        let stream_id = self.stream_id.clone();
+        let event_number = checkpoint.event_number;
+        let max_count = self.max_count;
+        let require_master = self.require_master;
         let resolve_link_tos = self.resolve_link_tos;
 
         OperationExtractor::new(|promise| {
@@ -1778,47 +1744,39 @@ impl Catchup for RegularCatchup {
         })
     }
 
-    fn can_be_dispatched(
-        &self,
-        checkpoint: &Checkpoint,
-        event: &types::ResolvedEvent
-    ) -> bool
-    {
+    fn can_be_dispatched(&self, checkpoint: &Checkpoint, event: &types::ResolvedEvent) -> bool {
         match event.get_original_event() {
             Some(event) => checkpoint.event_number <= event.event_number,
-            None        => unreachable!(),
+            None => unreachable!(),
         }
     }
 
     fn handle_pulled_item(
         &self,
         checkpoint: &mut Checkpoint,
-        item: types::ReadStreamStatus<types::StreamSlice>
-    ) -> Pull
-    {
+        item: types::ReadStreamStatus<types::StreamSlice>,
+    ) -> Pull {
         match item {
-            types::ReadStreamStatus::Error(error) =>  match error {
+            types::ReadStreamStatus::Error(error) => match error {
                 types::ReadStreamError::NoStream(_) | types::ReadStreamError::NotModified(_) => {
                     Pull::Success(Vec::new(), true)
-                },
+                }
 
                 types::ReadStreamError::StreamDeleted(stream) => {
                     Pull::Fail(OperationError::StreamDeleted(stream))
-                },
+                }
 
                 types::ReadStreamError::AccessDenied(stream) => {
                     Pull::Fail(OperationError::AccessDenied(stream))
-                },
+                }
 
                 types::ReadStreamError::Error(msg) => {
                     Pull::Fail(OperationError::ServerError(Some(msg)))
-                },
+                }
             },
 
             types::ReadStreamStatus::Success(slice) => match slice.events() {
-                types::LocatedEvents::EndOfStream => {
-                    Pull::Success(Vec::new(), true)
-                },
+                types::LocatedEvents::EndOfStream => Pull::Success(Vec::new(), true),
 
                 types::LocatedEvents::Events { events, next } => {
                     if let Some(ref next) = next {
@@ -1826,15 +1784,13 @@ impl Catchup for RegularCatchup {
                     } else {
                         let event = events.last().unwrap();
 
-                        checkpoint.event_number = event
-                            .get_original_event()
-                            .map(|e| e.event_number)
-                            .unwrap();
+                        checkpoint.event_number =
+                            event.get_original_event().map(|e| e.event_number).unwrap();
                     }
 
                     Pull::Success(events, next.is_none())
-                },
-            }
+                }
+            },
         }
     }
 }
@@ -1852,8 +1808,7 @@ impl AllCatchup {
         require_master: bool,
         resolve_link_tos: bool,
         max_count: u16,
-    ) -> AllCatchup
-    {
+    ) -> AllCatchup {
         AllCatchup {
             start_position,
             require_master,
@@ -1865,7 +1820,7 @@ impl AllCatchup {
 
 impl Catchup for AllCatchup {
     type Puller = ReadAllEvents;
-    type Item   = types::ReadStreamStatus<types::AllSlice>;
+    type Item = types::ReadStreamStatus<types::AllSlice>;
 
     fn starting_checkpoint(&self) -> Checkpoint {
         Checkpoint::from_position(self.start_position)
@@ -1874,8 +1829,7 @@ impl Catchup for AllCatchup {
     fn create_next_puller(
         &self,
         checkpoint: &Checkpoint,
-    ) -> OperationExtractor<types::ReadStreamStatus<types::AllSlice>, ReadAllEvents>
-    {
+    ) -> OperationExtractor<types::ReadStreamStatus<types::AllSlice>, ReadAllEvents> {
         let position = checkpoint.position;
         let max_count = self.max_count;
         let require_master = self.require_master;
@@ -1893,13 +1847,10 @@ impl Catchup for AllCatchup {
         })
     }
 
-    fn can_be_dispatched(
-        &self,
-        checkpoint: &Checkpoint,
-        event: &types::ResolvedEvent,
-    ) -> bool
-    {
-        let current = event.position.expect("Position must be defined for $all stream");
+    fn can_be_dispatched(&self, checkpoint: &Checkpoint, event: &types::ResolvedEvent) -> bool {
+        let current = event
+            .position
+            .expect("Position must be defined for $all stream");
 
         checkpoint.position <= current
     }
@@ -1908,29 +1859,24 @@ impl Catchup for AllCatchup {
         &self,
         checkpoint: &mut Checkpoint,
         item: types::ReadStreamStatus<types::AllSlice>,
-    ) -> Pull
-    {
+    ) -> Pull {
         match item {
             types::ReadStreamStatus::Error(error) => match error {
                 types::ReadStreamError::AccessDenied(stream) => {
                     Pull::Fail(OperationError::AccessDenied(stream))
-                },
+                }
 
                 types::ReadStreamError::Error(msg) => {
                     Pull::Fail(OperationError::ServerError(Some(msg)))
-                },
+                }
 
-                types::ReadStreamError::NotModified(_) => {
-                    Pull::Success(Vec::new(), true)
-                },
+                types::ReadStreamError::NotModified(_) => Pull::Success(Vec::new(), true),
 
                 _ => unreachable!(),
             },
 
             types::ReadStreamStatus::Success(slice) => match slice.events() {
-                types::LocatedEvents::EndOfStream => {
-                    Pull::Success(Vec::new(), true)
-                },
+                types::LocatedEvents::EndOfStream => Pull::Success(Vec::new(), true),
 
                 types::LocatedEvents::Events { events, next } => {
                     if let Some(ref next) = next {
@@ -1944,7 +1890,7 @@ impl Catchup for AllCatchup {
                     }
 
                     Pull::Success(events, next.is_none())
-                },
+                }
             },
         }
     }
@@ -1956,14 +1902,17 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
     }
 
     fn is_valid_response(&self, cmd: Cmd) -> bool {
-        let valid_for_puller = self.puller.as_ref().map_or(false, |p| p.is_valid_response(cmd));
+        let valid_for_puller = self
+            .puller
+            .as_ref()
+            .map_or(false, |p| p.is_valid_response(cmd));
 
         self.sub.is_valid_response(cmd) || valid_for_puller
     }
 
     fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         if self.is_sub_pkg(pkg.cmd) {
-            let cmd    = pkg.cmd;
+            let cmd = pkg.cmd;
             let result = self.sub.respond(buffer, pkg)?;
 
             self.flying_event_count += 1;
@@ -2000,16 +1949,15 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
                         self.report_operation_error(error);
 
                         ImplResult::terminate()
-                    },
+                    }
 
                     Ok(item) => {
-                        let result = {
-                            self.inner.handle_pulled_item(&mut self.checkpoint, item)
-                        };
+                        let result = { self.inner.handle_pulled_item(&mut self.checkpoint, item) };
 
                         match result {
                             Pull::Success(events, end_of_stream) => {
-                                let stream = iter_ok(events).map(types::SubEvent::new_event_appeared);
+                                let stream =
+                                    iter_ok(events).map(types::SubEvent::new_event_appeared);
                                 let result = self.sender.clone().send_all(stream).wait();
 
                                 // The subscription consumer might have asked
@@ -2032,22 +1980,24 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
                                 } else {
                                     ImplResult::terminate()
                                 }
-                            },
+                            }
 
                             Pull::Fail(error) => {
                                 self.report_operation_error(error);
 
                                 ImplResult::terminate()
-                            },
+                            }
                         }
-                    },
+                    }
                 }
             } else {
                 Ok(outcome)
             }
         } else {
-            warn!("Catchup subscription is in wrong state. \
-                  Submit an issue in https://github.com/YoEight/eventstore-rs");
+            warn!(
+                "Catchup subscription is in wrong state. \
+                  Submit an issue in https://github.com/YoEight/eventstore-rs"
+            );
 
             self.report_operation_error(OperationError::wrong_client_impl());
 
@@ -2066,13 +2016,12 @@ impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
     fn connection_has_dropped(
         &mut self,
         buffer: &mut dyn ReqBuffer,
-        _: Cmd
-    ) -> ::std::io::Result<()>
-    {
+        _: Cmd,
+    ) -> ::std::io::Result<()> {
         // When the connection has dropped, we proceed like we are starting
         // this operation from scratch. The only state we don't update is
         // the current `event_number` this catchup subscription is at.
-        self.has_caught_up      = false;
+        self.has_caught_up = false;
         self.flying_event_count = 0;
 
         buffer.push_req(self.initial_request())?;
@@ -2093,9 +2042,7 @@ pub struct CreatePersistentSubscription {
 }
 
 impl CreatePersistentSubscription {
-    pub fn new(promise: Promise<types::PersistActionResult>)
-        -> CreatePersistentSubscription
-    {
+    pub fn new(promise: Promise<types::PersistActionResult>) -> CreatePersistentSubscription {
         CreatePersistentSubscription {
             inner: messages::CreatePersistentSubscription::new(),
             promise,
@@ -2113,18 +2060,28 @@ impl CreatePersistentSubscription {
     pub fn set_settings(&mut self, settings: &types::PersistentSubscriptionSettings) {
         self.inner.set_resolve_link_tos(settings.resolve_link_tos);
         self.inner.set_start_from(settings.start_from);
-        self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+        self.inner
+            .set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
         self.inner.set_record_statistics(settings.extra_stats);
-        self.inner.set_live_buffer_size(i32::from(settings.live_buf_size));
-        self.inner.set_read_batch_size(i32::from(settings.read_batch_size));
-        self.inner.set_buffer_size(i32::from(settings.history_buf_size));
-        self.inner.set_max_retry_count(i32::from(settings.max_retry_count));
+        self.inner
+            .set_live_buffer_size(i32::from(settings.live_buf_size));
+        self.inner
+            .set_read_batch_size(i32::from(settings.read_batch_size));
+        self.inner
+            .set_buffer_size(i32::from(settings.history_buf_size));
+        self.inner
+            .set_max_retry_count(i32::from(settings.max_retry_count));
         self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
-        self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
-        self.inner.set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
-        self.inner.set_checkpoint_min_count(i32::from(settings.min_checkpoint_count));
-        self.inner.set_subscriber_max_count(i32::from(settings.max_subs_count));
-        self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
+        self.inner
+            .set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+        self.inner
+            .set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
+        self.inner
+            .set_checkpoint_min_count(i32::from(settings.min_checkpoint_count));
+        self.inner
+            .set_subscriber_max_count(i32::from(settings.max_subs_count));
+        self.inner
+            .set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
     }
 }
 
@@ -2140,11 +2097,8 @@ impl OperationImpl for CreatePersistentSubscription {
         Cmd::CreatePersistentSubscriptionCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
-        -> ::std::io::Result<ImplResult>
-    {
-        let response: messages::CreatePersistentSubscriptionCompleted =
-            pkg.to_message()?;
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+        let response: messages::CreatePersistentSubscriptionCompleted = pkg.to_message()?;
 
         let result = match response.get_result() {
             CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Success => {
@@ -2180,9 +2134,7 @@ pub struct UpdatePersistentSubscription {
 }
 
 impl UpdatePersistentSubscription {
-    pub fn new(promise: Promise<types::PersistActionResult>)
-        -> UpdatePersistentSubscription
-    {
+    pub fn new(promise: Promise<types::PersistActionResult>) -> UpdatePersistentSubscription {
         UpdatePersistentSubscription {
             inner: messages::UpdatePersistentSubscription::new(),
             promise,
@@ -2200,18 +2152,28 @@ impl UpdatePersistentSubscription {
     pub fn set_settings(&mut self, settings: types::PersistentSubscriptionSettings) {
         self.inner.set_resolve_link_tos(settings.resolve_link_tos);
         self.inner.set_start_from(settings.start_from);
-        self.inner.set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+        self.inner
+            .set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
         self.inner.set_record_statistics(settings.extra_stats);
-        self.inner.set_live_buffer_size(i32::from(settings.live_buf_size));
-        self.inner.set_read_batch_size(i32::from(settings.read_batch_size));
-        self.inner.set_buffer_size(i32::from(settings.history_buf_size));
-        self.inner.set_max_retry_count(i32::from(settings.max_retry_count));
+        self.inner
+            .set_live_buffer_size(i32::from(settings.live_buf_size));
+        self.inner
+            .set_read_batch_size(i32::from(settings.read_batch_size));
+        self.inner
+            .set_buffer_size(i32::from(settings.history_buf_size));
+        self.inner
+            .set_max_retry_count(i32::from(settings.max_retry_count));
         self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
-        self.inner.set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
-        self.inner.set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
-        self.inner.set_checkpoint_min_count(i32::from(settings.min_checkpoint_count));
-        self.inner.set_subscriber_max_count(i32::from(settings.max_subs_count));
-        self.inner.set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
+        self.inner
+            .set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+        self.inner
+            .set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
+        self.inner
+            .set_checkpoint_min_count(i32::from(settings.min_checkpoint_count));
+        self.inner
+            .set_subscriber_max_count(i32::from(settings.max_subs_count));
+        self.inner
+            .set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
     }
 }
 
@@ -2227,11 +2189,8 @@ impl OperationImpl for UpdatePersistentSubscription {
         Cmd::UpdatePersistentSubscriptionCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
-        -> ::std::io::Result<ImplResult>
-    {
-        let response: messages::UpdatePersistentSubscriptionCompleted =
-            pkg.to_message()?;
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+        let response: messages::UpdatePersistentSubscriptionCompleted = pkg.to_message()?;
 
         let result = match response.get_result() {
             UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Success => {
@@ -2267,9 +2226,7 @@ pub struct DeletePersistentSubscription {
 }
 
 impl DeletePersistentSubscription {
-    pub fn new(promise: Promise<types::PersistActionResult>)
-        -> DeletePersistentSubscription
-    {
+    pub fn new(promise: Promise<types::PersistActionResult>) -> DeletePersistentSubscription {
         DeletePersistentSubscription {
             inner: messages::DeletePersistentSubscription::new(),
             promise,
@@ -2297,11 +2254,8 @@ impl OperationImpl for DeletePersistentSubscription {
         Cmd::DeletePersistentSubscriptionCompleted == cmd
     }
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
-        -> ::std::io::Result<ImplResult>
-    {
-        let response: messages::DeletePersistentSubscriptionCompleted =
-            pkg.to_message()?;
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
+        let response: messages::DeletePersistentSubscriptionCompleted = pkg.to_message()?;
 
         let result = match response.get_result() {
             DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Success => {
@@ -2337,9 +2291,7 @@ pub(crate) struct ConnectToPersistentSubscription {
 }
 
 impl ConnectToPersistentSubscription {
-    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>)
-        -> ConnectToPersistentSubscription
-    {
+    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>) -> ConnectToPersistentSubscription {
         ConnectToPersistentSubscription {
             sub_bus,
             inner: messages::ConnectToPersistentSubscription::new(),
@@ -2358,15 +2310,8 @@ impl ConnectToPersistentSubscription {
         self.inner.set_allowed_in_flight_messages(i32::from(size));
     }
 
-    fn publish(
-        &mut self,
-        event: types::SubEvent,
-    ) -> ::std::io::Result<ImplResult>
-    {
-        let result = self.sub_bus
-            .clone()
-            .send(event)
-            .wait();
+    fn publish(&mut self, event: types::SubEvent) -> ::std::io::Result<ImplResult> {
+        let result = self.sub_bus.clone().send(event).wait();
 
         if result.is_ok() {
             ImplResult::awaiting()
@@ -2386,24 +2331,22 @@ impl OperationImpl for ConnectToPersistentSubscription {
 
     fn is_valid_response(&self, cmd: Cmd) -> bool {
         match cmd {
-            Cmd::SubscriptionDropped                       => true,
-            Cmd::PersistentSubscriptionConfirmation        => true,
+            Cmd::SubscriptionDropped => true,
+            Cmd::PersistentSubscriptionConfirmation => true,
             Cmd::PersistentSubscriptionStreamEventAppeared => true,
-            _                                              => false,
+            _ => false,
         }
     }
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg)
-        -> ::std::io::Result<ImplResult>
-    {
+    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
         match pkg.cmd {
             Cmd::PersistentSubscriptionConfirmation => {
                 let mut response: messages::PersistentSubscriptionConfirmation =
                     pkg.to_message()?;
 
                 let last_commit_position = response.get_last_commit_position();
-                let last_event_number    = response.get_last_event_number();
-                let persistent_id        = response.take_subscription_id().to_string();
+                let last_event_number = response.get_last_event_number();
+                let persistent_id = response.take_subscription_id().to_string();
 
                 let confirmed = types::SubEvent::Confirmed {
                     id: pkg.correlation,
@@ -2413,26 +2356,26 @@ impl OperationImpl for ConnectToPersistentSubscription {
                 };
 
                 self.publish(confirmed)
-            },
+            }
 
             Cmd::PersistentSubscriptionStreamEventAppeared => {
                 let mut response: messages::PersistentSubscriptionStreamEventAppeared =
                     pkg.to_message()?;
 
-                let event       = types::ResolvedEvent::new_from_indexed(response.take_event())?;
+                let event = types::ResolvedEvent::new_from_indexed(response.take_event())?;
                 let retry_count = response.get_retryCount() as usize;
-                let appeared    = types::SubEvent::EventAppeared {
+                let appeared = types::SubEvent::EventAppeared {
                     event: Box::new(event),
                     retry_count,
                 };
 
                 self.publish(appeared)
-            },
+            }
 
             Cmd::SubscriptionDropped => {
                 let _ = self.publish(types::SubEvent::Dropped)?;
                 ImplResult::done()
-            },
+            }
 
             _ => unreachable!(),
         }

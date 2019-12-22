@@ -2,20 +2,20 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
-use std::net::{ SocketAddr, ToSocketAddrs };
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::time::Duration;
 
-use bytes::{ Bytes, BytesMut, BufMut, Buf };
-use futures::{ Future, Stream, Sink };
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::stream::iter_ok;
-use futures::sync::mpsc::{ Receiver, Sender };
+use futures::sync::mpsc::{Receiver, Sender};
 use futures::sync::oneshot;
+use futures::{Future, Sink, Stream};
 use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
-use uuid::{ Uuid, BytesError };
+use uuid::{BytesError, Uuid};
 
 use crate::internal::command::Cmd;
 use crate::internal::messages;
@@ -34,7 +34,7 @@ impl Retry {
     pub(crate) fn to_usize(&self) -> usize {
         match *self {
             Retry::Undefinately => usize::max_value(),
-            Retry::Only(x)      => x,
+            Retry::Only(x) => x,
         }
     }
 }
@@ -49,7 +49,8 @@ pub struct Credentials {
 impl Credentials {
     /// Creates a new `Credentials` instance.
     pub fn new<S>(login: S, password: S) -> Credentials
-        where S: Into<Bytes>
+    where
+        S: Into<Bytes>,
     {
         Credentials {
             login: login.into(),
@@ -65,17 +66,18 @@ impl Credentials {
     }
 
     pub(crate) fn parse_from_buf<B>(buf: &mut B) -> ::std::io::Result<Credentials>
-        where B: Buf + Read
+    where
+        B: Buf + Read,
     {
-        let     login_len = buf.get_u8() as usize;
-        let mut login     = Vec::with_capacity(login_len);
+        let login_len = buf.get_u8() as usize;
+        let mut login = Vec::with_capacity(login_len);
 
         let mut take = Read::take(buf, login_len as u64);
         take.read_to_end(&mut login)?;
         let buf = take.into_inner();
 
-        let     passw_len = buf.get_u8() as usize;
-        let mut password  = Vec::with_capacity(passw_len);
+        let passw_len = buf.get_u8() as usize;
+        let mut password = Vec::with_capacity(passw_len);
 
         let mut take = Read::take(buf, passw_len as u64);
         take.read_to_end(&mut password)?;
@@ -194,10 +196,10 @@ pub enum ExpectedVersion {
 impl ExpectedVersion {
     pub(crate) fn to_i64(self) -> i64 {
         match self {
-            ExpectedVersion::Any          => -2,
+            ExpectedVersion::Any => -2,
             ExpectedVersion::StreamExists => -4,
-            ExpectedVersion::NoStream     => -1,
-            ExpectedVersion::Exact(n)     => n,
+            ExpectedVersion::NoStream => -1,
+            ExpectedVersion::Exact(n) => n,
         }
     }
 
@@ -206,7 +208,7 @@ impl ExpectedVersion {
             -2 => ExpectedVersion::Any,
             -4 => ExpectedVersion::StreamExists,
             -1 => ExpectedVersion::NoStream,
-            _  => ExpectedVersion::Exact(ver),
+            _ => ExpectedVersion::Exact(ver),
         }
     }
 }
@@ -216,7 +218,7 @@ impl ExpectedVersion {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Position {
     /// Commit position of the record.
-    pub commit:  i64,
+    pub commit: i64,
 
     /// Prepare position of the record.
     pub prepare: i64,
@@ -248,7 +250,9 @@ impl PartialOrd for Position {
 
 impl Ord for Position {
     fn cmp(&self, other: &Position) -> Ordering {
-        self.commit.cmp(&other.commit).then(self.prepare.cmp(&other.prepare))
+        self.commit
+            .cmp(&other.commit)
+            .then(self.prepare.cmp(&other.prepare))
     }
 }
 
@@ -324,11 +328,11 @@ fn decode_bytes_error(err: BytesError) -> ::std::io::Error {
 impl RecordedEvent {
     pub(crate) fn new(mut event: messages::EventRecord) -> ::std::io::Result<RecordedEvent> {
         let event_stream_id = event.take_event_stream_id().deref().to_owned();
-        let event_id        = Uuid::from_slice(event.get_event_id()).map_err(decode_bytes_error)?;
-        let event_number    = event.get_event_number();
-        let event_type      = event.take_event_type().deref().to_owned();
-        let data            = event.take_data();
-        let metadata        = event.take_metadata();
+        let event_id = Uuid::from_slice(event.get_event_id()).map_err(decode_bytes_error)?;
+        let event_number = event.get_event_number();
+        let event_type = event.take_event_type().deref().to_owned();
+        let data = event.take_data();
+        let metadata = event.take_metadata();
 
         let created = {
             if event.has_created() {
@@ -365,7 +369,8 @@ impl RecordedEvent {
 
     /// Tries to decode this event payload as a JSON object.
     pub fn as_json<'a, T>(&'a self) -> serde_json::Result<T>
-        where T: Deserialize<'a>
+    where
+        T: Deserialize<'a>,
     {
         serde_json::from_slice(&self.data[..])
     }
@@ -421,7 +426,9 @@ impl ResolvedEvent {
         Ok(resolved)
     }
 
-    pub(crate) fn new_from_indexed(mut msg: messages::ResolvedIndexedEvent) -> ::std::io::Result<ResolvedEvent> {
+    pub(crate) fn new_from_indexed(
+        mut msg: messages::ResolvedIndexedEvent,
+    ) -> ::std::io::Result<ResolvedEvent> {
         let event = {
             if msg.has_event() {
                 let record = RecordedEvent::new(msg.take_event())?;
@@ -467,7 +474,8 @@ impl ResolvedEvent {
 
     /// Returns the stream id of the original event.
     pub fn get_original_stream_id(&self) -> Option<&str> {
-        self.get_original_event().map(|event| event.event_stream_id.deref())
+        self.get_original_event()
+            .map(|event| event.event_stream_id.deref())
     }
 }
 
@@ -523,15 +531,18 @@ pub enum LocatedEvents<A> {
     /// Gives the read events and a possible starting position for the next
     /// batch. if `next` is `None`, it means we have reached the end of the
     /// stream.
-    Events { events: Vec<ResolvedEvent>, next: Option<A> },
+    Events {
+        events: Vec<ResolvedEvent>,
+        next: Option<A>,
+    },
 }
 
-impl <A> LocatedEvents<A> {
+impl<A> LocatedEvents<A> {
     /// Indicates if we have reached the end of the stream we read.
     pub fn is_end_of_stream(&self) -> bool {
         match *self {
-            LocatedEvents::EndOfStream            => true,
-            LocatedEvents::Events { ref next, ..} => next.is_some(),
+            LocatedEvents::EndOfStream => true,
+            LocatedEvents::Events { ref next, .. } => next.is_some(),
         }
     }
 }
@@ -582,8 +593,8 @@ impl StreamSlice {
         direction: ReadDirection,
         from: i64,
         events: Vec<ResolvedEvent>,
-        next_num_opt: Option<i64>) -> StreamSlice
-    {
+        next_num_opt: Option<i64>,
+    ) -> StreamSlice {
         StreamSlice {
             _from: from,
             _direction: direction,
@@ -617,7 +628,7 @@ impl Slice for StreamSlice {
                 Some(next_num) => LocatedEvents::Events {
                     events: self._events,
                     next: Some(next_num),
-                }
+                },
             }
         }
     }
@@ -637,8 +648,8 @@ impl AllSlice {
         direction: ReadDirection,
         from: Position,
         events: Vec<ResolvedEvent>,
-        next: Position) -> AllSlice
-    {
+        next: Position,
+    ) -> AllSlice {
         AllSlice {
             from,
             direction,
@@ -687,8 +698,9 @@ pub struct EventData {
 impl EventData {
     /// Creates an event with a JSON payload.
     pub fn json<P, S>(event_type: S, payload: P) -> serde_json::Result<EventData>
-        where P: Serialize,
-              S: AsRef<str>
+    where
+        P: Serialize,
+        S: AsRef<str>,
     {
         let data = serde_json::to_vec(&payload)?;
         let bytes = Bytes::from(data);
@@ -703,7 +715,8 @@ impl EventData {
 
     /// Creates an event with a raw binary payload.
     pub fn binary<S>(event_type: S, payload: Bytes) -> EventData
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         EventData {
             event_type: event_type.as_ref().into(),
@@ -716,29 +729,39 @@ impl EventData {
     /// Set an id to this event. By default, the id will be generated by the
     /// server.
     pub fn id(self, value: Uuid) -> EventData {
-        EventData { id_opt: Some(value), ..self }
+        EventData {
+            id_opt: Some(value),
+            ..self
+        }
     }
 
     /// Assignes a JSON metadata to this event.
     pub fn metadata_as_json<P>(self, payload: P) -> EventData
-        where P: Serialize
+    where
+        P: Serialize,
     {
-        let bytes    = Bytes::from(serde_json::to_vec(&payload).unwrap());
+        let bytes = Bytes::from(serde_json::to_vec(&payload).unwrap());
         let json_bin = Some(Payload::Json(bytes));
 
-        EventData { metadata_payload_opt: json_bin, ..self }
+        EventData {
+            metadata_payload_opt: json_bin,
+            ..self
+        }
     }
 
     /// Assignes a raw binary metadata to this event.
     pub fn metadata_as_binary(self, payload: Bytes) -> EventData {
         let content_bin = Some(Payload::Binary(payload));
 
-        EventData { metadata_payload_opt: content_bin, ..self }
+        EventData {
+            metadata_payload_opt: content_bin,
+            ..self
+        }
     }
 
     pub(crate) fn build(self) -> messages::NewEvent {
         let mut new_event = messages::NewEvent::new();
-        let     id        = self.id_opt.unwrap_or_else(Uuid::new_v4);
+        let id = self.id_opt.unwrap_or_else(Uuid::new_v4);
 
         new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
 
@@ -746,24 +769,24 @@ impl EventData {
             Payload::Json(bin) => {
                 new_event.set_data_content_type(1);
                 new_event.set_data(bin);
-            },
+            }
 
             Payload::Binary(bin) => {
                 new_event.set_data_content_type(0);
                 new_event.set_data(bin);
-            },
+            }
         }
 
         match self.metadata_payload_opt {
             Some(Payload::Json(bin)) => {
                 new_event.set_metadata_content_type(1);
                 new_event.set_metadata(bin);
-            },
+            }
 
             Some(Payload::Binary(bin)) => {
                 new_event.set_metadata_content_type(0);
                 new_event.set_metadata(bin);
-            },
+            }
 
             None => new_event.set_metadata_content_type(0),
         }
@@ -795,19 +818,28 @@ impl StreamMetadataBuilder {
     /// When data reaches a certain length it disappears automatically
     /// from the stream and is considered eligible for scavenging.
     pub fn max_count(self, value: u64) -> StreamMetadataBuilder {
-        StreamMetadataBuilder { max_count: Some(value), ..self }
+        StreamMetadataBuilder {
+            max_count: Some(value),
+            ..self
+        }
     }
 
     /// Sets a sliding window based on dates. When data reaches a certain age
     /// it disappears automatically from the stream and is considered
     /// eligible for scavenging.
     pub fn max_age(self, value: Duration) -> StreamMetadataBuilder {
-        StreamMetadataBuilder { max_age: Some(value), ..self }
+        StreamMetadataBuilder {
+            max_age: Some(value),
+            ..self
+        }
     }
 
     /// Sets the event number from which previous events can be scavenged.
     pub fn truncate_before(self, value: u64) -> StreamMetadataBuilder {
-        StreamMetadataBuilder { truncate_before: Some(value), ..self }
+        StreamMetadataBuilder {
+            truncate_before: Some(value),
+            ..self
+        }
     }
 
     /// This controls the cache of the head of a stream. Most URIs in a stream
@@ -815,20 +847,27 @@ impl StreamMetadataBuilder {
     /// may be preferable in some situations to set a small amount of caching
     /// on the head to allow intermediaries to handle polls (say 10 seconds).
     pub fn cache_control(self, value: Duration) -> StreamMetadataBuilder {
-        StreamMetadataBuilder { cache_control: Some(value), ..self }
+        StreamMetadataBuilder {
+            cache_control: Some(value),
+            ..self
+        }
     }
 
     /// Sets the ACL of a stream.
     pub fn acl(self, value: StreamAcl) -> StreamMetadataBuilder {
-        StreamMetadataBuilder { acl: Some(value), ..self }
+        StreamMetadataBuilder {
+            acl: Some(value),
+            ..self
+        }
     }
 
     /// Adds user-defined property in the stream metadata.
     pub fn insert_custom_property<V>(mut self, key: String, value: V) -> StreamMetadataBuilder
-        where V: Serialize
+    where
+        V: Serialize,
     {
         let serialized = serde_json::to_value(value).unwrap();
-        let _          = self.properties.insert(key, serialized);
+        let _ = self.properties.insert(key, serialized);
 
         self
     }
@@ -918,14 +957,14 @@ pub(crate) enum SubEvent {
     },
 
     HasBeenConfirmed(oneshot::Sender<()>),
-    Dropped
+    Dropped,
 }
 
 impl SubEvent {
     pub(crate) fn event_appeared(&self) -> Option<&ResolvedEvent> {
         match self {
-            SubEvent::EventAppeared{ ref event, .. } => Some(event),
-            _                                        => None,
+            SubEvent::EventAppeared { ref event, .. } => Some(event),
+            _ => None,
         }
     }
 
@@ -945,7 +984,7 @@ struct State<A: SubscriptionConsumer> {
     buffer: BytesMut,
 }
 
-impl <A: SubscriptionConsumer> State<A> {
+impl<A: SubscriptionConsumer> State<A> {
     fn new(consumer: A) -> State<A> {
         State {
             consumer,
@@ -972,7 +1011,7 @@ impl OnEvent {
     fn is_stop(&self) -> bool {
         match *self {
             OnEvent::Continue => false,
-            OnEvent::Stop     => true,
+            OnEvent::Stop => true,
         }
     }
 }
@@ -997,39 +1036,40 @@ pub enum NakAction {
 }
 
 impl NakAction {
-    fn build_internal_nak_action(self)
-        -> messages::PersistentSubscriptionNakEvents_NakAction
-    {
+    fn build_internal_nak_action(self) -> messages::PersistentSubscriptionNakEvents_NakAction {
         match self {
             NakAction::Unknown => messages::PersistentSubscriptionNakEvents_NakAction::Unknown,
-            NakAction::Retry   => messages::PersistentSubscriptionNakEvents_NakAction::Retry,
-            NakAction::Skip    => messages::PersistentSubscriptionNakEvents_NakAction::Skip,
-            NakAction::Park    => messages::PersistentSubscriptionNakEvents_NakAction::Park,
-            NakAction::Stop    => messages::PersistentSubscriptionNakEvents_NakAction::Stop,
+            NakAction::Retry => messages::PersistentSubscriptionNakEvents_NakAction::Retry,
+            NakAction::Skip => messages::PersistentSubscriptionNakEvents_NakAction::Skip,
+            NakAction::Park => messages::PersistentSubscriptionNakEvents_NakAction::Park,
+            NakAction::Stop => messages::PersistentSubscriptionNakEvents_NakAction::Stop,
         }
     }
 }
 
-fn on_event<C>(
-    sender: &Sender<Msg>,
-    state: &mut State<C>,
-    event: SubEvent
-) -> OnEvent
-    where
-        C: SubscriptionConsumer
+fn on_event<C>(sender: &Sender<Msg>, state: &mut State<C>, event: SubEvent) -> OnEvent
+where
+    C: SubscriptionConsumer,
 {
     match event {
-        SubEvent::Confirmed { id, last_commit_position, last_event_number, persistent_id } => {
+        SubEvent::Confirmed {
+            id,
+            last_commit_position,
+            last_event_number,
+            persistent_id,
+        } => {
             state.confirmation_id = Some(id);
             state.persistent_id = persistent_id;
             state.drain_requests();
-            state.consumer.when_confirmed(id, last_commit_position, last_event_number);
-        },
+            state
+                .consumer
+                .when_confirmed(id, last_commit_position, last_event_number);
+        }
 
         SubEvent::EventAppeared { event, retry_count } => {
             let decision = match state.persistent_id.as_ref() {
                 Some(sub_id) => {
-                    let mut env  = PersistentSubscriptionEnv::new(retry_count);
+                    let mut env = PersistentSubscriptionEnv::new(retry_count);
                     let decision = state.consumer.when_event_appeared(&mut env, event);
 
                     let acks = env.acks;
@@ -1048,21 +1088,19 @@ fn on_event<C>(
                             msg.mut_processed_event_ids().push(bytes);
                         }
 
-                        let pkg = Pkg::from_message(
-                            Cmd::PersistentSubscriptionAckEvents,
-                            None,
-                            &msg
-                        ).unwrap();
+                        let pkg =
+                            Pkg::from_message(Cmd::PersistentSubscriptionAckEvents, None, &msg)
+                                .unwrap();
 
                         sender.clone().send(Msg::Send(pkg)).wait().unwrap();
                     }
 
-                    let naks     = env.naks;
+                    let naks = env.naks;
                     let mut pkgs = Vec::new();
 
                     if !naks.is_empty() {
                         for naked in naks {
-                            let mut msg       = messages::PersistentSubscriptionNakEvents::new();
+                            let mut msg = messages::PersistentSubscriptionNakEvents::new();
                             let mut bytes_vec = Vec::with_capacity(naked.ids.len());
 
                             msg.set_subscription_id(sub_id.as_str().into());
@@ -1080,11 +1118,9 @@ fn on_event<C>(
                             msg.set_message(naked.message);
                             msg.set_action(naked.action.build_internal_nak_action());
 
-                            let pkg = Pkg::from_message(
-                                Cmd::PersistentSubscriptionAckEvents,
-                                None,
-                                &msg
-                            ).unwrap();
+                            let pkg =
+                                Pkg::from_message(Cmd::PersistentSubscriptionAckEvents, None, &msg)
+                                    .unwrap();
 
                             pkgs.push(pkg);
                         }
@@ -1094,26 +1130,28 @@ fn on_event<C>(
                     }
 
                     decision
-                },
+                }
 
-                None => {
-                   state.consumer.when_event_appeared(&mut NoopSubscriptionEnv, event)
-                },
+                None => state
+                    .consumer
+                    .when_event_appeared(&mut NoopSubscriptionEnv, event),
             };
 
             if let OnEventAppeared::Drop = decision {
-                let id  = state.confirmation_id.expect("impossible situation when dropping subscription");
+                let id = state
+                    .confirmation_id
+                    .expect("impossible situation when dropping subscription");
                 let pkg = Pkg::new(Cmd::UnsubscribeFromStream, id);
 
                 sender.clone().send(Msg::Send(pkg)).wait().unwrap();
                 return OnEvent::Stop;
             }
-        },
+        }
 
         SubEvent::Dropped => {
             state.consumer.when_dropped();
             state.drain_requests();
-        },
+        }
 
         SubEvent::HasBeenConfirmed(req) => {
             if state.confirmation_id.is_some() {
@@ -1121,7 +1159,7 @@ fn on_event<C>(
             } else {
                 state.confirmation_requests.push(req);
             }
-        },
+        }
     };
 
     OnEvent::Continue
@@ -1137,7 +1175,8 @@ pub struct Subscription {
 impl Subscription {
     /// Consumes synchronously the events comming from a subscription.
     pub fn consume<C>(self, consumer: C) -> C
-        where C: SubscriptionConsumer
+    where
+        C: SubscriptionConsumer,
     {
         let mut state = State::new(consumer);
 
@@ -1158,26 +1197,33 @@ impl Subscription {
     }
 
     /// Consumes asynchronously the events comming from a subscription.
-    pub fn consume_async<C>(self, init: C) -> impl Future<Item=C, Error=()>
-        where C: SubscriptionConsumer
+    pub fn consume_async<C>(self, init: C) -> impl Future<Item = C, Error = ()>
+    where
+        C: SubscriptionConsumer,
     {
         let sender = self.sender.clone();
 
-        self.receiver.fold(State::new(init), move |mut state, event| {
-            match on_event(&sender, &mut state, event) {
-                OnEvent::Continue => Ok::<State<C>, ()>(state),
-                OnEvent::Stop     => Err(()),
-            }
-        }).map(|state| state.consumer)
+        self.receiver
+            .fold(State::new(init), move |mut state, event| {
+                match on_event(&sender, &mut state, event) {
+                    OnEvent::Continue => Ok::<State<C>, ()>(state),
+                    OnEvent::Stop => Err(()),
+                }
+            })
+            .map(|state| state.consumer)
     }
 
     /// You shouldn't have to use that function as it makes no sense to
     /// wait for a confirmation from the server. However, for testing
     /// purpose or weirdos, we expose that function. it returns
     /// a future waiting the subscription to be confirmed by the server.
-    pub fn confirmation(&self) -> impl Future<Item=(), Error=()> {
+    pub fn confirmation(&self) -> impl Future<Item = (), Error = ()> {
         let (tx, rcv) = oneshot::channel();
-        let _         = self.inner.clone().send(SubEvent::HasBeenConfirmed(tx)).wait();
+        let _ = self
+            .inner
+            .clone()
+            .send(SubEvent::HasBeenConfirmed(tx))
+            .wait();
 
         rcv.map_err(|_| ())
     }
@@ -1237,7 +1283,9 @@ struct NoopSubscriptionEnv;
 impl SubscriptionEnv for NoopSubscriptionEnv {
     fn push_ack(&mut self, _: Uuid) {}
     fn push_nak_with_message<S: AsRef<str>>(&mut self, _: Vec<Uuid>, _: NakAction, _: S) {}
-    fn current_event_retry_count(&self) -> usize { 0 }
+    fn current_event_retry_count(&self) -> usize {
+        0
+    }
 }
 
 struct PersistentSubscriptionEnv {
@@ -1261,7 +1309,12 @@ impl SubscriptionEnv for PersistentSubscriptionEnv {
         self.acks.push(id);
     }
 
-    fn push_nak_with_message<S: AsRef<str>>(&mut self, ids: Vec<Uuid>, action: NakAction, message: S) {
+    fn push_nak_with_message<S: AsRef<str>>(
+        &mut self,
+        ids: Vec<Uuid>,
+        action: NakAction,
+        message: S,
+    ) {
         let naked = NakedEvents {
             ids,
             action,
@@ -1289,7 +1342,8 @@ pub trait SubscriptionConsumer {
 
     /// Called when the subscription has received an event from the server.
     fn when_event_appeared<E>(&mut self, _: &mut E, _: Box<ResolvedEvent>) -> OnEventAppeared
-        where E: SubscriptionEnv;
+    where
+        E: SubscriptionEnv;
 
     /// Called when the subscrition has been dropped whether by the server or
     /// the user themself.
@@ -1326,8 +1380,8 @@ impl SystemConsumerStrategy {
     pub(crate) fn as_str(&self) -> &str {
         match *self {
             SystemConsumerStrategy::DispatchToSingle => "DispatchToSingle",
-            SystemConsumerStrategy::RoundRobin       => "RoundRobin",
-            SystemConsumerStrategy::Pinned           => "Pinned",
+            SystemConsumerStrategy::RoundRobin => "RoundRobin",
+            SystemConsumerStrategy::Pinned => "Pinned",
         }
     }
 }
@@ -1419,7 +1473,7 @@ impl PersistActionResult {
     pub fn is_success(&self) -> bool {
         match *self {
             PersistActionResult::Success => true,
-            _                            => false,
+            _ => false,
         }
     }
 
@@ -1461,9 +1515,7 @@ impl std::fmt::Display for Endpoint {
 
 impl Endpoint {
     pub(crate) fn from_addr(addr: SocketAddr) -> Endpoint {
-        Endpoint {
-            addr,
-        }
+        Endpoint { addr }
     }
 }
 
@@ -1486,25 +1538,25 @@ impl std::fmt::Display for GossipSeed {
 impl GossipSeed {
     /// Creates a gossip seed.
     pub fn new<A>(addrs: A) -> std::io::Result<GossipSeed>
-        where A: ToSocketAddrs,
+    where
+        A: ToSocketAddrs,
     {
         let mut iter = addrs.to_socket_addrs()?;
 
         if let Some(addr) = iter.next() {
-            let endpoint = Endpoint {
-                addr,
-            };
+            let endpoint = Endpoint { addr };
 
             Ok(GossipSeed::from_endpoint(endpoint))
         } else {
-            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to resolve socket address."))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Failed to resolve socket address.",
+            ))
         }
     }
 
     pub(crate) fn from_endpoint(endpoint: Endpoint) -> GossipSeed {
-        GossipSeed {
-            endpoint,
-        }
+        GossipSeed { endpoint }
     }
 
     pub(crate) fn from_socket_addr(addr: SocketAddr) -> GossipSeed {
@@ -1514,11 +1566,12 @@ impl GossipSeed {
     pub(crate) fn url(self) -> std::io::Result<reqwest::Url> {
         let url_str = format!("http://{}/gossip?format=json", self.endpoint.addr);
 
-        reqwest::Url::parse(&url_str)
-            .map_err(|error|
-            {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Wrong url [{}]: {}", url_str, error))
-            })
+        reqwest::Url::parse(&url_str).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Wrong url [{}]: {}", url_str, error),
+            )
+        })
     }
 }
 

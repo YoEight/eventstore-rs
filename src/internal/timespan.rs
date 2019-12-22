@@ -1,11 +1,11 @@
+use serde::de::{self, Deserialize, Deserializer, Visitor};
+use serde::ser::{Serialize, Serializer};
 use std::borrow::Borrow;
 use std::time::Duration;
-use serde::de::{ self, Visitor, Deserializer, Deserialize };
-use serde::ser::{ Serialize, Serializer };
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Timespan {
-    pub ticks: u64
+    pub ticks: u64,
 }
 
 pub struct Builder {
@@ -58,10 +58,11 @@ impl Builder {
     }
 
     pub fn build(&self) -> Timespan {
-        let total_millis = self.days * 24 * 3600 + self.hours * 3600 + self.minutes * 60 + self.seconds;
+        let total_millis =
+            self.days * 24 * 3600 + self.hours * 3600 + self.minutes * 60 + self.seconds;
         let total_millis = total_millis * 1000;
         let total_millis = total_millis + self.milliseconds;
-        let ticks        = total_millis * TICKS_PER_MILLIS;
+        let ticks = total_millis * TICKS_PER_MILLIS;
 
         Timespan::from_ticks(ticks)
     }
@@ -69,17 +70,16 @@ impl Builder {
 
 impl Timespan {
     fn from_ticks(ticks: u64) -> Timespan {
-        Timespan {
-            ticks,
-        }
+        Timespan { ticks }
     }
 
     pub fn from_duration(duration: Duration) -> Timespan {
         let mut builder = Timespan::builder();
 
-        builder.seconds(duration.as_secs())
-               .milliseconds(u64::from(duration.subsec_millis()))
-               .build()
+        builder
+            .seconds(duration.as_secs())
+            .milliseconds(u64::from(duration.subsec_millis()))
+            .build()
     }
 
     pub fn builder() -> Builder {
@@ -118,11 +118,11 @@ impl Timespan {
 
     fn str_repr(self) -> String {
         let mut builder = String::new();
-        let     days      = self.days();
-        let     hours     = self.hours();
-        let     minutes   = self.minutes();
-        let     seconds   = self.seconds();
-        let     fractions = self.ticks % TICKS_PER_SECONDS;
+        let days = self.days();
+        let hours = self.hours();
+        let minutes = self.minutes();
+        let seconds = self.seconds();
+        let fractions = self.ticks % TICKS_PER_SECONDS;
 
         if days > 0 {
             builder.push_str(format!("{}.", days).borrow());
@@ -142,7 +142,8 @@ impl Timespan {
 
 impl Serialize for Timespan {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
+    where
+        S: Serializer,
     {
         serializer.serialize_str(self.str_repr().borrow())
     }
@@ -158,7 +159,7 @@ enum Parse {
     Fractions,
 }
 
-impl <'de> Visitor<'de> for ForTimespan {
+impl<'de> Visitor<'de> for ForTimespan {
     type Value = Timespan;
 
     fn expecting(&self, formatter: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -166,27 +167,27 @@ impl <'de> Visitor<'de> for ForTimespan {
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where E: de::Error
+    where
+        E: de::Error,
     {
-
         fn to_u32(vec: &[u32]) -> u32 {
             if vec.is_empty() {
                 return 0;
             }
 
-            let mut exp    = vec.len() as u32;
+            let mut exp = vec.len() as u32;
             let mut result = 0;
 
             for value in vec {
-                exp    -= 1;
+                exp -= 1;
                 result += value * 10_u32.pow(exp);
             }
 
             result
         }
 
-        let mut state   = Parse::Days;
-        let mut buffer  = Vec::new();
+        let mut state = Parse::Days;
+        let mut buffer = Vec::new();
         let mut builder = Timespan::builder();
 
         for c in value.chars() {
@@ -207,7 +208,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     } else {
                         buffer.push(c.to_digit(BASE_10_RDX).unwrap());
                     }
-                },
+                }
 
                 Parse::Hours => {
                     if c == ':' {
@@ -219,7 +220,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     } else {
                         buffer.push(c.to_digit(BASE_10_RDX).unwrap());
                     }
-                },
+                }
 
                 Parse::Minutes => {
                     if c == ':' {
@@ -231,7 +232,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     } else {
                         buffer.push(c.to_digit(BASE_10_RDX).unwrap());
                     }
-                },
+                }
 
                 Parse::Seconds => {
                     if c == '.' {
@@ -243,7 +244,7 @@ impl <'de> Visitor<'de> for ForTimespan {
                     } else {
                         buffer.push(c.to_digit(BASE_10_RDX).unwrap());
                     }
-                },
+                }
 
                 Parse::Fractions => {
                     buffer.push(c.to_digit(BASE_10_RDX).unwrap());
@@ -251,7 +252,7 @@ impl <'de> Visitor<'de> for ForTimespan {
             }
         }
 
-        let     num            = to_u32(&buffer);
+        let num = to_u32(&buffer);
         let mut residual_ticks = 0;
 
         // In case the Timespan string representation didn't contain fractions.
@@ -269,9 +270,10 @@ impl <'de> Visitor<'de> for ForTimespan {
     }
 }
 
-impl <'de> Deserialize<'de> for Timespan {
+impl<'de> Deserialize<'de> for Timespan {
     fn deserialize<D>(deserializer: D) -> Result<Timespan, D::Error>
-        where D: Deserializer<'de>
+    where
+        D: Deserializer<'de>,
     {
         deserializer.deserialize_str(ForTimespan)
     }

@@ -1,4 +1,4 @@
-use std::collections::{ HashMap, HashSet };
+use std::collections::{HashMap, HashSet};
 use std::iter::IntoIterator;
 
 use bytes::BytesMut;
@@ -7,7 +7,9 @@ use uuid::Uuid;
 use crate::internal::command::Cmd;
 use crate::internal::connection::Connection;
 use crate::internal::messages;
-use crate::internal::operations::{ OperationError, OperationWrapper, OperationId, Tracking, Session };
+use crate::internal::operations::{
+    OperationError, OperationId, OperationWrapper, Session, Tracking,
+};
 use crate::internal::package::Pkg;
 use crate::types::Endpoint;
 
@@ -42,8 +44,8 @@ impl<'a> SessionImpl<'a> {
         id: OperationId,
         assocs: &'a mut HashMap<Uuid, Request>,
         conn: &'a Connection,
-        runnings: &'a mut HashSet<Uuid>) -> SessionImpl<'a>
-    {
+        runnings: &'a mut HashSet<Uuid>,
+    ) -> SessionImpl<'a> {
         SessionImpl {
             id,
             assocs,
@@ -54,8 +56,8 @@ impl<'a> SessionImpl<'a> {
 }
 
 fn terminate<I>(assocs: &mut HashMap<Uuid, Request>, runnings: I)
-    where
-        I: IntoIterator<Item=Uuid>
+where
+    I: IntoIterator<Item = Uuid>,
 {
     for id in runnings {
         assocs.remove(&id);
@@ -65,7 +67,7 @@ fn terminate<I>(assocs: &mut HashMap<Uuid, Request>, runnings: I)
 impl<'a> Session for SessionImpl<'a> {
     fn new_request(&mut self, cmd: Cmd) -> Uuid {
         let req = Request::new(self.id, cmd, self.conn.id);
-        let id  = req.get_id();
+        let id = req.get_id();
 
         self.assocs.insert(id, req);
         self.runnings.insert(id);
@@ -79,17 +81,18 @@ impl<'a> Session for SessionImpl<'a> {
                 self.runnings.remove(id);
 
                 Ok(req.tracker)
-            },
+            }
 
             None => {
-                let error = ::std::io::Error::new(::std::io::ErrorKind::Other, "Tracker must exists");
+                let error =
+                    ::std::io::Error::new(::std::io::ErrorKind::Other, "Tracker must exists");
                 Err(error)
-            },
+            }
         }
     }
 
     fn reuse(&mut self, tracker: Tracking) {
-        let id  = tracker.get_id();
+        let id = tracker.get_id();
         let req = Request {
             session: self.id,
             tracker,
@@ -102,10 +105,11 @@ impl<'a> Session for SessionImpl<'a> {
     fn using(&mut self, id: &Uuid) -> ::std::io::Result<&mut Tracking> {
         match self.assocs.get_mut(id) {
             Some(req) => Ok(&mut req.tracker),
-            None      => {
-                let error = ::std::io::Error::new(::std::io::ErrorKind::Other, "Tracker must exists");
+            None => {
+                let error =
+                    ::std::io::Error::new(::std::io::ErrorKind::Other, "Tracker must exists");
                 Err(error)
-            },
+            }
         }
     }
 
@@ -150,27 +154,33 @@ impl Requests {
         let mut runnings = HashSet::new();
         let session = SessionImpl::new(op.id, &mut requests, conn, &mut runnings);
 
-        match op.send(&mut self.buffer, session).map(|out| out.produced_pkgs()) {
+        match op
+            .send(&mut self.buffer, session)
+            .map(|out| out.produced_pkgs())
+        {
             Ok(pkgs) => {
                 conn.enqueue_all(pkgs);
 
                 self.session_request_ids.insert(op.id, runnings);
                 self.sessions.insert(op.id, op);
-            },
+            }
 
             Err(e) => {
                 error!("Exception occured when issuing requests: {}", e);
 
                 terminate(&mut self.assocs, runnings);
-            },
+            }
         }
 
         mem::replace(&mut self.assocs, requests);
     }
 
-    fn handle_pkg(&mut self, conn: &Connection, awaiting: &mut Vec<OperationWrapper>, pkg: Pkg)
-        -> Option<Endpoint>
-    {
+    fn handle_pkg(
+        &mut self,
+        conn: &Connection,
+        awaiting: &mut Vec<OperationWrapper>,
+        pkg: Pkg,
+    ) -> Option<Endpoint> {
         use std::mem;
 
         struct Resp {
@@ -188,34 +198,33 @@ impl Requests {
         let mut sessions_requests = mem::replace(&mut self.session_request_ids, HashMap::new());
         let mut requests = mem::replace(&mut self.assocs, HashMap::new());
 
-        let extract_resp = requests.get(&pkg.correlation).copied().and_then(|request|
-        {
-            sessions.remove(&request.session).and_then(|operation|
-            {
-                sessions_requests.remove(&request.session).map(|runnings|
-                {
-                    Resp {
+        let extract_resp = requests.get(&pkg.correlation).copied().and_then(|request| {
+            sessions.remove(&request.session).and_then(|operation| {
+                sessions_requests
+                    .remove(&request.session)
+                    .map(|runnings| Resp {
                         operation,
                         request,
                         runnings,
-                    }
-                })
+                    })
             })
         });
 
-        let pkg_id  = pkg.correlation;
+        let pkg_id = pkg.correlation;
         let pkg_cmd = pkg.cmd;
 
         let endpoint_opt = if let Some(mut resp) = extract_resp {
             let original_cmd = resp.request.tracker.get_cmd();
-            let session_id   = resp.request.session;
+            let session_id = resp.request.session;
 
-            debug!("Package [{}]: command {:?} received {:?}.", pkg_id, original_cmd, pkg_cmd);
+            debug!(
+                "Package [{}]: command {:?} received {:?}.",
+                pkg_id, original_cmd, pkg_cmd
+            );
 
             let out = {
                 let mut session =
-                    SessionImpl::new(
-                        session_id, &mut requests, conn, &mut resp.runnings);
+                    SessionImpl::new(session_id, &mut requests, conn, &mut resp.runnings);
 
                 match pkg.cmd {
                     Cmd::BadRequest => {
@@ -223,37 +232,47 @@ impl Requests {
 
                         error!("Bad request for command {:?}: {}.", original_cmd, msg);
 
-                        resp.operation.failed(OperationError::ServerError(Some(msg)));
+                        resp.operation
+                            .failed(OperationError::ServerError(Some(msg)));
 
                         Out::Failed
-                    },
+                    }
 
                     Cmd::NotAuthenticated => {
                         error!("Not authenticated for command {:?}.", original_cmd);
 
-                        resp.operation.failed(OperationError::AuthenticationRequired);
+                        resp.operation
+                            .failed(OperationError::AuthenticationRequired);
 
                         Out::Failed
-                    },
+                    }
 
                     Cmd::NotHandled => {
                         warn!("Not handled request {:?} id {}.", original_cmd, pkg_id);
 
-                        let decoded_msg: std::io::Result<Option<Endpoint>> =
-                            pkg.to_message().and_then(|not_handled: messages::NotHandled|
-                            {
-                                if let messages::NotHandled_NotHandledReason::NotMaster = not_handled.get_reason() {
+                        let decoded_msg: std::io::Result<Option<Endpoint>> = pkg
+                            .to_message()
+                            .and_then(|not_handled: messages::NotHandled| {
+                                if let messages::NotHandled_NotHandledReason::NotMaster =
+                                    not_handled.get_reason()
+                                {
                                     let master_info: messages::NotHandled_MasterInfo =
-                                        protobuf::parse_from_bytes(not_handled.get_additional_info())?;
+                                        protobuf::parse_from_bytes(
+                                            not_handled.get_additional_info(),
+                                        )?;
 
                                     // TODO - Support reconnection on the secure port when we are going to
                                     // implement SSL connection.
-                                    let addr_str = format!("{}:{}", master_info.get_external_tcp_address(), master_info.get_external_tcp_port());
-                                    let addr = addr_str.parse().map_err(|e|
-                                    {
+                                    let addr_str = format!(
+                                        "{}:{}",
+                                        master_info.get_external_tcp_address(),
+                                        master_info.get_external_tcp_port()
+                                    );
+                                    let addr = addr_str.parse().map_err(|e| {
                                         std::io::Error::new(
                                             std::io::ErrorKind::InvalidInput,
-                                            format!("Failed parsing ip address: {}", e))
+                                            format!("Failed parsing ip address: {}", e),
+                                        )
                                     })?;
 
                                     let external_tcp_port = Endpoint::from_addr(addr);
@@ -267,15 +286,26 @@ impl Requests {
                         match decoded_msg {
                             Ok(endpoint_opt) => {
                                 if let Some(endpoint) = endpoint_opt {
-                                    warn!("Received a non master error on command {:?} id {}, [{:?}]",
-                                        resp.request.tracker.get_cmd(), pkg.correlation, endpoint);
+                                    warn!(
+                                        "Received a non master error on command {:?} id {}, [{:?}]",
+                                        resp.request.tracker.get_cmd(),
+                                        pkg.correlation,
+                                        endpoint
+                                    );
 
                                     Out::Handled(Some(endpoint))
                                 } else {
-                                    warn!("The server has either not started or is too busy.
-                                          Retrying command {:?} id {}.", original_cmd, pkg_id);
+                                    warn!(
+                                        "The server has either not started or is too busy.
+                                          Retrying command {:?} id {}.",
+                                        original_cmd, pkg_id
+                                    );
 
-                                    match resp.operation.retry(&mut self.buffer, &mut session, pkg_id) {
+                                    match resp.operation.retry(
+                                        &mut self.buffer,
+                                        &mut session,
+                                        pkg_id,
+                                    ) {
                                         Ok(outcome) => {
                                             let pkgs = outcome.produced_pkgs();
 
@@ -284,7 +314,7 @@ impl Requests {
                                             }
 
                                             Out::Handled(None)
-                                        },
+                                        }
 
                                         Err(error) => {
                                             error!(
@@ -293,18 +323,21 @@ impl Requests {
                                             );
 
                                             Out::Failed
-                                        },
+                                        }
                                     }
                                 }
-                            },
+                            }
 
                             Err(error) => {
-                                error!("Decoding error: can't decode NotHandled message: {}.", error);
+                                error!(
+                                    "Decoding error: can't decode NotHandled message: {}.",
+                                    error
+                                );
 
                                 Out::Failed
-                            },
+                            }
                         }
-                    },
+                    }
 
                     _ => match resp.operation.receive(&mut self.buffer, session, pkg) {
                         Ok(outcome) => {
@@ -315,7 +348,7 @@ impl Requests {
                             }
 
                             Out::Handled(None)
-                        },
+                        }
 
                         Err(e) => {
                             error!("An error occured when running operation: {}", e);
@@ -324,7 +357,7 @@ impl Requests {
                             resp.operation.failed(OperationError::InvalidOperation(msg));
 
                             Out::Failed
-                        },
+                        }
                     },
                 }
             };
@@ -343,16 +376,19 @@ impl Requests {
 
                         None
                     }
-                },
+                }
 
                 Out::Failed => {
                     terminate(&mut requests, resp.runnings.drain());
 
                     None
-                },
+                }
             }
         } else {
-            warn!("Package [{}] is not associated to a session. cmd {:?}.", pkg_id, pkg_cmd);
+            warn!(
+                "Package [{}] is not associated to a session. cmd {:?}.",
+                pkg_id, pkg_cmd
+            );
 
             None
         };
@@ -371,12 +407,10 @@ impl Requests {
         let mut sessions_requests = mem::replace(&mut self.session_request_ids, HashMap::new());
         let mut requests = mem::replace(&mut self.assocs, HashMap::new());
 
-        sessions.retain(|op_id, op|
-        {
+        sessions.retain(|op_id, op| {
             if let Some(mut runnings) = sessions_requests.remove(&op_id) {
                 let result = {
-                    let session = SessionImpl::new(
-                        op.id, &mut requests, conn, &mut runnings);
+                    let session = SessionImpl::new(op.id, &mut requests, conn, &mut runnings);
 
                     op.check_and_retry(&mut self.buffer, session)
                 };
@@ -400,10 +434,13 @@ impl Requests {
                         sessions_requests.insert(*op_id, runnings);
 
                         return true;
-                    },
+                    }
 
                     Err(e) => {
-                        error!("Exception raised when checking out operation {:?}: {}", op_id, e);
+                        error!(
+                            "Exception raised when checking out operation {:?}: {}",
+                            op_id, e
+                        );
 
                         let msg = format!("Exception raised: {}", e);
 
@@ -414,12 +451,15 @@ impl Requests {
                         }
 
                         return false;
-                    },
+                    }
                 }
             }
 
-            warn!("No running requests associated to session {:?}. It means we didn't clean
-                  the session up. Session disposed.", op_id);
+            warn!(
+                "No running requests associated to session {:?}. It means we didn't clean
+                  the session up. Session disposed.",
+                op_id
+            );
 
             false
         });
@@ -451,7 +491,7 @@ impl Registry {
 
     pub(crate) fn register(&mut self, op: OperationWrapper, conn: Option<&Connection>) {
         match conn {
-            None       => self.awaiting.push(op),
+            None => self.awaiting.push(op),
             Some(conn) => self.requests.register(conn, op),
         }
     }

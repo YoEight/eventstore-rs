@@ -1,16 +1,16 @@
-use std::io::{ self, Cursor };
+use std::io::{self, Cursor};
 use std::net::SocketAddr;
 
-use bytes::{ Bytes, Buf, BufMut, BytesMut, ByteOrder, LittleEndian };
-use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Sender, channel };
+use bytes::{Buf, BufMut, ByteOrder, Bytes, BytesMut, LittleEndian};
 use futures::stream::iter_ok;
-use tokio::spawn;
-use tokio::codec::{ Decoder, Encoder };
+use futures::sync::mpsc::{channel, Sender};
+use futures::{Future, Sink, Stream};
+use tokio::codec::{Decoder, Encoder};
 use tokio::net::TcpStream;
-use tokio::timer::timeout::Timeout;
 use tokio::prelude;
-use uuid::{ Uuid, BytesError };
+use tokio::spawn;
+use tokio::timer::timeout::Timeout;
+use uuid::{BytesError, Uuid};
 
 use crate::internal::command::Cmd;
 use crate::internal::messaging::Msg;
@@ -48,30 +48,29 @@ fn decode_bytes_error(err: BytesError) -> io::Error {
 }
 
 impl Decoder for PkgCodec {
-    type Item  = Pkg;
+    type Item = Pkg;
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Pkg>, Self::Error> {
-
         if self.state == DecodeState::Frame {
             if src.len() < 4 {
-                return Ok(None)
+                return Ok(None);
             }
 
             self.frame_size = LittleEndian::read_u32(&src[0..4]) as usize;
-            self.state      = DecodeState::Payload;
+            self.state = DecodeState::Payload;
 
             src.advance(4);
         }
 
         if src.len() < self.frame_size {
-            return Ok(None)
+            return Ok(None);
         }
 
         let pkg = {
-            let mut cursor            = Cursor::new(&src[0..self.frame_size]);
-            let     cmd               = Cmd::from_u8(cursor.get_u8());
-            let     auth_flag         = cursor.get_u8();
+            let mut cursor = Cursor::new(&src[0..self.frame_size]);
+            let cmd = Cmd::from_u8(cursor.get_u8());
+            let auth_flag = cursor.get_u8();
             let mut correlation_bytes = [0; 16];
 
             cursor.copy_to_slice(&mut correlation_bytes);
@@ -110,7 +109,7 @@ impl Decoder for PkgCodec {
 
         src.advance(self.frame_size);
 
-        self.state      = DecodeState::Frame;
+        self.state = DecodeState::Frame;
         self.frame_size = 0;
 
         Ok(Some(pkg))
@@ -118,7 +117,7 @@ impl Decoder for PkgCodec {
 }
 
 impl Encoder for PkgCodec {
-    type Item  = Pkg;
+    type Item = Pkg;
     type Error = io::Error;
 
     fn encode(&mut self, item: Pkg, dst: &mut BytesMut) -> Result<(), Self::Error> {
@@ -169,59 +168,51 @@ impl Connection {
         let desc = format!("{:?}", addr);
         let delay = std::time::Duration::from_secs(5);
 
-        let conn_fut =
-            Timeout::new(TcpStream::connect(&addr), delay).then(move |result| {
-                match result {
-                    Ok(stream) => {
-                        let (txing, rcving) = PkgCodec::new().framed(stream).split();
+        let conn_fut = Timeout::new(TcpStream::connect(&addr), delay).then(move |result| {
+            match result {
+                Ok(stream) => {
+                    let (txing, rcving) = PkgCodec::new().framed(stream).split();
 
-                        let input =
-                            prelude::stream::once(Ok(Msg::Established(id)))
-                                .select(rcving.map(Msg::Arrived))
-                                .or_else(move |e| Ok(Msg::ConnectionClosed(id, e)));
+                    let input = prelude::stream::once(Ok(Msg::Established(id)))
+                        .select(rcving.map(Msg::Arrived))
+                        .or_else(move |e| Ok(Msg::ConnectionClosed(id, e)));
 
-                        let reading = input.forward(bus.clone());
-                        let writing = recv.map_err(|_| bus_closed()).forward(txing);
+                    let reading = input.forward(bus.clone());
+                    let writing = recv.map_err(|_| bus_closed()).forward(txing);
 
-                        tokio::spawn(reading.map(|_| ()));
-                        tokio::spawn(writing.then(move |result| {
-                            if let Err(e) = result {
-                                let action =
-                                    bus.send(Msg::ConnectionClosed(id, e))
-                                        .then(|_| Ok::<(), ()>(()));
+                    tokio::spawn(reading.map(|_| ()));
+                    tokio::spawn(writing.then(move |result| {
+                        if let Err(e) = result {
+                            let action = bus
+                                .send(Msg::ConnectionClosed(id, e))
+                                .then(|_| Ok::<(), ()>(()));
 
-                                tokio::spawn(action);
-                            }
+                            tokio::spawn(action);
+                        }
 
-                            Ok::<(), ()>(())
-                        }));
-                    },
+                        Ok::<(), ()>(())
+                    }));
+                }
 
-                    Err(err) => {
-                        let real_reason = if let Some(reason) = err.into_inner() {
-                            reason
-                        } else {
-                            timeout_error()
-                        };
+                Err(err) => {
+                    let real_reason = if let Some(reason) = err.into_inner() {
+                        reason
+                    } else {
+                        timeout_error()
+                    };
 
-                        let action =
-                            bus.send(Msg::ConnectionClosed(id, real_reason))
-                                .map(|_| ());
+                    let action = bus.send(Msg::ConnectionClosed(id, real_reason)).map(|_| ());
 
-                        tokio::spawn(action);
-                    },
-                };
+                    tokio::spawn(action);
+                }
+            };
 
-                Ok::<(), ()>(())
-            });
+            Ok::<(), ()>(())
+        });
 
         tokio::spawn(conn_fut);
 
-        Connection {
-            id,
-            desc,
-            sender,
-        }
+        Connection { id, desc, sender }
     }
 
     pub fn enqueue(&self, pkg: Pkg) {
