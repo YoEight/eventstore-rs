@@ -44,7 +44,7 @@ fn main() {
         "is_rust_a_nice_language": true,
     });
 
-    let event = EventData::json("language-poll", payload);
+    let event = EventData::json("language-poll", payload).unwrap();
 
     // All the operations are asynchronous but for the sake of this example
     // we decide to wait until the server sends a response.
@@ -56,6 +56,7 @@ fn main() {
         .unwrap();
 
     // Do something productive with the result.
+	println!("{:?}", result);
 }
 ```
 
