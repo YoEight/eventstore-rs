@@ -4,11 +4,11 @@ extern crate log;
 extern crate serde_json;
 
 use eventstore::Slice;
+use futures::{Future, Stream};
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
-use std::time::Duration;
 use std::thread::spawn;
-use futures::{ Future, Stream };
+use std::time::Duration;
 use uuid::Uuid;
 
 struct TestSub {
@@ -18,16 +18,22 @@ struct TestSub {
 
 impl eventstore::SubscriptionConsumer for TestSub {
     fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
-        debug!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
-            id, last_commit_position, last_event_number);
+        debug!(
+            "Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
+            id, last_commit_position, last_event_number
+        );
     }
 
-    fn when_event_appeared<E>(&mut self, _: &mut E, event: Box<eventstore::ResolvedEvent>)
-        -> eventstore::OnEventAppeared
-        where E: eventstore::SubscriptionEnv
+    fn when_event_appeared<E>(
+        &mut self,
+        _: &mut E,
+        event: Box<eventstore::ResolvedEvent>,
+    ) -> eventstore::OnEventAppeared
+    where
+        E: eventstore::SubscriptionEnv,
     {
-        let event     = event.get_original_event().unwrap();
-        let num       = &event.event_number;
+        let event = event.get_original_event().unwrap();
+        let num = &event.event_number;
         let stream_id = &event.event_stream_id;
 
         debug!("Event appeared, stream_id {}, num {}", stream_id, num);
@@ -53,16 +59,22 @@ struct PersistentTestSub {
 
 impl eventstore::SubscriptionConsumer for PersistentTestSub {
     fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
-        debug!("Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
-            id, last_commit_position, last_event_number);
+        debug!(
+            "Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
+            id, last_commit_position, last_event_number
+        );
     }
 
-    fn when_event_appeared<E>(&mut self, env: &mut E, event: Box<eventstore::ResolvedEvent>)
-        -> eventstore::OnEventAppeared
-        where E: eventstore::SubscriptionEnv
+    fn when_event_appeared<E>(
+        &mut self,
+        env: &mut E,
+        event: Box<eventstore::ResolvedEvent>,
+    ) -> eventstore::OnEventAppeared
+    where
+        E: eventstore::SubscriptionEnv,
     {
-        let event     = event.get_original_event().unwrap();
-        let num       = &event.event_number;
+        let event = event.get_original_event().unwrap();
+        let num = &event.event_number;
         let stream_id = &event.event_stream_id;
 
         debug!("Event appeared, stream_id {}, num {}", stream_id, num);
@@ -92,7 +104,7 @@ fn fresh_stream_id(prefix: &str) -> String {
 fn generate_events(event_type: &str, cnt: usize) -> Vec<eventstore::EventData> {
     let mut events = Vec::with_capacity(cnt);
 
-    for idx in 1..cnt+1 {
+    for idx in 1..cnt + 1 {
         let payload = json!({
             "event_index": idx,
         });
@@ -105,19 +117,22 @@ fn generate_events(event_type: &str, cnt: usize) -> Vec<eventstore::EventData> {
 }
 
 fn generate_event(event_type: &str) -> eventstore::EventData {
-    generate_events(event_type, 1).pop().expect("Can't be empty")
+    generate_events(event_type, 1)
+        .pop()
+        .expect("Can't be empty")
 }
 
 // We write an event into a stream.
 fn test_write_events(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("write-events");
-    let event     = generate_event("write-events-test");
+    let event = generate_event("write-events-test");
 
-    let result = connection.write_events(stream_id)
-                       .push_event(event)
-                       .execute()
-                       .wait()
-                       .unwrap();
+    let result = connection
+        .write_events(stream_id)
+        .push_event(event)
+        .execute()
+        .wait()
+        .unwrap();
 
     debug!("Write response: {:?}", result);
 }
@@ -125,17 +140,19 @@ fn test_write_events(connection: &eventstore::Connection) {
 // We write an event into a stream then try to read it back.
 fn test_read_event(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("read_event");
-    let event     = generate_event("read_event_test");
-    let _         = connection.write_events(stream_id.as_str())
-                          .push_event(event)
-                          .execute()
-                          .wait()
-                          .unwrap();
+    let event = generate_event("read_event_test");
+    let _ = connection
+        .write_events(stream_id.as_str())
+        .push_event(event)
+        .execute()
+        .wait()
+        .unwrap();
 
-    let result = connection.read_event(stream_id.as_str(), 0)
-                       .execute()
-                       .wait()
-                       .unwrap();
+    let result = connection
+        .read_event(stream_id.as_str(), 0)
+        .execute()
+        .wait()
+        .unwrap();
 
     debug!("Read response: {:?}", result);
 
@@ -145,37 +162,35 @@ fn test_read_event(connection: &eventstore::Connection) {
             let value: serde_json::Value = serde_json::from_slice(&event.data).unwrap();
 
             debug!("Payload as JSON {:?}", value);
-        },
+        }
 
         _ => panic!("Something went wrong when reading stream {}", stream_id),
     }
-
 }
 
 // We write metadata to a stream then try to read it back.
 fn test_write_and_read_stream_metadata(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("metadata");
-    let duration  = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
-    let metadata  =
-        eventstore::StreamMetadata::builder()
-            .max_age(duration)
-            .max_count(1000)
-            .insert_custom_property("foo".to_owned(), "Bar!")
-            .build();
+    let duration = Duration::from_secs(2 * 3_600) + Duration::from_millis(300);
+    let metadata = eventstore::StreamMetadata::builder()
+        .max_age(duration)
+        .max_count(1000)
+        .insert_custom_property("foo".to_owned(), "Bar!")
+        .build();
 
-    let result =
-        connection.write_stream_metadata(stream_id.as_str(), metadata)
-              .execute()
-              .wait()
-              .unwrap();
+    let result = connection
+        .write_stream_metadata(stream_id.as_str(), metadata)
+        .execute()
+        .wait()
+        .unwrap();
 
     debug!("Write stream metadata {:?}", result);
 
-    let result =
-        connection.read_stream_metadata(stream_id.as_str())
-              .execute()
-              .wait()
-              .unwrap();
+    let result = connection
+        .read_stream_metadata(stream_id.as_str())
+        .execute()
+        .wait()
+        .unwrap();
 
     debug!("Read stream metadata {:?}", result);
 
@@ -184,31 +199,29 @@ fn test_write_and_read_stream_metadata(connection: &eventstore::Connection) {
             let read_max_age = result.metadata.max_age.unwrap();
 
             assert_eq!(read_max_age, duration);
-        },
+        }
 
-        _ => panic!("Something went wrong when reading stream {} metadata", stream_id),
+        _ => panic!(
+            "Something went wrong when reading stream {} metadata",
+            stream_id
+        ),
     }
 }
 
 // We write a stream using a transaction. The write will be only be taken into
 // account by the server after the `commit` call.
 fn test_transaction(connection: &eventstore::Connection) {
-    let stream_id   = fresh_stream_id("transaction");
-    let event       = generate_event("transaction_test");
-    let transaction =
-        connection.start_transaction(stream_id.as_str())
-              .execute()
-              .wait()
-              .unwrap();
+    let stream_id = fresh_stream_id("transaction");
+    let event = generate_event("transaction_test");
+    let transaction = connection
+        .start_transaction(stream_id.as_str())
+        .execute()
+        .wait()
+        .unwrap();
 
-    transaction.write_single(event)
-               .wait()
-               .unwrap();
+    transaction.write_single(event).wait().unwrap();
 
-    let result =
-        transaction.commit()
-                   .wait()
-                   .unwrap();
+    let result = transaction.commit().wait().unwrap();
 
     debug!("Transaction commit result {:?}", result);
 }
@@ -217,31 +230,32 @@ fn test_transaction(connection: &eventstore::Connection) {
 // stream thoroughly.
 fn test_read_stream_events(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("read-stream-events");
-    let events    = generate_events("read-stream-events-test", 10);
+    let events = generate_events("read-stream-events-test", 10);
 
-    let _ = connection.write_events(stream_id.as_str())
-                  .append_events(events)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id.as_str())
+        .append_events(events)
+        .execute()
+        .wait()
+        .unwrap();
 
     let mut pos = 0;
     let mut idx = 0;
 
     loop {
-        let result =
-            connection.read_stream(stream_id.as_str())
-                  .start_from(pos)
-                  .max_count(1)
-                  .execute()
-                  .wait()
-                  .unwrap();
+        let result = connection
+            .read_stream(stream_id.as_str())
+            .start_from(pos)
+            .max_count(1)
+            .execute()
+            .wait()
+            .unwrap();
 
         match result {
             eventstore::ReadStreamStatus::Success(slice) => match slice.events() {
                 eventstore::LocatedEvents::EndOfStream => {
                     break;
-                },
+                }
 
                 eventstore::LocatedEvents::Events { mut events, next } => {
                     let event = events.pop().unwrap();
@@ -252,15 +266,17 @@ fn test_read_stream_events(connection: &eventstore::Connection) {
                     idx = *value;
 
                     match next {
-                        Some(n) => { pos = n },
-                        None    => { break; },
+                        Some(n) => pos = n,
+                        None => {
+                            break;
+                        }
                     }
-                },
+                }
             },
 
             eventstore::ReadStreamStatus::Error(error) => {
                 panic!("ReadStream error: {:?}", error);
-            },
+            }
         }
     }
 
@@ -271,19 +287,21 @@ fn test_read_stream_events(connection: &eventstore::Connection) {
 // Like `test_read_stream_events` but use `ReadStreamEvents::until_end_of_stream`
 fn test_iterate_over_forward(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("until-end-of-stream-forward");
-    let events    = generate_events("until-end-of-stream-forward-test", 10);
+    let events = generate_events("until-end-of-stream-forward-test", 10);
 
-    let _ = connection.write_events(stream_id.as_str())
-                  .append_events(events)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id.as_str())
+        .append_events(events)
+        .execute()
+        .wait()
+        .unwrap();
 
-    let iter = connection.read_stream(stream_id.as_str())
-                  .start_from_beginning()
-                  .max_count(1)
-                  .iterate_over()
-                  .wait();
+    let iter = connection
+        .read_stream(stream_id.as_str())
+        .start_from_beginning()
+        .max_count(1)
+        .iterate_over()
+        .wait();
 
     let mut pos = 0;
     let mut idx = 0;
@@ -305,19 +323,21 @@ fn test_iterate_over_forward(connection: &eventstore::Connection) {
 // Like `test_until_end_of_stream_forward` but backward.
 fn test_iterate_over_backward(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("until-end-of-stream-backward");
-    let events    = generate_events("until-end-of-stream-backward-test", 10);
+    let events = generate_events("until-end-of-stream-backward-test", 10);
 
-    let _ = connection.write_events(stream_id.as_str())
-                  .append_events(events)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id.as_str())
+        .append_events(events)
+        .execute()
+        .wait()
+        .unwrap();
 
-    let iter = connection.read_stream(stream_id.as_str())
-                  .start_from_end_of_stream()
-                  .max_count(1)
-                  .iterate_over()
-                  .wait();
+    let iter = connection
+        .read_stream(stream_id.as_str())
+        .start_from_end_of_stream()
+        .max_count(1)
+        .iterate_over()
+        .wait();
 
     let mut pos = 0;
     let mut idx = 0;
@@ -340,12 +360,12 @@ fn test_iterate_over_backward(connection: &eventstore::Connection) {
 // unlikely for $all stream to be empty. From a personal note, I never saw that
 // stream empty even right after booting the server.
 fn test_read_all_stream(connection: &eventstore::Connection) {
-    let result =
-        connection.read_all()
-              .max_count(10)
-              .execute()
-              .wait()
-              .unwrap();
+    let result = connection
+        .read_all()
+        .max_count(10)
+        .execute()
+        .wait()
+        .unwrap();
 
     debug!("Read $all events result {:?}", result);
 }
@@ -353,18 +373,20 @@ fn test_read_all_stream(connection: &eventstore::Connection) {
 // We write an event into a stream then delete that stream.
 fn test_delete_stream(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("delete");
-    let event     = generate_event("delete-test");
+    let event = generate_event("delete-test");
 
-    let _ = connection.write_events(stream_id.as_str())
-                  .push_event(event)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id.as_str())
+        .push_event(event)
+        .execute()
+        .wait()
+        .unwrap();
 
-    let result = connection.delete_stream(stream_id.as_str())
-                       .execute()
-                       .wait()
-                       .unwrap();
+    let result = connection
+        .delete_stream(stream_id.as_str())
+        .execute()
+        .wait()
+        .unwrap();
 
     debug!("Delete stream [{}] result: {:?}", stream_id, result);
 }
@@ -374,25 +396,28 @@ fn test_delete_stream(connection: &eventstore::Connection) {
 // has consumed all the expected events.
 fn test_volatile_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("volatile");
-    let sub       = connection.subcribe_to_stream(stream_id.as_str()).execute();
-    let events    = generate_events("volatile-test", 3);
+    let sub = connection.subcribe_to_stream(stream_id.as_str()).execute();
+    let events = generate_events("volatile-test", 3);
     let confirmation = sub.confirmation();
 
-    let handle = spawn(move || {
-        sub.consume(TestSub { count: 0, max: 3 })
-    });
+    let handle = spawn(move || sub.consume(TestSub { count: 0, max: 3 }));
 
     let _ = confirmation.wait();
 
-    let _ = connection.write_events(stream_id)
-                  .append_events(events)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id)
+        .append_events(events)
+        .execute()
+        .wait()
+        .unwrap();
 
     let test_sub = handle.join().unwrap();
 
-    assert_eq!(test_sub.count, 3, "We are testing proper state after volatile subscription: got {} expected {}.", test_sub.count, 3);
+    assert_eq!(
+        test_sub.count, 3,
+        "We are testing proper state after volatile subscription: got {} expected {}.",
+        test_sub.count, 3
+    );
 }
 
 // We write events into a stream. Then, we issue a catchup subscription. After,
@@ -401,31 +426,37 @@ fn test_volatile_subscription(connection: &eventstore::Connection) {
 // To assess we received all the events we expected, we test our subscription
 // internal state value.
 fn test_catchup_subscription(connection: &eventstore::Connection) {
-    let stream_id     = fresh_stream_id("catchup");
+    let stream_id = fresh_stream_id("catchup");
     let events_before = generate_events("catchup-test-before", 3);
-    let events_after  = generate_events("catchup-test-after", 3);
+    let events_after = generate_events("catchup-test-after", 3);
 
-    let _ = connection.write_events(stream_id.clone())
-                  .append_events(events_before)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id.clone())
+        .append_events(events_before)
+        .execute()
+        .wait()
+        .unwrap();
 
-    let sub = connection.subscribe_to_stream_from(stream_id.clone()).execute();
+    let sub = connection
+        .subscribe_to_stream_from(stream_id.clone())
+        .execute();
 
-    let handle = spawn(move || {
-        sub.consume(TestSub { count: 0, max: 6 })
-    });
+    let handle = spawn(move || sub.consume(TestSub { count: 0, max: 6 }));
 
-    let _ = connection.write_events(stream_id)
-                  .append_events(events_after)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id)
+        .append_events(events_after)
+        .execute()
+        .wait()
+        .unwrap();
 
     let test_sub = handle.join().unwrap();
 
-    assert_eq!(test_sub.count, 6, "We are testing proper state after catchup subscription: got {} expected {}.", test_sub.count, 3);
+    assert_eq!(
+        test_sub.count, 6,
+        "We are testing proper state after catchup subscription: got {} expected {}.",
+        test_sub.count, 3
+    );
 }
 
 // $all stream being a special system stream, we can not test as precisely as
@@ -435,8 +466,7 @@ fn test_catchup_all_subscription(connection: &eventstore::Connection) {
     let tmp = sub.consume(TestSub { count: 0, max: 10 });
 
     assert_eq!(
-        tmp.count,
-        10,
+        tmp.count, 10,
         "We are testing proper state after $all catchup"
     );
 }
@@ -520,7 +550,7 @@ fn test_delete_persistent_subscription(connection: &eventstore::Connection) {
 
 fn test_persistent_subscription(connection: &eventstore::Connection) {
     let stream_id = fresh_stream_id("persistent_subscription");
-    let events    = generate_events("persistent_subscription_test", 5);
+    let events = generate_events("persistent_subscription_test", 5);
 
     let _ = connection
         .create_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
@@ -528,21 +558,23 @@ fn test_persistent_subscription(connection: &eventstore::Connection) {
         .wait()
         .unwrap();
 
-    let _ = connection.write_events(stream_id.clone())
-                  .append_events(events)
-                  .execute()
-                  .wait()
-                  .unwrap();
+    let _ = connection
+        .write_events(stream_id.clone())
+        .append_events(events)
+        .execute()
+        .wait()
+        .unwrap();
 
-    let sub = connection.connect_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
-                    .execute();
+    let sub = connection
+        .connect_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
+        .execute();
 
     let test_sub = sub.consume(PersistentTestSub { count: 0, max: 5 });
 
     assert_eq!(
-        test_sub.count,
-        5,
-        "We are testing proper state after persistent subscription: got {} expected {}", test_sub.count, 5
+        test_sub.count, 5,
+        "We are testing proper state after persistent subscription: got {} expected {}",
+        test_sub.count, 5
     );
 }
 

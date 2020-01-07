@@ -1,16 +1,16 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::{ Future, Stream, Sink };
-use futures::sync::mpsc::{ Receiver, Sender, channel };
-use tokio::runtime::{ Runtime, Shutdown };
+use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::{Future, Sink, Stream};
+use tokio::runtime::{Runtime, Shutdown};
 
 use crate::discovery;
-use crate::internal::driver::{ Driver, Report };
-use crate::internal::messaging::Msg;
 use crate::internal::commands;
+use crate::internal::driver::{Driver, Report};
+use crate::internal::messaging::Msg;
 use crate::internal::operations::OperationError;
-use crate::types::{ self, StreamMetadata, Settings, GossipSeedClusterSettings };
+use crate::types::{self, GossipSeedClusterSettings, Settings, StreamMetadata};
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
@@ -75,7 +75,8 @@ impl ConnectionBuilder {
 
     /// Default connection name.
     pub fn with_connection_name<S>(mut self, name: S) -> Self
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         self.settings.connection_name = Some(name.as_ref().to_owned());
         self
@@ -97,29 +98,40 @@ impl ConnectionBuilder {
 
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
-    pub fn single_node_connection_with_runtime(self, addr: SocketAddr, runtime: &mut Runtime) -> Connection {
+    pub fn single_node_connection_with_runtime(
+        self,
+        addr: SocketAddr,
+        runtime: &mut Runtime,
+    ) -> Connection {
         self.start_common_with_runtime(DiscoveryProcess::Static(addr), Some(runtime))
     }
 
     /// Creates a connection to a cluster of EventStore nodes. The connection will
     /// start right away. Those `GossipSeed` should be the external HTTP endpoint
     /// of a node. The standard external HTTP endpoint is running on `2113`.
-    pub fn cluster_nodes_through_gossip_connection(self, setts: GossipSeedClusterSettings)
-        -> Connection
-    {
+    pub fn cluster_nodes_through_gossip_connection(
+        self,
+        setts: GossipSeedClusterSettings,
+    ) -> Connection {
         self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts), None)
     }
 
     /// Creates a connection to a cluster of EventStore nodes. The connection will
     /// start right away. Those `GossipSeed` should be the external HTTP endpoint
     /// of a node. The standard external HTTP endpoint is running on `2113`.
-    pub fn cluster_nodes_through_gossip_connection_with_runtime(self, setts: GossipSeedClusterSettings, runtime: &mut Runtime)
-        -> Connection
-    {
+    pub fn cluster_nodes_through_gossip_connection_with_runtime(
+        self,
+        setts: GossipSeedClusterSettings,
+        runtime: &mut Runtime,
+    ) -> Connection {
         self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts), Some(runtime))
     }
 
-    fn start_common_with_runtime(self, discovery: DiscoveryProcess, runtime_opt: Option<&mut Runtime>) -> Connection {
+    fn start_common_with_runtime(
+        self,
+        discovery: DiscoveryProcess,
+        runtime_opt: Option<&mut Runtime>,
+    ) -> Connection {
         let client = Connection::with_runtime(self.settings, discovery, runtime_opt);
 
         client.start();
@@ -130,25 +142,21 @@ impl ConnectionBuilder {
 
 const DEFAULT_BOX_SIZE: usize = 500;
 
-fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver: Driver)
-    -> impl Future<Item=(), Error=()>
-{
+fn connection_state_machine(
+    sender: Sender<Msg>,
+    recv: Receiver<Msg>,
+    mut driver: Driver,
+) -> impl Future<Item = (), Error = ()> {
     #[derive(Debug)]
     enum State {
         Live,
         Clearing,
     }
 
-    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver)
-        -> Result<State, E>
-    {
+    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver) -> Result<State, E> {
         driver.close_connection();
 
-        let action = sender
-            .clone()
-            .send(Msg::Marker)
-            .map(|_| ())
-            .map_err(|_| ());
+        let action = sender.clone().send(Msg::Marker).map(|_| ()).map_err(|_| ());
 
         tokio::spawn(action);
 
@@ -165,8 +173,10 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
             match msg {
                 Msg::Start => driver.start(),
                 Msg::Establish(endpoint) => driver.on_establish(endpoint),
-                Msg::Established(id)  => driver.on_established(id),
-                Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, &error),
+                Msg::Established(id) => driver.on_established(id),
+                Msg::ConnectionClosed(conn_id, error) => {
+                    driver.on_connection_closed(conn_id, &error)
+                }
                 Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
                 Msg::NewOp(op) => driver.on_new_op(op),
                 Msg::Send(pkg) => driver.on_send_pkg(pkg),
@@ -175,7 +185,7 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
                     if let Report::Quit = driver.on_tick() {
                         return start_closing(&sender, &mut driver);
                     }
-                },
+                }
 
                 // It's impossible to receive `Msg::Marker` at `State::Live` state.
                 // However we can hit two birds with one stone with pattern-matching
@@ -184,7 +194,7 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
                     info!("User-shutdown request received.");
 
                     return start_closing(&sender, &mut driver);
-                },
+                }
             }
         } else {
             match msg {
@@ -197,14 +207,15 @@ fn connection_state_machine(sender: Sender<Msg>, recv: Receiver<Msg>, mut driver
                     info!("Connection closed properly.");
 
                     return Err(());
-                },
+                }
 
-                _ => {},
+                _ => {}
             }
         }
 
         Ok(acc)
-    }).map(|_| ())
+    })
+    .map(|_| ())
 }
 
 enum DiscoveryProcess {
@@ -220,9 +231,11 @@ impl Connection {
         }
     }
 
-    fn with_runtime(settings: Settings, discovery: DiscoveryProcess, runtime_opt: Option<&mut Runtime>)
-        -> Connection
-    {
+    fn with_runtime(
+        settings: Settings,
+        discovery: DiscoveryProcess,
+        runtime_opt: Option<&mut Runtime>,
+    ) -> Connection {
         if let Some(runtime) = runtime_opt {
             let sender = Self::initialize(&settings, discovery, runtime);
 
@@ -244,7 +257,11 @@ impl Connection {
         }
     }
 
-    fn initialize(settings: &Settings, discovery: DiscoveryProcess, runtime: &mut Runtime) -> Sender<Msg> {
+    fn initialize(
+        settings: &Settings,
+        discovery: DiscoveryProcess,
+        runtime: &mut Runtime,
+    ) -> Sender<Msg> {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
         let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
         let cloned_sender = sender.clone();
@@ -256,13 +273,13 @@ impl Connection {
                 let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
 
                 runtime.spawn(action);
-            },
+            }
 
             DiscoveryProcess::ClusterThroughGossip(setts) => {
                 let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
 
                 runtime.spawn(action);
-            },
+            }
         };
 
         let action = connection_state_machine(cloned_sender, recv, driver);
@@ -276,36 +293,44 @@ impl Connection {
 
     /// Sends events to a given stream.
     pub fn write_events<S>(&self, stream: S) -> commands::WriteEvents
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::WriteEvents::new(self.sender.clone(), stream, &self.settings)
     }
 
     /// Sets the metadata for a stream.
-    pub fn write_stream_metadata<S>(&self, stream: S, metadata: StreamMetadata)
-        -> commands::WriteStreamMetadata
-        where S: AsRef<str>
+    pub fn write_stream_metadata<S>(
+        &self,
+        stream: S,
+        metadata: StreamMetadata,
+    ) -> commands::WriteStreamMetadata
+    where
+        S: AsRef<str>,
     {
         commands::WriteStreamMetadata::new(self.sender.clone(), stream, metadata, &self.settings)
     }
 
     /// Reads a single event from a given stream.
     pub fn read_event<S>(&self, stream: S, event_number: i64) -> commands::ReadEvent
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::ReadEvent::new(self.sender.clone(), stream, event_number, &self.settings)
     }
 
     /// Gets the metadata of a stream.
     pub fn read_stream_metadata<S>(&self, stream: S) -> commands::ReadStreamMetadata
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::ReadStreamMetadata::new(self.sender.clone(), stream, &self.settings)
     }
 
     /// Starts a transaction on a given stream.
     pub fn start_transaction<S>(&self, stream: S) -> commands::TransactionStart
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::TransactionStart::new(self.sender.clone(), stream, &self.settings)
     }
@@ -313,7 +338,8 @@ impl Connection {
     /// Reads events from a given stream. The reading can be done forward and
     /// backward.
     pub fn read_stream<S>(&self, stream: S) -> commands::ReadStreamEvents
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::ReadStreamEvents::new(self.sender.clone(), stream, &self.settings)
     }
@@ -330,7 +356,8 @@ impl Connection {
     ///
     /// [Deleting stream and events]: https://eventstore.org/docs/server/deleting-streams-and-events/index.html
     pub fn delete_stream<S>(&self, stream: S) -> commands::DeleteStream
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::DeleteStream::new(self.sender.clone(), stream, &self.settings)
     }
@@ -338,7 +365,8 @@ impl Connection {
     /// Subscribes to a given stream. You will get notified of each new events
     /// written to this stream.
     pub fn subcribe_to_stream<S>(&self, stream_id: S) -> commands::SubscribeToStream
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::SubscribeToStream::new(self.sender.clone(), stream_id, &self.settings)
     }
@@ -358,7 +386,8 @@ impl Connection {
     ///
     /// [`subscribe_to_all_from`]: #method.subscribe_to_all_from
     pub fn subscribe_to_stream_from<S>(&self, stream: S) -> commands::RegularCatchupSubscribe
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         commands::RegularCatchupSubscribe::new(self.sender.clone(), stream, &self.settings)
     }
@@ -366,8 +395,7 @@ impl Connection {
     /// Like [`subscribe_to_stream_from`] but specific to system `$all` stream.
     ///
     /// [`subscribe_to_stream_from`]: #method.subscribe_to_stream_from
-    pub fn subscribe_to_all_from(&self) -> commands::AllCatchupSubscribe
-    {
+    pub fn subscribe_to_all_from(&self) -> commands::AllCatchupSubscribe {
         commands::AllCatchupSubscribe::new(self.sender.clone(), &self.settings)
     }
 
@@ -377,31 +405,71 @@ impl Connection {
     /// server remembers the state of the subscription. This allows for many
     /// different modes of operations compared to a regular or catchup
     /// subscription where the client holds the subscription state.
-    pub fn create_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::CreatePersistentSubscription
-        where S: AsRef<str>
+    pub fn create_persistent_subscription<S>(
+        &self,
+        stream_id: S,
+        group_name: S,
+    ) -> commands::CreatePersistentSubscription
+    where
+        S: AsRef<str>,
     {
-        commands::CreatePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
+        commands::CreatePersistentSubscription::new(
+            stream_id,
+            group_name,
+            self.sender.clone(),
+            &self.settings,
+        )
     }
 
     /// Updates a persistent subscription group on a stream.
-    pub fn update_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::UpdatePersistentSubscription
-        where S: AsRef<str>
+    pub fn update_persistent_subscription<S>(
+        &self,
+        stream_id: S,
+        group_name: S,
+    ) -> commands::UpdatePersistentSubscription
+    where
+        S: AsRef<str>,
     {
-        commands::UpdatePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
+        commands::UpdatePersistentSubscription::new(
+            stream_id,
+            group_name,
+            self.sender.clone(),
+            &self.settings,
+        )
     }
 
     /// Deletes a persistent subscription group on a stream.
-    pub fn delete_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::DeletePersistentSubscription
-        where S: AsRef<str>
+    pub fn delete_persistent_subscription<S>(
+        &self,
+        stream_id: S,
+        group_name: S,
+    ) -> commands::DeletePersistentSubscription
+    where
+        S: AsRef<str>,
     {
-        commands::DeletePersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
+        commands::DeletePersistentSubscription::new(
+            stream_id,
+            group_name,
+            self.sender.clone(),
+            &self.settings,
+        )
     }
 
     /// Connects to a persistent subscription group on a stream.
-    pub fn connect_persistent_subscription<S>(&self, stream_id: S, group_name: S) -> commands::ConnectToPersistentSubscription
-        where S: AsRef<str>
+    pub fn connect_persistent_subscription<S>(
+        &self,
+        stream_id: S,
+        group_name: S,
+    ) -> commands::ConnectToPersistentSubscription
+    where
+        S: AsRef<str>,
     {
-        commands::ConnectToPersistentSubscription::new(stream_id, group_name, self.sender.clone(), &self.settings)
+        commands::ConnectToPersistentSubscription::new(
+            stream_id,
+            group_name,
+            self.sender.clone(),
+            &self.settings,
+        )
     }
 
     /// Closes the connection to the server.

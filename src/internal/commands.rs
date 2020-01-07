@@ -3,31 +3,32 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Deref;
 
-use futures::sync::mpsc::{ self, Sender };
-use futures::{ Future, Sink, Stream, Poll, Async };
+use futures::sync::mpsc::{self, Sender};
+use futures::{Async, Future, Poll, Sink, Stream};
 use protobuf::Chars;
 use serde::ser::SerializeSeq;
 use serde_json;
 
 use crate::internal::messaging::Msg;
-use crate::internal::operations::{ self, OperationError };
+use crate::internal::operations::{self, OperationError};
 use crate::internal::timespan::Timespan;
-use crate::types::{ self, Slice };
+use crate::types::{self, Slice};
 
-fn single_value_future<S, A>(stream: S) -> impl Future<Item=A, Error=OperationError>
-    where S: Stream<Item = Result<A, operations::OperationError>, Error = ()>
+fn single_value_future<S, A>(stream: S) -> impl Future<Item = A, Error = OperationError>
+where
+    S: Stream<Item = Result<A, operations::OperationError>, Error = ()>,
 {
-    stream.into_future().then(|res| {
-        match res {
-            Ok((Some(x), _)) => x,
-            _ => {
-                warn!("Operation stream-receiver was disposed too early. \
+    stream.into_future().then(|res| match res {
+        Ok((Some(x), _)) => x,
+        _ => {
+            warn!(
+                "Operation stream-receiver was disposed too early. \
                       It shouldn't happen but not a big of a deal neither. \
                       Worth investigating though as it means the code \
-                      went on unexpected path.");
+                      went on unexpected path."
+            );
 
-                Err(operations::OperationError::Aborted)
-            },
+            Err(operations::OperationError::Aborted)
         }
     })
 }
@@ -43,9 +44,10 @@ pub struct WriteEvents<'a> {
     pub(crate) sender: Sender<Msg>,
 }
 
-impl <'a> WriteEvents<'a> {
+impl<'a> WriteEvents<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> WriteEvents
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         WriteEvents {
             stream: stream.as_ref().into(),
@@ -61,7 +63,7 @@ impl <'a> WriteEvents<'a> {
     /// Sets events to write in the command. This function will replace
     /// previously added events.
     pub fn set_events(self, events: Vec<types::EventData>) -> WriteEvents<'a> {
-        WriteEvents { events, ..self}
+        WriteEvents { events, ..self }
     }
 
     /// Adds an event to the current list of events to send to the server.
@@ -74,7 +76,8 @@ impl <'a> WriteEvents<'a> {
     /// Extends the current set of events to send the the server with the
     /// given iterator.
     pub fn append_events<T>(mut self, events: T) -> WriteEvents<'a>
-        where T: IntoIterator<Item=types::EventData>
+    where
+        T: IntoIterator<Item = types::EventData>,
     {
         self.events.extend(events);
 
@@ -84,7 +87,10 @@ impl <'a> WriteEvents<'a> {
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> WriteEvents<'a> {
-        WriteEvents { require_master, ..self }
+        WriteEvents {
+            require_master,
+            ..self
+        }
     }
 
     /// Asks the server to check that the stream receiving the event is at
@@ -95,23 +101,28 @@ impl <'a> WriteEvents<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials) -> WriteEvents<'a> {
-        WriteEvents { creds: Some(creds), ..self }
+        WriteEvents {
+            creds: Some(creds),
+            ..self
+        }
     }
 
     /// Sends asynchronously the write command to the server.
-    pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::WriteEvents::new(promise);
+    pub fn execute(self) -> impl Future<Item = types::WriteResult, Error = OperationError> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::WriteEvents::new(promise);
 
         op.set_event_stream_id(self.stream);
         op.set_expected_version(self.version);
         op.set_events(self.events);
         op.set_require_master(self.require_master);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -130,13 +141,15 @@ pub struct ReadEvent<'a> {
     pub(crate) sender: Sender<Msg>,
 }
 
-impl <'a> ReadEvent<'a> {
+impl<'a> ReadEvent<'a> {
     pub(crate) fn new<S>(
         sender: Sender<Msg>,
         stream: S,
         event_number: i64,
-        settings: &types::Settings) -> ReadEvent
-        where S: AsRef<str>
+        settings: &types::Settings,
+    ) -> ReadEvent
+    where
+        S: AsRef<str>,
     {
         ReadEvent {
             stream: stream.as_ref().into(),
@@ -155,34 +168,48 @@ impl <'a> ReadEvent<'a> {
     pub fn resolve_link_tos(self, tos: types::LinkTos) -> ReadEvent<'a> {
         let resolve_link_tos = tos.raw_resolve_lnk_tos();
 
-        ReadEvent { resolve_link_tos, ..self }
+        ReadEvent {
+            resolve_link_tos,
+            ..self
+        }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> ReadEvent<'a> {
-        ReadEvent { require_master, ..self }
+        ReadEvent {
+            require_master,
+            ..self
+        }
     }
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> ReadEvent<'a> {
-        ReadEvent { creds: Some(value), ..self }
+        ReadEvent {
+            creds: Some(value),
+            ..self
+        }
     }
 
     /// Sends asynchronously the read command to the server.
-    pub fn execute(self) -> impl Future<Item=types::ReadEventStatus<types::ReadEventResult>, Error=OperationError> {
+    pub fn execute(
+        self,
+    ) -> impl Future<Item = types::ReadEventStatus<types::ReadEventResult>, Error = OperationError>
+    {
         let (rcv, promise) = operations::Promise::new(1);
-        let mut op         = operations::ReadEvent::new(promise);
+        let mut op = operations::ReadEvent::new(promise);
 
         op.set_event_stream_id(self.stream);
         op.set_event_number(self.event_number);
         op.set_resolve_link_tos(self.resolve_link_tos);
         op.set_require_master(self.require_master);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -201,10 +228,18 @@ struct StreamMetadataInternal {
     #[serde(rename = "$tb", skip_serializing_if = "Option::is_none", default)]
     truncate_before: Option<u64>,
 
-    #[serde(rename = "$cacheControl", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "$cacheControl",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     cache_control: Option<Timespan>,
 
-    #[serde(rename = "$acl", skip_serializing_if = "StreamAclInternal::is_empty", default)]
+    #[serde(
+        rename = "$acl",
+        skip_serializing_if = "StreamAclInternal::is_empty",
+        default
+    )]
     acl: StreamAclInternal,
 
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
@@ -239,9 +274,9 @@ impl StreamMetadataInternal {
 struct Roles(Option<Vec<String>>);
 
 impl serde::ser::Serialize for Roles {
-    fn serialize<S>(&self, serializer: S)
-        -> Result<S::Ok, S::Error>
-            where S: serde::ser::Serializer
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
     {
         match self.0.as_ref() {
             None => serializer.serialize_none(),
@@ -260,15 +295,15 @@ impl serde::ser::Serialize for Roles {
                 }
 
                 seq.end()
-            },
+            }
         }
     }
 }
 
 impl<'de> serde::de::Deserialize<'de> for Roles {
-    fn deserialize<D>(deserializer: D)
-        -> Result<Self, D::Error>
-            where D: serde::de::Deserializer<'de>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
     {
         deserializer.deserialize_any(RolesVisitor)
     }
@@ -295,9 +330,7 @@ struct RolesVisitor;
 impl<'de> serde::de::Visitor<'de> for RolesVisitor {
     type Value = Roles;
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter)
-        -> std::fmt::Result
-    {
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("String or a list of String")
     }
 
@@ -309,9 +342,9 @@ impl<'de> serde::de::Visitor<'de> for RolesVisitor {
         Ok(Roles::from_string(value.to_owned()))
     }
 
-    fn visit_seq<A>(self, mut seq: A)
-        -> Result<Roles, A::Error>
-            where A: serde::de::SeqAccess<'de>
+    fn visit_seq<A>(self, mut seq: A) -> Result<Roles, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
     {
         let mut roles = if let Some(size) = seq.size_hint() {
             Vec::with_capacity(size)
@@ -326,9 +359,9 @@ impl<'de> serde::de::Visitor<'de> for RolesVisitor {
         Ok(Roles(Some(roles)))
     }
 
-    fn visit_none<E>(self)
-        -> Result<Roles, E>
-            where E: serde::de::Error
+    fn visit_none<E>(self) -> Result<Roles, E>
+    where
+        E: serde::de::Error,
     {
         Ok(Roles(None))
     }
@@ -374,11 +407,11 @@ impl StreamAclInternal {
     }
 
     fn is_empty(&self) -> bool {
-        self.read_roles.is_empty() &&
-        self.write_roles.is_empty() &&
-        self.delete_roles.is_empty() &&
-        self.meta_read_roles.is_empty() &&
-        self.meta_write_roles.is_empty()
+        self.read_roles.is_empty()
+            && self.write_roles.is_empty()
+            && self.delete_roles.is_empty()
+            && self.meta_read_roles.is_empty()
+            && self.meta_write_roles.is_empty()
     }
 }
 
@@ -388,13 +421,15 @@ pub struct WriteStreamMetadata<'a> {
     inner: WriteEvents<'a>,
 }
 
-impl <'a> WriteStreamMetadata<'a> {
+impl<'a> WriteStreamMetadata<'a> {
     pub(crate) fn new<S>(
         sender: Sender<Msg>,
         stream: S,
         metadata: types::StreamMetadata,
-        settings: &types::Settings) -> WriteStreamMetadata
-        where S: AsRef<str>
+        settings: &types::Settings,
+    ) -> WriteStreamMetadata
+    where
+        S: AsRef<str>,
     {
         WriteStreamMetadata {
             metadata,
@@ -426,12 +461,11 @@ impl <'a> WriteStreamMetadata<'a> {
     }
 
     /// Sends asynchronously the write command to the server.
-    pub fn execute(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
+    pub fn execute(self) -> impl Future<Item = types::WriteResult, Error = OperationError> {
         let metadata = StreamMetadataInternal::from_metadata(self.metadata);
-        let event    = types::EventData::json("$metadata", metadata).unwrap();
+        let event = types::EventData::json("$metadata", metadata).unwrap();
 
-        self.inner.push_event(event)
-                  .execute()
+        self.inner.push_event(event).execute()
     }
 }
 
@@ -441,9 +475,14 @@ pub struct ReadStreamMetadata<'a> {
     inner: ReadEvent<'a>,
 }
 
-impl <'a> ReadStreamMetadata<'a> {
-    pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> ReadStreamMetadata
-        where S: AsRef<str>
+impl<'a> ReadStreamMetadata<'a> {
+    pub(crate) fn new<S>(
+        sender: Sender<Msg>,
+        stream: S,
+        settings: &types::Settings,
+    ) -> ReadStreamMetadata
+    where
+        S: AsRef<str>,
     {
         let name = format!("$${}", stream.as_ref());
         let stream: Chars = stream.as_ref().into();
@@ -470,36 +509,34 @@ impl <'a> ReadStreamMetadata<'a> {
     }
 
     /// Sends asynchronously the read command to the server.
-    pub fn execute(self) -> impl Future<Item=types::StreamMetadataResult, Error=OperationError> {
+    pub fn execute(
+        self,
+    ) -> impl Future<Item = types::StreamMetadataResult, Error = OperationError> {
         let stream = self.stream.deref().to_owned();
 
-        self.inner.execute().map(|res| {
-            match res {
-                types::ReadEventStatus::Success(result) => {
-                    let metadata_internal: StreamMetadataInternal =
-                        result.event
-                              .get_original_event()
-                              .unwrap()
-                              .as_json()
-                              .unwrap();
+        self.inner.execute().map(|res| match res {
+            types::ReadEventStatus::Success(result) => {
+                let metadata_internal: StreamMetadataInternal = result
+                    .event
+                    .get_original_event()
+                    .unwrap()
+                    .as_json()
+                    .unwrap();
 
-                    let versioned = types::VersionedMetadata {
-                        stream,
-                        version: result.event_number,
-                        metadata: metadata_internal.build_metadata(),
-                    };
+                let versioned = types::VersionedMetadata {
+                    stream,
+                    version: result.event_number,
+                    metadata: metadata_internal.build_metadata(),
+                };
 
-                    types::StreamMetadataResult::Success(Box::new(versioned))
-                },
-
-                types::ReadEventStatus::NotFound | types::ReadEventStatus::NoStream => {
-                    types::StreamMetadataResult::NotFound { stream }
-                },
-
-                types::ReadEventStatus::Deleted => {
-                    types::StreamMetadataResult::Deleted { stream }
-                },
+                types::StreamMetadataResult::Success(Box::new(versioned))
             }
+
+            types::ReadEventStatus::NotFound | types::ReadEventStatus::NoStream => {
+                types::StreamMetadataResult::NotFound { stream }
+            }
+
+            types::ReadEventStatus::Deleted => types::StreamMetadataResult::Deleted { stream },
         })
     }
 }
@@ -514,12 +551,14 @@ pub struct TransactionStart<'a> {
     pub(crate) sender: Sender<Msg>,
 }
 
-impl <'a> TransactionStart<'a> {
+impl<'a> TransactionStart<'a> {
     pub(crate) fn new<S>(
         sender: Sender<Msg>,
         stream: S,
-        settings: &'a types::Settings) -> TransactionStart
-        where S: AsRef<str>
+        settings: &'a types::Settings,
+    ) -> TransactionStart
+    where
+        S: AsRef<str>,
     {
         TransactionStart {
             stream: stream.as_ref().into(),
@@ -534,7 +573,10 @@ impl <'a> TransactionStart<'a> {
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> TransactionStart<'a> {
-        TransactionStart { require_master, ..self }
+        TransactionStart {
+            require_master,
+            ..self
+        }
     }
 
     /// Asks the server to check that the stream receiving the event is at
@@ -545,42 +587,45 @@ impl <'a> TransactionStart<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> TransactionStart<'a> {
-        TransactionStart { creds_opt: Some(value), ..self }
+        TransactionStart {
+            creds_opt: Some(value),
+            ..self
+        }
     }
 
     /// Sends asnychronously the start transaction command to the server.
-    pub fn execute(self) -> impl Future<Item=Transaction, Error=OperationError> {
-        let cloned_creds   = self.creds_opt.clone();
+    pub fn execute(self) -> impl Future<Item = Transaction, Error = OperationError> {
+        let cloned_creds = self.creds_opt.clone();
         let (rcv, promise) = operations::Promise::new(1);
-        let mut op         = operations::TransactionStart::new(promise);
-        let     stream     = self.stream.clone();
+        let mut op = operations::TransactionStart::new(promise);
+        let stream = self.stream.clone();
 
         op.set_event_stream_id(self.stream);
         op.set_require_master(self.require_master);
         op.set_expected_version(self.version);
 
         let require_master = self.require_master;
-        let version        = self.version;
-        let sender         = self.sender.clone();
-        let op             = operations::OperationWrapper::new(op,
-                                                               self.creds_opt,
-                                                               self.settings.operation_retry.to_usize(),
-                                                               self.settings.operation_timeout);
+        let version = self.version;
+        let sender = self.sender.clone();
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds_opt,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
         let settings = self.settings.clone();
 
-        single_value_future(rcv).map(move |id| {
-            Transaction {
-                stream,
-                id,
-                sender,
-                require_master,
-                creds: cloned_creds,
-                version,
-                settings: settings.clone(),
-            }
+        single_value_future(rcv).map(move |id| Transaction {
+            stream,
+            id,
+            sender,
+            require_master,
+            creds: cloned_creds,
+            version,
+            settings: settings.clone(),
         })
     }
 }
@@ -603,13 +648,17 @@ impl Transaction {
     }
 
     /// Like `write` but specific to a single event.
-    pub fn write_single(&self, event: types::EventData) -> impl Future<Item=(), Error=OperationError> {
+    pub fn write_single(
+        &self,
+        event: types::EventData,
+    ) -> impl Future<Item = (), Error = OperationError> {
         self.write(::std::iter::once(event))
     }
 
     /// Asynchronously write to transaction in the GetEventStore server.
-    pub fn write<I>(&self, events: I) -> impl Future<Item=(), Error=OperationError>
-        where I: IntoIterator<Item=types::EventData>
+    pub fn write<I>(&self, events: I) -> impl Future<Item = (), Error = OperationError>
+    where
+        I: IntoIterator<Item = types::EventData>,
     {
         let (rcv, promise) = operations::Promise::new(1);
         let mut op = operations::TransactionWrite::new(promise, self.stream.clone());
@@ -618,10 +667,12 @@ impl Transaction {
         op.set_events(events);
         op.set_require_master(self.require_master);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds.clone(),
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds.clone(),
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.clone().send(Msg::new_op(op)).wait().unwrap();
 
@@ -629,18 +680,19 @@ impl Transaction {
     }
 
     /// Asynchronously commit this transaction.
-    pub fn commit(self) -> impl Future<Item=types::WriteResult, Error=OperationError> {
+    pub fn commit(self) -> impl Future<Item = types::WriteResult, Error = OperationError> {
         let (rcv, promise) = operations::Promise::new(1);
-        let mut op =
-            operations::TransactionCommit::new(promise, self.stream.clone(), self.version);
+        let mut op = operations::TransactionCommit::new(promise, self.stream.clone(), self.version);
 
         op.set_transaction_id(self.id);
         op.set_require_master(self.require_master);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -676,9 +728,14 @@ pub struct ReadStreamEvents<'a> {
     settings: &'a types::Settings,
 }
 
-impl <'a> ReadStreamEvents<'a> {
-    pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> ReadStreamEvents
-        where S: AsRef<str>
+impl<'a> ReadStreamEvents<'a> {
+    pub(crate) fn new<S>(
+        sender: Sender<Msg>,
+        stream: S,
+        settings: &types::Settings,
+    ) -> ReadStreamEvents
+    where
+        S: AsRef<str>,
     {
         ReadStreamEvents {
             stream: stream.as_ref().into(),
@@ -710,7 +767,10 @@ impl <'a> ReadStreamEvents<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> ReadStreamEvents<'a> {
-        ReadStreamEvents { creds: Some(value), ..self }
+        ReadStreamEvents {
+            creds: Some(value),
+            ..self
+        }
     }
 
     /// Max batch size.
@@ -730,7 +790,11 @@ impl <'a> ReadStreamEvents<'a> {
         let start = 0;
         let direction = types::ReadDirection::Forward;
 
-        ReadStreamEvents { start, direction, ..self }
+        ReadStreamEvents {
+            start,
+            direction,
+            ..self
+        }
     }
 
     /// Starts the read from the end of the stream. It also set the read
@@ -739,13 +803,20 @@ impl <'a> ReadStreamEvents<'a> {
         let start = -1;
         let direction = types::ReadDirection::Backward;
 
-        ReadStreamEvents { start, direction, ..self }
+        ReadStreamEvents {
+            start,
+            direction,
+            ..self
+        }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> ReadStreamEvents<'a> {
-        ReadStreamEvents { require_master, ..self }
+        ReadStreamEvents {
+            require_master,
+            ..self
+        }
     }
 
     /// When using projections, you can have links placed into another stream.
@@ -754,13 +825,19 @@ impl <'a> ReadStreamEvents<'a> {
     pub fn resolve_link_tos(self, tos: types::LinkTos) -> ReadStreamEvents<'a> {
         let resolve_link_tos = tos.raw_resolve_lnk_tos();
 
-        ReadStreamEvents { resolve_link_tos, ..self }
+        ReadStreamEvents {
+            resolve_link_tos,
+            ..self
+        }
     }
 
     /// Sends asynchronously the read command to the server.
-    pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError> {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::ReadStreamEvents::new(promise, self.direction);
+    pub fn execute(
+        self,
+    ) -> impl Future<Item = types::ReadStreamStatus<types::StreamSlice>, Error = OperationError>
+    {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::ReadStreamEvents::new(promise, self.direction);
 
         op.set_event_stream_id(self.stream);
         op.set_from_event_number(self.start);
@@ -768,10 +845,12 @@ impl <'a> ReadStreamEvents<'a> {
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -784,9 +863,9 @@ impl <'a> ReadStreamEvents<'a> {
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc). Each
     /// element corresponds to a page with a length <= `max_count`.
-    pub fn iterate_over_batch(self)
-        -> impl Stream<Item=Vec<types::ResolvedEvent>, Error=OperationError> + 'a
-    {
+    pub fn iterate_over_batch(
+        self,
+    ) -> impl Stream<Item = Vec<types::ResolvedEvent>, Error = OperationError> + 'a {
         let params = IterParams {
             sender: self.sender,
             settings: self.settings,
@@ -796,11 +875,10 @@ impl <'a> ReadStreamEvents<'a> {
             direction: self.direction,
         };
 
-        let fetcher =
-            FetchRegularStream {
-                stream_name: self.stream,
-                params,
-            };
+        let fetcher = FetchRegularStream {
+            stream_name: self.stream,
+            params,
+        };
 
         Fetcher {
             pos: self.start,
@@ -814,25 +892,27 @@ impl <'a> ReadStreamEvents<'a> {
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self)
-        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
-    {
+    pub fn iterate_over(
+        self,
+    ) -> impl Stream<Item = types::ResolvedEvent, Error = OperationError> + 'a {
         use futures::stream;
 
-        self.iterate_over_batch()
-            .map(stream::iter_ok)
-            .flatten()
+        self.iterate_over_batch().map(stream::iter_ok).flatten()
     }
 }
 
-struct Fetcher<F> where F: FetchStream
+struct Fetcher<F>
+where
+    F: FetchStream,
 {
     pos: <<F as FetchStream>::Chunk as types::Slice>::Location,
     fetcher: F,
     state: Fetch<F::Chunk, <<F as FetchStream>::Chunk as types::Slice>::Location>,
 }
 
-impl<F> Stream for Fetcher<F> where F: FetchStream
+impl<F> Stream for Fetcher<F>
+where
+    F: FetchStream,
 {
     type Item = Vec<types::ResolvedEvent>;
     type Error = OperationError;
@@ -843,7 +923,7 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                 Fetch::Needed => {
                     let fut = self.fetcher.fetch(self.pos);
                     self.state = Fetch::Fetching(fut);
-                },
+                }
 
                 Fetch::Next(next) => {
                     if let Some(pos) = next {
@@ -852,7 +932,7 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                     } else {
                         return Ok(Async::Ready(None));
                     }
-                },
+                }
 
                 Fetch::Fetching(mut fut) => {
                     match fut.poll()? {
@@ -862,15 +942,15 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                                     match error {
                                         types::ReadStreamError::Error(e) => {
                                             return Err(OperationError::ServerError(Some(e)));
-                                        },
+                                        }
 
                                         types::ReadStreamError::AccessDenied(stream) => {
                                             return Err(OperationError::AccessDenied(stream));
-                                        },
+                                        }
 
                                         types::ReadStreamError::StreamDeleted(stream) => {
                                             return Err(OperationError::StreamDeleted(stream));
-                                        },
+                                        }
 
                                         // Other `types::ReadStreamError` aren't blocking errors
                                         // so we consider the stream as an empty one.
@@ -878,30 +958,29 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
                                             return Ok(Async::Ready(None));
                                         }
                                     }
-                                },
+                                }
 
-                                types::ReadStreamStatus::Success(slice) =>
-                                    match slice.events() {
-                                        types::LocatedEvents::EndOfStream => {
-                                            return Ok(Async::Ready(None));
-                                        },
-
-                                        types::LocatedEvents::Events { events, next } => {
-                                            self.state = Fetch::Next(next);
-
-                                            return Ok(Async::Ready(Some(events)));
-                                        }
+                                types::ReadStreamStatus::Success(slice) => match slice.events() {
+                                    types::LocatedEvents::EndOfStream => {
+                                        return Ok(Async::Ready(None));
                                     }
+
+                                    types::LocatedEvents::Events { events, next } => {
+                                        self.state = Fetch::Next(next);
+
+                                        return Ok(Async::Ready(Some(events)));
+                                    }
+                                },
                             }
-                        },
+                        }
 
                         Async::NotReady => {
                             self.state = Fetch::Fetching(fut);
 
                             return Ok(Async::NotReady);
-                        },
+                        }
                     }
-                },
+                }
             }
         }
     }
@@ -910,10 +989,11 @@ impl<F> Stream for Fetcher<F> where F: FetchStream
 trait FetchStream {
     type Chunk: types::Slice;
 
-    fn fetch(&self, pos: <<Self as FetchStream>::Chunk as types::Slice>::Location)
-        -> Box<dyn Future<Item=types::ReadStreamStatus<Self::Chunk>, Error=OperationError>>;
+    fn fetch(
+        &self,
+        pos: <<Self as FetchStream>::Chunk as types::Slice>::Location,
+    ) -> Box<dyn Future<Item = types::ReadStreamStatus<Self::Chunk>, Error = OperationError>>;
 }
-
 
 struct FetchRegularStream<'a> {
     stream_name: Chars,
@@ -923,16 +1003,22 @@ struct FetchRegularStream<'a> {
 impl<'a> FetchStream for FetchRegularStream<'a> {
     type Chunk = types::StreamSlice;
 
-    fn fetch(&self, pos: i64)
-        -> Box<dyn Future<Item=types::ReadStreamStatus<types::StreamSlice>, Error=OperationError>>
+    fn fetch(
+        &self,
+        pos: i64,
+    ) -> Box<dyn Future<Item = types::ReadStreamStatus<types::StreamSlice>, Error = OperationError>>
     {
-        let fut = ReadStreamEvents::new(self.params.sender.clone(), self.stream_name.deref(), self.params.settings)
-            .resolve_link_tos(self.params.link_tos)
-            .start_from(pos)
-            .max_count(self.params.max_count)
-            .require_master(self.params.require_master)
-            .set_direction(self.params.direction)
-            .execute();
+        let fut = ReadStreamEvents::new(
+            self.params.sender.clone(),
+            self.stream_name.deref(),
+            self.params.settings,
+        )
+        .resolve_link_tos(self.params.link_tos)
+        .start_from(pos)
+        .max_count(self.params.max_count)
+        .require_master(self.params.require_master)
+        .set_direction(self.params.direction)
+        .execute();
 
         Box::new(fut)
     }
@@ -945,8 +1031,10 @@ struct FetchAllStream<'a> {
 impl<'a> FetchStream for FetchAllStream<'a> {
     type Chunk = types::AllSlice;
 
-    fn fetch(&self, pos: types::Position)
-        -> Box<dyn Future<Item=types::ReadStreamStatus<types::AllSlice>, Error=OperationError>>
+    fn fetch(
+        &self,
+        pos: types::Position,
+    ) -> Box<dyn Future<Item = types::ReadStreamStatus<types::AllSlice>, Error = OperationError>>
     {
         let fut = ReadAllEvents::new(self.params.sender.clone(), self.params.settings)
             .resolve_link_tos(self.params.link_tos)
@@ -962,7 +1050,7 @@ impl<'a> FetchStream for FetchAllStream<'a> {
 
 enum Fetch<S, P> {
     Needed,
-    Fetching(Box<dyn Future<Item=types::ReadStreamStatus<S>, Error=OperationError>>),
+    Fetching(Box<dyn Future<Item = types::ReadStreamStatus<S>, Error = OperationError>>),
     Next(Option<P>),
 }
 
@@ -978,7 +1066,7 @@ pub struct ReadAllEvents<'a> {
     settings: &'a types::Settings,
 }
 
-impl <'a> ReadAllEvents<'a> {
+impl<'a> ReadAllEvents<'a> {
     pub(crate) fn new(sender: Sender<Msg>, settings: &types::Settings) -> ReadAllEvents {
         ReadAllEvents {
             max_count: 500,
@@ -1009,7 +1097,10 @@ impl <'a> ReadAllEvents<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> ReadAllEvents<'a> {
-        ReadAllEvents { creds: Some(value), ..self }
+        ReadAllEvents {
+            creds: Some(value),
+            ..self
+        }
     }
 
     /// Max batch size.
@@ -1029,7 +1120,11 @@ impl <'a> ReadAllEvents<'a> {
         let start = types::Position::start();
         let direction = types::ReadDirection::Forward;
 
-        ReadAllEvents { start, direction, ..self }
+        ReadAllEvents {
+            start,
+            direction,
+            ..self
+        }
     }
 
     /// Starts the read from the end of the stream. It also set the read
@@ -1038,13 +1133,20 @@ impl <'a> ReadAllEvents<'a> {
         let start = types::Position::end();
         let direction = types::ReadDirection::Backward;
 
-        ReadAllEvents { start, direction, ..self }
+        ReadAllEvents {
+            start,
+            direction,
+            ..self
+        }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> ReadAllEvents<'a> {
-        ReadAllEvents { require_master, ..self }
+        ReadAllEvents {
+            require_master,
+            ..self
+        }
     }
 
     /// When using projections, you can have links placed into another stream.
@@ -1053,23 +1155,30 @@ impl <'a> ReadAllEvents<'a> {
     pub fn resolve_link_tos(self, tos: types::LinkTos) -> ReadAllEvents<'a> {
         let resolve_link_tos = tos.raw_resolve_lnk_tos();
 
-        ReadAllEvents { resolve_link_tos, ..self }
+        ReadAllEvents {
+            resolve_link_tos,
+            ..self
+        }
     }
 
     /// Sends asynchronously the read command to the server.
-    pub fn execute(self) -> impl Future<Item=types::ReadStreamStatus<types::AllSlice>, Error=OperationError> {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::ReadAllEvents::new(promise, self.direction);
+    pub fn execute(
+        self,
+    ) -> impl Future<Item = types::ReadStreamStatus<types::AllSlice>, Error = OperationError> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::ReadAllEvents::new(promise, self.direction);
 
         op.set_from_position(self.start);
         op.set_max_count(self.max_count);
         op.set_require_master(self.require_master);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1082,9 +1191,9 @@ impl <'a> ReadAllEvents<'a> {
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc). Each
     /// element corresponds to a page with a length <= `max_count`.
-    pub fn iterate_over_batch(self)
-        -> impl Stream<Item=Vec<types::ResolvedEvent>, Error=OperationError> + 'a
-    {
+    pub fn iterate_over_batch(
+        self,
+    ) -> impl Stream<Item = Vec<types::ResolvedEvent>, Error = OperationError> + 'a {
         let params = IterParams {
             sender: self.sender,
             settings: self.settings,
@@ -1094,10 +1203,7 @@ impl <'a> ReadAllEvents<'a> {
             direction: self.direction,
         };
 
-        let fetcher =
-            FetchAllStream {
-                params,
-            };
+        let fetcher = FetchAllStream { params };
 
         Fetcher {
             pos: self.start,
@@ -1111,14 +1217,12 @@ impl <'a> ReadAllEvents<'a> {
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self)
-        -> impl Stream<Item=types::ResolvedEvent, Error=OperationError> + 'a
-    {
+    pub fn iterate_over(
+        self,
+    ) -> impl Stream<Item = types::ResolvedEvent, Error = OperationError> + 'a {
         use futures::stream;
 
-        self.iterate_over_batch()
-            .map(stream::iter_ok)
-            .flatten()
+        self.iterate_over_batch().map(stream::iter_ok).flatten()
     }
 }
 
@@ -1135,9 +1239,10 @@ pub struct DeleteStream<'a> {
     settings: &'a types::Settings,
 }
 
-impl <'a> DeleteStream<'a> {
+impl<'a> DeleteStream<'a> {
     pub(crate) fn new<S>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> DeleteStream
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         DeleteStream {
             stream: stream.as_ref().into(),
@@ -1153,7 +1258,10 @@ impl <'a> DeleteStream<'a> {
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> DeleteStream<'a> {
-        DeleteStream { require_master, ..self }
+        DeleteStream {
+            require_master,
+            ..self
+        }
     }
 
     /// Asks the server to check that the stream receiving the event is at
@@ -1164,7 +1272,10 @@ impl <'a> DeleteStream<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> DeleteStream<'a> {
-        DeleteStream { creds: Some(value), ..self }
+        DeleteStream {
+            creds: Some(value),
+            ..self
+        }
     }
 
     /// Makes use of Truncate before. When a stream is deleted, its Truncate
@@ -1175,7 +1286,10 @@ impl <'a> DeleteStream<'a> {
     ///
     /// That is the default behavior.
     pub fn soft_delete(self) -> DeleteStream<'a> {
-        DeleteStream { hard_delete: false, ..self }
+        DeleteStream {
+            hard_delete: false,
+            ..self
+        }
     }
 
     /// A hard delete writes a tombstone event to the stream, permanently
@@ -1183,23 +1297,28 @@ impl <'a> DeleteStream<'a> {
     /// Tombstone events are written with the event type '$streamDeleted'. When
     /// a hard deleted stream is read, the read will return a StreamDeleted.
     pub fn hard_delete(self) -> DeleteStream<'a> {
-        DeleteStream { hard_delete: true, ..self }
+        DeleteStream {
+            hard_delete: true,
+            ..self
+        }
     }
 
     /// Sends asynchronously the delete command to the server.
-    pub fn execute(self) -> impl Future<Item=types::Position, Error=OperationError> {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::DeleteStream::new(promise);
+    pub fn execute(self) -> impl Future<Item = types::Position, Error = OperationError> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::DeleteStream::new(promise);
 
         op.set_event_stream_id(self.stream);
         op.set_expected_version(self.version);
         op.set_require_master(self.require_master);
         op.set_hard_delete(self.hard_delete);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1222,10 +1341,14 @@ pub struct SubscribeToStream<'a> {
     settings: &'a types::Settings,
 }
 
-impl <'a> SubscribeToStream<'a> {
-    pub(crate) fn new<S>(sender: Sender<Msg>, stream_id: S, settings: &types::Settings)
-        -> SubscribeToStream
-        where S: AsRef<str>
+impl<'a> SubscribeToStream<'a> {
+    pub(crate) fn new<S>(
+        sender: Sender<Msg>,
+        stream_id: S,
+        settings: &types::Settings,
+    ) -> SubscribeToStream
+    where
+        S: AsRef<str>,
     {
         SubscribeToStream {
             stream_id: stream_id.as_ref().into(),
@@ -1238,7 +1361,10 @@ impl <'a> SubscribeToStream<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, value: types::Credentials) -> SubscribeToStream<'a> {
-        SubscribeToStream { creds: Some(value), ..self }
+        SubscribeToStream {
+            creds: Some(value),
+            ..self
+        }
     }
 
     /// When using projections, you can have links placed into another stream.
@@ -1247,24 +1373,29 @@ impl <'a> SubscribeToStream<'a> {
     pub fn resolve_link_tos(self, tos: types::LinkTos) -> SubscribeToStream<'a> {
         let resolve_link_tos = tos.raw_resolve_lnk_tos();
 
-        SubscribeToStream { resolve_link_tos, ..self }
+        SubscribeToStream {
+            resolve_link_tos,
+            ..self
+        }
     }
 
     /// Sends the volatile subscription request to the server asynchronously
     /// even if the subscription is available right away.
     pub fn execute(self) -> types::Subscription {
-        let sender   = self.sender.clone();
+        let sender = self.sender.clone();
         let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
-        let tx_dup   = tx.clone();
-        let mut op   = operations::SubscribeToStream::new(tx);
+        let tx_dup = tx.clone();
+        let mut op = operations::SubscribeToStream::new(tx);
 
         op.set_event_stream_id(self.stream_id);
         op.set_resolve_link_tos(self.resolve_link_tos);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1307,8 +1438,12 @@ pub struct RegularCatchupSubscribe<'a> {
     settings: &'a types::Settings,
 }
 
-impl <'a> RegularCatchupSubscribe<'a> {
-    pub(crate) fn new<S: AsRef<str>>(sender: Sender<Msg>, stream: S, settings: &types::Settings) -> RegularCatchupSubscribe {
+impl<'a> RegularCatchupSubscribe<'a> {
+    pub(crate) fn new<S: AsRef<str>>(
+        sender: Sender<Msg>,
+        stream: S,
+        settings: &types::Settings,
+    ) -> RegularCatchupSubscribe {
         RegularCatchupSubscribe {
             stream_id: stream.as_ref().into(),
             resolve_link_tos: false,
@@ -1327,13 +1462,19 @@ impl <'a> RegularCatchupSubscribe<'a> {
     pub fn resolve_link_tos(self, tos: types::LinkTos) -> RegularCatchupSubscribe<'a> {
         let resolve_link_tos = tos.raw_resolve_lnk_tos();
 
-        RegularCatchupSubscribe { resolve_link_tos, ..self }
+        RegularCatchupSubscribe {
+            resolve_link_tos,
+            ..self
+        }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> RegularCatchupSubscribe<'a> {
-        RegularCatchupSubscribe { require_master, ..self }
+        RegularCatchupSubscribe {
+            require_master,
+            ..self
+        }
     }
 
     /// For example, if a starting point of 50 is specified when a stream has
@@ -1348,16 +1489,19 @@ impl <'a> RegularCatchupSubscribe<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials) -> RegularCatchupSubscribe<'a> {
-        RegularCatchupSubscribe { creds_opt: Some(creds), ..self }
+        RegularCatchupSubscribe {
+            creds_opt: Some(creds),
+            ..self
+        }
     }
 
     /// Preforms the catching up phase of the subscription asynchronously. When
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
     pub fn execute(self) -> types::Subscription {
-        let sender     = self.sender.clone();
-        let (tx, rx)   = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
-        let tx_dup     = tx.clone();
+        let sender = self.sender.clone();
+        let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
+        let tx_dup = tx.clone();
 
         let inner = operations::RegularCatchup::new(
             self.stream_id.clone(),
@@ -1367,18 +1511,13 @@ impl <'a> RegularCatchupSubscribe<'a> {
             self.batch_size,
         );
 
-        let op = operations::CatchupWrapper::new(
-            inner,
-            &self.stream_id,
-            self.resolve_link_tos,
-            tx
-        );
+        let op = operations::CatchupWrapper::new(inner, &self.stream_id, self.resolve_link_tos, tx);
 
         let op = operations::OperationWrapper::new(
             op,
             self.creds_opt,
             self.settings.operation_retry.to_usize(),
-            self.settings.operation_timeout
+            self.settings.operation_timeout,
         );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
@@ -1402,7 +1541,7 @@ pub struct AllCatchupSubscribe<'a> {
     settings: &'a types::Settings,
 }
 
-impl <'a> AllCatchupSubscribe<'a> {
+impl<'a> AllCatchupSubscribe<'a> {
     pub(crate) fn new(sender: Sender<Msg>, settings: &types::Settings) -> AllCatchupSubscribe {
         AllCatchupSubscribe {
             resolve_link_tos: false,
@@ -1421,13 +1560,19 @@ impl <'a> AllCatchupSubscribe<'a> {
     pub fn resolve_link_tos(self, tos: types::LinkTos) -> AllCatchupSubscribe<'a> {
         let resolve_link_tos = tos.raw_resolve_lnk_tos();
 
-        AllCatchupSubscribe { resolve_link_tos, ..self }
+        AllCatchupSubscribe {
+            resolve_link_tos,
+            ..self
+        }
     }
 
     /// Asks the server receiving the command to be the master of the cluster
     /// in order to perform the write. Default: `false`.
     pub fn require_master(self, require_master: bool) -> AllCatchupSubscribe<'a> {
-        AllCatchupSubscribe { require_master, ..self }
+        AllCatchupSubscribe {
+            require_master,
+            ..self
+        }
     }
 
     /// Starting point in the transaction journal log. By default, it will start at
@@ -1438,16 +1583,19 @@ impl <'a> AllCatchupSubscribe<'a> {
 
     /// Performs the command with the given credentials.
     pub fn credentials(self, creds: types::Credentials) -> AllCatchupSubscribe<'a> {
-        AllCatchupSubscribe { creds_opt: Some(creds), ..self }
+        AllCatchupSubscribe {
+            creds_opt: Some(creds),
+            ..self
+        }
     }
 
     /// Preforms the catching up phase of the subscription asynchronously. When
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
     pub fn execute(self) -> types::Subscription {
-        let sender     = self.sender.clone();
-        let (tx, rx)   = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
-        let tx_dup     = tx.clone();
+        let sender = self.sender.clone();
+        let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
+        let tx_dup = tx.clone();
 
         let inner = operations::AllCatchup::new(
             self.start_pos,
@@ -1456,18 +1604,13 @@ impl <'a> AllCatchupSubscribe<'a> {
             self.batch_size,
         );
 
-        let op = operations::CatchupWrapper::new(
-            inner,
-            &"".into(),
-            self.resolve_link_tos,
-            tx
-        );
+        let op = operations::CatchupWrapper::new(inner, &"".into(), self.resolve_link_tos, tx);
 
         let op = operations::OperationWrapper::new(
             op,
             self.creds_opt,
             self.settings.operation_retry.to_usize(),
-            self.settings.operation_timeout
+            self.settings.operation_timeout,
         );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
@@ -1491,14 +1634,14 @@ pub struct CreatePersistentSubscription<'a> {
 }
 
 impl<'a> CreatePersistentSubscription<'a> {
-    pub(crate)
-    fn new<S>(
+    pub(crate) fn new<S>(
         stream_id: S,
         group_name: S,
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> CreatePersistentSubscription
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         CreatePersistentSubscription {
             stream_id: stream_id.as_ref().into(),
@@ -1511,40 +1654,41 @@ impl<'a> CreatePersistentSubscription<'a> {
     }
 
     /// Performs the command with the given credentials.
-    pub fn credentials(
-        self,
-        creds: types::Credentials,
-        ) -> CreatePersistentSubscription<'a>
-    {
-        CreatePersistentSubscription { creds: Some(creds), ..self }
+    pub fn credentials(self, creds: types::Credentials) -> CreatePersistentSubscription<'a> {
+        CreatePersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
     }
 
     /// Creates a persistent subscription based on the given
     /// `types::PersistentSubscriptionSettings`.
     pub fn settings(
         self,
-        sub_settings: types::PersistentSubscriptionSettings
-    ) -> CreatePersistentSubscription<'a>
-    {
-        CreatePersistentSubscription { sub_settings, ..self }
+        sub_settings: types::PersistentSubscriptionSettings,
+    ) -> CreatePersistentSubscription<'a> {
+        CreatePersistentSubscription {
+            sub_settings,
+            ..self
+        }
     }
 
     /// Sends the persistent subscription creation command asynchronously to
     /// the server.
-    pub fn execute(self)
-        -> impl Future<Item=types::PersistActionResult, Error=OperationError>
-    {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::CreatePersistentSubscription::new(promise);
+    pub fn execute(self) -> impl Future<Item = types::PersistActionResult, Error = OperationError> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::CreatePersistentSubscription::new(promise);
 
         op.set_subscription_group_name(self.group_name);
         op.set_event_stream_id(self.stream_id);
         op.set_settings(&self.sub_settings);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1563,14 +1707,14 @@ pub struct UpdatePersistentSubscription<'a> {
 }
 
 impl<'a> UpdatePersistentSubscription<'a> {
-    pub(crate)
-    fn new<S>(
+    pub(crate) fn new<S>(
         stream_id: S,
         group_name: S,
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> UpdatePersistentSubscription
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         UpdatePersistentSubscription {
             stream_id: stream_id.as_ref().into(),
@@ -1583,40 +1727,41 @@ impl<'a> UpdatePersistentSubscription<'a> {
     }
 
     /// Performs the command with the given credentials.
-    pub fn credentials(
-        self,
-        creds: types::Credentials,
-        ) -> UpdatePersistentSubscription<'a>
-    {
-        UpdatePersistentSubscription { creds: Some(creds), ..self }
+    pub fn credentials(self, creds: types::Credentials) -> UpdatePersistentSubscription<'a> {
+        UpdatePersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
     }
 
     /// Updates a persistent subscription using the given
     /// `types::PersistentSubscriptionSettings`.
     pub fn settings(
         self,
-        sub_settings: types::PersistentSubscriptionSettings
-    ) -> UpdatePersistentSubscription<'a>
-    {
-        UpdatePersistentSubscription { sub_settings, ..self }
+        sub_settings: types::PersistentSubscriptionSettings,
+    ) -> UpdatePersistentSubscription<'a> {
+        UpdatePersistentSubscription {
+            sub_settings,
+            ..self
+        }
     }
 
     /// Sends the persistent subscription update command asynchronously to
     /// the server.
-    pub fn execute(self)
-        -> impl Future<Item=types::PersistActionResult, Error=OperationError>
-    {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::UpdatePersistentSubscription::new(promise);
+    pub fn execute(self) -> impl Future<Item = types::PersistActionResult, Error = OperationError> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::UpdatePersistentSubscription::new(promise);
 
         op.set_subscription_group_name(self.group_name);
         op.set_event_stream_id(self.stream_id);
         op.set_settings(self.sub_settings);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1634,14 +1779,14 @@ pub struct DeletePersistentSubscription<'a> {
 }
 
 impl<'a> DeletePersistentSubscription<'a> {
-    pub(crate)
-    fn new<S>(
+    pub(crate) fn new<S>(
         stream_id: S,
         group_name: S,
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> DeletePersistentSubscription
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         DeletePersistentSubscription {
             stream_id: stream_id.as_ref().into(),
@@ -1653,29 +1798,28 @@ impl<'a> DeletePersistentSubscription<'a> {
     }
 
     /// Performs the command with the given credentials.
-    pub fn credentials(
-        self,
-        creds: types::Credentials,
-        ) -> DeletePersistentSubscription<'a>
-    {
-        DeletePersistentSubscription { creds: Some(creds), ..self }
+    pub fn credentials(self, creds: types::Credentials) -> DeletePersistentSubscription<'a> {
+        DeletePersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
     }
 
     /// Sends the persistent subscription deletion command asynchronously to
     /// the server.
-    pub fn execute(self)
-        -> impl Future<Item=types::PersistActionResult, Error=OperationError>
-    {
-        let     (rcv, promise) = operations::Promise::new(1);
-        let mut op             = operations::DeletePersistentSubscription::new(promise);
+    pub fn execute(self) -> impl Future<Item = types::PersistActionResult, Error = OperationError> {
+        let (rcv, promise) = operations::Promise::new(1);
+        let mut op = operations::DeletePersistentSubscription::new(promise);
 
         op.set_subscription_group_name(self.group_name);
         op.set_event_stream_id(self.stream_id);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1703,7 +1847,8 @@ impl<'a> ConnectToPersistentSubscription<'a> {
         sender: Sender<Msg>,
         settings: &'a types::Settings,
     ) -> ConnectToPersistentSubscription
-        where S: AsRef<str>
+    where
+        S: AsRef<str>,
     {
         ConnectToPersistentSubscription {
             stream_id: stream_id.as_ref().into(),
@@ -1716,35 +1861,36 @@ impl<'a> ConnectToPersistentSubscription<'a> {
     }
 
     /// Performs the command with the given credentials.
-    pub fn credentials(self, creds: types::Credentials)
-        -> ConnectToPersistentSubscription<'a>
-    {
-        ConnectToPersistentSubscription { creds: Some(creds), ..self }
+    pub fn credentials(self, creds: types::Credentials) -> ConnectToPersistentSubscription<'a> {
+        ConnectToPersistentSubscription {
+            creds: Some(creds),
+            ..self
+        }
     }
 
     /// The buffer size to use  for the persistent subscription.
-    pub fn batch_size(self, batch_size: u16)
-        -> ConnectToPersistentSubscription<'a>
-    {
+    pub fn batch_size(self, batch_size: u16) -> ConnectToPersistentSubscription<'a> {
         ConnectToPersistentSubscription { batch_size, ..self }
     }
 
     /// Sends the persistent subscription connection request to the server
     /// asynchronously even if the subscription is available right away.
     pub fn execute(self) -> types::Subscription {
-        let sender   = self.sender.clone();
+        let sender = self.sender.clone();
         let (tx, rx) = mpsc::channel(operations::DEFAULT_BOUNDED_SIZE);
-        let tx_dup   = tx.clone();
-        let mut op   = operations::ConnectToPersistentSubscription::new(tx);
+        let tx_dup = tx.clone();
+        let mut op = operations::ConnectToPersistentSubscription::new(tx);
 
         op.set_event_stream_id(self.stream_id);
         op.set_group_name(self.group_name);
         op.set_buffer_size(self.batch_size);
 
-        let op = operations::OperationWrapper::new(op,
-                                                   self.creds,
-                                                   self.settings.operation_retry.to_usize(),
-                                                   self.settings.operation_timeout);
+        let op = operations::OperationWrapper::new(
+            op,
+            self.creds,
+            self.settings.operation_retry.to_usize(),
+            self.settings.operation_timeout,
+        );
 
         self.sender.send(Msg::new_op(op)).wait().unwrap();
 
@@ -1754,21 +1900,39 @@ impl<'a> ConnectToPersistentSubscription<'a> {
             sender,
         }
     }
-
 }
 
 #[cfg(test)]
 mod test {
     fn compare_metadata(left: super::StreamMetadataInternal, right: super::StreamMetadataInternal) {
-        assert_eq!(left.max_count, right.max_count, "We are testing metadata max_count are the same");
-        assert_eq!(left.max_age, right.max_age, "We are testing metadata max_age are the same");
-        assert_eq!(left.truncate_before, right.truncate_before, "We are testing metadata truncate_before are the same");
-        assert_eq!(left.cache_control, right.cache_control, "We are testing metadata cache_control are the same");
-        assert_eq!(left.acl, right.acl, "We are testing metadata acl are the same");
+        assert_eq!(
+            left.max_count, right.max_count,
+            "We are testing metadata max_count are the same"
+        );
+        assert_eq!(
+            left.max_age, right.max_age,
+            "We are testing metadata max_age are the same"
+        );
+        assert_eq!(
+            left.truncate_before, right.truncate_before,
+            "We are testing metadata truncate_before are the same"
+        );
+        assert_eq!(
+            left.cache_control, right.cache_control,
+            "We are testing metadata cache_control are the same"
+        );
+        assert_eq!(
+            left.acl, right.acl,
+            "We are testing metadata acl are the same"
+        );
 
         // We currently do a shallow comparison check because serde_json::Value doesn't support
         // PartialEq nor Eq unfortunately.
-        assert_eq!(left.custom_properties.len(), right.custom_properties.len(), "We are testing metadata custom_properties are the same");
+        assert_eq!(
+            left.custom_properties.len(),
+            right.custom_properties.len(),
+            "We are testing metadata custom_properties are the same"
+        );
     }
 
     #[test]

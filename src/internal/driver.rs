@@ -1,9 +1,9 @@
 use core::option::Option;
-use std::io::{ Error, ErrorKind };
-use std::time::{ Duration, Instant };
+use std::io::{Error, ErrorKind};
+use std::time::{Duration, Instant};
 
-use futures::{ Future, Stream, Sink };
 use futures::sync::mpsc::Sender;
+use futures::{Future, Sink, Stream};
 use tokio::spawn;
 use tokio::timer::Interval;
 use uuid::Uuid;
@@ -14,7 +14,7 @@ use crate::internal::messaging::Msg;
 use crate::internal::operations::OperationWrapper;
 use crate::internal::package::Pkg;
 use crate::internal::registry::Registry;
-use crate::types::{ Credentials, Endpoint, Settings };
+use crate::types::{Credentials, Endpoint, Settings};
 
 #[derive(Copy, Clone)]
 enum HeartbeatStatus {
@@ -56,42 +56,39 @@ impl HealthTracker {
     fn manage_heartbeat(&mut self, conn: &Connection) -> Heartbeat {
         match self.state {
             HeartbeatStatus::Init => {
-                self.state = HeartbeatStatus::Delay(
-                        self.pkg_num, Instant::now());
+                self.state = HeartbeatStatus::Delay(self.pkg_num, Instant::now());
 
                 Heartbeat::Valid
-            },
+            }
 
             HeartbeatStatus::Delay(num, start) => {
-
                 if self.pkg_num != num {
-                    self.state = HeartbeatStatus::Delay(
-                        self.pkg_num, Instant::now());
+                    self.state = HeartbeatStatus::Delay(self.pkg_num, Instant::now());
                 } else if start.elapsed() >= self.heartbeat_delay {
-                    self.state = HeartbeatStatus::Timeout(
-                        self.pkg_num, Instant::now());
+                    self.state = HeartbeatStatus::Timeout(self.pkg_num, Instant::now());
 
                     conn.enqueue(Pkg::heartbeat_request());
                 }
 
                 Heartbeat::Valid
-            },
+            }
 
             HeartbeatStatus::Timeout(num, start) => {
-
                 if self.pkg_num != num {
-                    self.state = HeartbeatStatus::Delay(
-                        self.pkg_num, Instant::now());
+                    self.state = HeartbeatStatus::Delay(self.pkg_num, Instant::now());
 
                     Heartbeat::Valid
                 } else if start.elapsed() >= self.heartbeat_timeout {
-                    error!("Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.", conn.id, self.pkg_num);
+                    error!(
+                        "Closing connection [{}] due to HEARTBEAT TIMEOUT at pkgNum {}.",
+                        conn.id, self.pkg_num
+                    );
 
                     Heartbeat::Failure
                 } else {
                     Heartbeat::Valid
                 }
-            },
+            }
         }
     }
 }
@@ -153,8 +150,7 @@ pub(crate) enum Report {
     Quit,
 }
 
-pub(crate) struct Driver
-{
+pub(crate) struct Driver {
     registry: Registry,
     candidate: Option<Connection>,
     tracker: HealthTracker,
@@ -174,14 +170,14 @@ pub(crate) struct Driver
     last_operation_check: Instant,
 }
 
-impl Driver
-{
-    pub(crate) fn new(setts: &Settings, disc: Sender<Option<Endpoint>>, sender: Sender<Msg>)
-        -> Driver
-    {
-        let connection_name: Option<protobuf::Chars> = setts.connection_name
-                .as_ref()
-                .map(|c| c.as_str().into());
+impl Driver {
+    pub(crate) fn new(
+        setts: &Settings,
+        disc: Sender<Option<Endpoint>>,
+        sender: Sender<Msg>,
+    ) -> Driver {
+        let connection_name: Option<protobuf::Chars> =
+            setts.connection_name.as_ref().map(|c| c.as_str().into());
 
         Driver {
             registry: Registry::new(),
@@ -206,11 +202,11 @@ impl Driver
 
     pub(crate) fn start(&mut self) {
         self.attempt_opt = Some(Attempt::new());
-        self.state       = ConnectionState::Connecting;
-        self.phase       = Phase::Reconnecting;
+        self.state = ConnectionState::Connecting;
+        self.phase = Phase::Reconnecting;
 
         let tick_period = Duration::from_millis(200);
-        let tick        = Interval::new(Instant::now(), tick_period).map_err(|_| ());
+        let tick = Interval::new(Instant::now(), tick_period).map_err(|_| ());
 
         let tick = tick.fold(self.sender.clone(), |sender, _| {
             sender.send(Msg::Tick).map_err(|_| ())
@@ -224,11 +220,11 @@ impl Driver
     fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
             let failed_endpoint = self.last_endpoint.take();
-            let start_discovery =
-                self.discovery
-                    .clone()
-                    .send(failed_endpoint)
-                    .then(|_| Ok(()));
+            let start_discovery = self
+                .discovery
+                .clone()
+                .send(failed_endpoint)
+                .then(|_| Ok(()));
 
             self.phase = Phase::EndpointDiscovery;
             self.tracker.reset();
@@ -239,8 +235,8 @@ impl Driver
 
     pub(crate) fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
-            self.phase         = Phase::Establishing;
-            self.candidate     = Some(Connection::new(self.sender.clone(), endpoint.addr));
+            self.phase = Phase::Establishing;
+            self.candidate = Some(Connection::new(self.sender.clone(), endpoint.addr));
             self.last_endpoint = Some(endpoint);
         }
     }
@@ -250,7 +246,7 @@ impl Driver
             let pkg = Pkg::authenticate(creds);
 
             self.init_req_opt = Some(InitReq::new(pkg.correlation));
-            self.phase        = Phase::Authentication;
+            self.phase = Phase::Authentication;
 
             if let Some(conn) = self.candidate.as_ref() {
                 conn.enqueue(pkg);
@@ -259,11 +255,13 @@ impl Driver
     }
 
     fn identify_client(&mut self) {
-        if self.state == ConnectionState::Connecting && (self.phase == Phase::Authentication || self.phase == Phase::Establishing) {
+        if self.state == ConnectionState::Connecting
+            && (self.phase == Phase::Authentication || self.phase == Phase::Establishing)
+        {
             let pkg = Pkg::identify_client(&self.connection_name);
 
             self.init_req_opt = Some(InitReq::new(pkg.correlation));
-            self.phase        = Phase::Identification;
+            self.phase = Phase::Identification;
 
             if let Some(conn) = self.candidate.as_ref() {
                 conn.enqueue(pkg);
@@ -273,20 +271,22 @@ impl Driver
 
     pub(crate) fn on_established(&mut self, id: Uuid) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
-            let same_connection =
-                match self.candidate {
-                    Some(ref conn) => conn.id == id,
-                    None           => false,
-                };
+            let same_connection = match self.candidate {
+                Some(ref conn) => conn.id == id,
+                None => false,
+            };
 
             if same_connection {
-                let conn = self.candidate.as_ref().expect("If same connection, it means it's defined!");
+                let conn = self
+                    .candidate
+                    .as_ref()
+                    .expect("If same connection, it means it's defined!");
                 info!("Connection established: {} on {}.", id, conn.desc);
                 self.tracker.reset();
 
                 match self.default_user.clone() {
                     Some(creds) => self.authenticate(creds),
-                    None        => self.identify_client(),
+                    None => self.identify_client(),
                 }
             }
         }
@@ -295,7 +295,7 @@ impl Driver
     fn is_same_connection(&self, conn_id: &Uuid) -> bool {
         match self.candidate {
             Some(ref conn) => conn.id == *conn_id,
-            None           => false,
+            None => false,
         }
     }
 
@@ -315,19 +315,22 @@ impl Driver
             info!("Connection [{}] error. Cause: {}.", conn_id, err);
         }
 
-        debug!("Closing on state {:?} and phase {:?}", self.state, self.phase);
+        debug!(
+            "Closing on state {:?} and phase {:?}",
+            self.state, self.phase
+        );
 
         match self.state {
             ConnectionState::Connected => {
                 self.attempt_opt = Some(Attempt::new());
-                self.state       = ConnectionState::Connecting;
-                self.phase       = Phase::Reconnecting;
-            },
+                self.state = ConnectionState::Connecting;
+                self.phase = Phase::Reconnecting;
+            }
 
             ConnectionState::Connecting => {
                 self.state = ConnectionState::Connecting;
                 self.phase = Phase::Reconnecting;
-            },
+            }
 
             _ => (),
         }
@@ -348,7 +351,10 @@ impl Driver
             }
         } else if pkg.cmd == Cmd::HeartbeatResponse {
             // No need to do anything in that situation.
-        } else if pkg.cmd == Cmd::ClientIdentified && self.state == ConnectionState::Connecting && self.phase == Phase::Identification {
+        } else if pkg.cmd == Cmd::ClientIdentified
+            && self.state == ConnectionState::Connecting
+            && self.phase == Phase::Identification
+        {
             if let Some(req) = self.init_req_opt.take() {
                 if req.correlation == pkg.correlation {
                     if let Some(ref conn) = self.candidate {
@@ -362,13 +368,16 @@ impl Driver
                         self.registry.check_and_retry(conn);
                     }
 
-                    self.attempt_opt          = None;
+                    self.attempt_opt = None;
                     self.last_operation_check = Instant::now();
-                    self.state                = ConnectionState::Connected;
+                    self.state = ConnectionState::Connected;
                 }
             }
-        } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated) && self.state == ConnectionState::Connecting && self.phase == Phase::Authentication {
-            if let Some(req) = self.init_req_opt.take(){
+        } else if (pkg.cmd == Cmd::Authenticated || pkg.cmd == Cmd::NotAuthenticated)
+            && self.state == ConnectionState::Connecting
+            && self.phase == Phase::Authentication
+        {
+            if let Some(req) = self.init_req_opt.take() {
                 if req.correlation == pkg.correlation {
                     if pkg.cmd == Cmd::NotAuthenticated {
                         warn!("Not authenticated.");
@@ -383,7 +392,10 @@ impl Driver
                 if let Some(new_endpoint) = self.registry.handle(pkg, &conn) {
                     // We have been notified to connect to an other eventstore node.
                     // This only happens if the user uses a cluster-mode connection.
-                    info!("Force reconnection to [{}] on connection [{}]", new_endpoint, conn.id);
+                    info!(
+                        "Force reconnection to [{}] on connection [{}]",
+                        new_endpoint, conn.id
+                    );
 
                     self.attempt_opt = Some(Attempt::new());
                     self.state = ConnectionState::Connecting;
@@ -428,7 +440,7 @@ impl Driver
 
     fn start_new_attempt(&mut self) -> Option<usize> {
         if let Some(att) = self.attempt_opt.as_mut() {
-            att.tries   += 1;
+            att.tries += 1;
             att.started = Instant::now();
 
             if att.tries <= self.max_reconnect {
@@ -446,15 +458,14 @@ impl Driver
     }
 
     fn manage_heartbeat(&mut self) {
-        let has_timeout =
-                if let Some(ref conn) = self.candidate {
-                    match self.tracker.manage_heartbeat(conn) {
-                        Heartbeat::Valid   => false,
-                        Heartbeat::Failure => true,
-                    }
-                } else {
-                    false
-                };
+        let has_timeout = if let Some(ref conn) = self.candidate {
+            match self.tracker.manage_heartbeat(conn) {
+                Heartbeat::Valid => false,
+                Heartbeat::Failure => true,
+            }
+        } else {
+            false
+        };
 
         if has_timeout {
             if let Some(conn) = self.candidate.take() {
@@ -464,7 +475,6 @@ impl Driver
     }
 
     pub(crate) fn on_tick(&mut self) -> Report {
-
         if self.state == ConnectionState::Init || self.state == ConnectionState::Closed {
             return Report::Continue;
         }

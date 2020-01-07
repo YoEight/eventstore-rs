@@ -1,5 +1,5 @@
-use std::io::Error;
 use std::fmt;
+use std::io::Error;
 
 use uuid::Uuid;
 

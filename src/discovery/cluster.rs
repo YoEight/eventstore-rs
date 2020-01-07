@@ -1,21 +1,23 @@
 use crate::internal::messaging::Msg;
-use crate::types::{ Endpoint, NodePreference, GossipSeed, GossipSeedClusterSettings };
-use futures::future::{ self, Loop };
-use futures::prelude::{ Future, Stream, Sink, IntoFuture };
+use crate::types::{Endpoint, GossipSeed, GossipSeedClusterSettings, NodePreference};
+use futures::future::{self, Loop};
+use futures::prelude::{Future, IntoFuture, Sink, Stream};
 use futures::sync::mpsc;
 use rand;
 use rand::seq::SliceRandom;
 use std::iter::FromIterator;
-use std::net::{ AddrParseError, SocketAddr };
+use std::net::{AddrParseError, SocketAddr};
 use std::time::Duration;
 use std::vec::IntoIter;
 use tokio::spawn;
 use tokio_timer::sleep;
 use uuid::Uuid;
 
-pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc::Sender<Msg>, settings: GossipSeedClusterSettings)
-    -> impl Future<Item=(), Error=()>
-{
+pub(crate) fn discover(
+    consumer: mpsc::Receiver<Option<Endpoint>>,
+    sender: mpsc::Sender<Msg>,
+    settings: GossipSeedClusterSettings,
+) -> impl Future<Item = (), Error = ()> {
     struct State {
         settings: GossipSeedClusterSettings,
         client: reqwest::r#async::Client,
@@ -25,70 +27,64 @@ pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc:
         candidates: IntoIter<GossipSeed>,
     }
 
-    let initial =
-        State {
-            settings,
-            sender,
-            client: reqwest::r#async::Client::new(),
-            previous_candidates: None,
-            preference: NodePreference::Random,
-            candidates: vec![].into_iter(),
-        };
+    let initial = State {
+        settings,
+        sender,
+        client: reqwest::r#async::Client::new(),
+        previous_candidates: None,
+        preference: NodePreference::Random,
+        candidates: vec![].into_iter(),
+    };
 
-    fn discover(mut state: State, failed_endpoint: Option<Endpoint>)
-        -> impl Future<Item=(Option<NodeEndpoints>, State), Error=()>
-    {
+    fn discover(
+        mut state: State,
+        failed_endpoint: Option<Endpoint>,
+    ) -> impl Future<Item = (Option<NodeEndpoints>, State), Error = ()> {
         let candidates = match state.previous_candidates.take() {
-            Some(old_candidates) =>
-                candidates_from_old_gossip(failed_endpoint, old_candidates),
+            Some(old_candidates) => candidates_from_old_gossip(failed_endpoint, old_candidates),
 
-            None =>
-                candidates_from_dns(&state.settings),
+            None => candidates_from_dns(&state.settings),
         };
 
         state.candidates = candidates.into_iter();
 
-        future::loop_fn(state, move |mut state|
-        {
+        future::loop_fn(state, move |mut state| {
             let client = state.client.clone();
 
             if let Some(candidate) = state.candidates.next() {
-                let fut = get_gossip_from(client, candidate)
-                    .then(move |result|
-                    {
-                        let result: std::io::Result<Vec<Member>> = result.and_then(|member_info|
-                        {
-                            let members: Vec<std::io::Result<Member>> =
-                                member_info
-                                    .into_iter()
-                                    .map(Member::from_member_info)
-                                    .collect();
+                let fut = get_gossip_from(client, candidate).then(move |result| {
+                    let result: std::io::Result<Vec<Member>> = result.and_then(|member_info| {
+                        let members: Vec<std::io::Result<Member>> = member_info
+                            .into_iter()
+                            .map(Member::from_member_info)
+                            .collect();
 
-                            Result::from_iter(members)
-                        });
+                        Result::from_iter(members)
+                    });
 
-                        match result {
-                            Err(error) => {
-                                info!("candidate [{}] resolution error: {}", candidate, error);
+                    match result {
+                        Err(error) => {
+                            info!("candidate [{}] resolution error: {}", candidate, error);
 
+                            Ok(Loop::Continue(state))
+                        }
+
+                        Ok(members) => {
+                            if members.is_empty() {
                                 Ok(Loop::Continue(state))
-                            },
+                            } else {
+                                let node_opt =
+                                    determine_best_node(state.preference, members.as_slice());
 
-                            Ok(members) => {
-                                if members.is_empty() {
-                                    Ok(Loop::Continue(state))
-                                } else {
-                                    let node_opt = determine_best_node(state.preference, members.as_slice());
-
-                                    if node_opt.is_some() {
-                                        state.previous_candidates = Some(members);
-                                    }
-
-                                    Ok(Loop::Break((node_opt, state)))
+                                if node_opt.is_some() {
+                                    state.previous_candidates = Some(members);
                                 }
+
+                                Ok(Loop::Break((node_opt, state)))
                             }
                         }
-                    });
+                    }
+                });
 
                 boxed_future(fut)
             } else {
@@ -97,50 +93,52 @@ pub(crate) fn discover(consumer: mpsc::Receiver<Option<Endpoint>>, sender: mpsc:
         })
     }
 
-    consumer.fold(initial, |state, failed_endpoint|
-    {
-        future::loop_fn((1usize, state), move |(att, state)|
-        {
-            if att > state.settings.max_discover_attempts {
-                let err_msg =
-                    format!("Failed to discover candidate in {} attempts", state.settings.max_discover_attempts);
+    consumer
+        .fold(initial, |state, failed_endpoint| {
+            future::loop_fn((1usize, state), move |(att, state)| {
+                if att > state.settings.max_discover_attempts {
+                    let err_msg = format!(
+                        "Failed to discover candidate in {} attempts",
+                        state.settings.max_discover_attempts
+                    );
 
-                let err = std::io::Error::new(std::io::ErrorKind::NotFound, err_msg);
-                let send_err =
-                    state.sender
+                    let err = std::io::Error::new(std::io::ErrorKind::NotFound, err_msg);
+                    let send_err = state
+                        .sender
                         .clone()
                         .send(Msg::ConnectionClosed(Uuid::nil(), err))
                         .then(|_| Ok(()));
 
-                spawn(send_err);
+                    spawn(send_err);
 
-                boxed_future(future::ok(Loop::Break(state)))
-            } else {
-                let fut = discover(state, failed_endpoint).and_then(move |(node_opt, new_state)|
-                {
-                    if let Some(node) = node_opt {
-                        let send_endpoint =
-                            new_state.sender
-                                .clone()
-                                .send(Msg::Establish(node.tcp_endpoint))
-                                .then(|_| Ok(()));
+                    boxed_future(future::ok(Loop::Break(state)))
+                } else {
+                    let fut =
+                        discover(state, failed_endpoint).and_then(move |(node_opt, new_state)| {
+                            if let Some(node) = node_opt {
+                                let send_endpoint = new_state
+                                    .sender
+                                    .clone()
+                                    .send(Msg::Establish(node.tcp_endpoint))
+                                    .then(|_| Ok(()));
 
-                        spawn(send_endpoint);
+                                spawn(send_endpoint);
 
-                        boxed_future(future::ok(Loop::Break(new_state)))
-                    } else {
-                        let fut = sleep(Duration::from_millis(500))
-                            .map(move |_| Loop::Continue((att + 1, new_state)))
-                            .map_err(|_| ());
+                                boxed_future(future::ok(Loop::Break(new_state)))
+                            } else {
+                                let fut = sleep(Duration::from_millis(500))
+                                    .map(move |_| Loop::Continue((att + 1, new_state)))
+                                    .map_err(|_| ());
 
-                        boxed_future(fut)
-                    }
-                });
+                                boxed_future(fut)
+                            }
+                        });
 
-                boxed_future(fut)
-            }
+                    boxed_future(fut)
+                }
+            })
         })
-    }).map(|_| ())
+        .map(|_| ())
 }
 
 fn candidates_from_dns(settings: &GossipSeedClusterSettings) -> Vec<GossipSeed> {
@@ -154,16 +152,15 @@ fn candidates_from_dns(settings: &GossipSeedClusterSettings) -> Vec<GossipSeed> 
     src.into_vec()
 }
 
-fn candidates_from_old_gossip(failed_endpoint: Option<Endpoint>, old_candidates: Vec<Member>)
-    -> Vec<GossipSeed>
-{
+fn candidates_from_old_gossip(
+    failed_endpoint: Option<Endpoint>,
+    old_candidates: Vec<Member>,
+) -> Vec<GossipSeed> {
     let candidates = match failed_endpoint {
-        Some(endpoint) => {
-            old_candidates
-                .into_iter()
-                .filter(|member| member.external_tcp != endpoint.addr)
-                .collect()
-        },
+        Some(endpoint) => old_candidates
+            .into_iter()
+            .filter(|member| member.external_tcp != endpoint.addr)
+            .collect(),
 
         None => old_candidates,
     };
@@ -266,35 +263,49 @@ fn addr_parse_error_to_io_error(error: AddrParseError) -> std::io::Error {
 
 impl Member {
     fn from_member_info(info: MemberInfo) -> std::io::Result<Member> {
-        let external_tcp =
-            parse_socket_addr(format!("{}:{}", info.external_tcp_ip, info.external_tcp_port))?;
+        let external_tcp = parse_socket_addr(format!(
+            "{}:{}",
+            info.external_tcp_ip, info.external_tcp_port
+        ))?;
 
         let external_secure_tcp = {
             if info.external_secure_tcp_port < 1 {
                 Ok(None)
             } else {
-                parse_socket_addr(format!("{}:{}", info.external_tcp_ip, info.external_secure_tcp_port))
-                    .map(Some)
+                parse_socket_addr(format!(
+                    "{}:{}",
+                    info.external_tcp_ip, info.external_secure_tcp_port
+                ))
+                .map(Some)
             }
         }?;
 
-        let external_http =
-            parse_socket_addr(format!("{}:{}", info.external_http_ip, info.external_http_port))?;
+        let external_http = parse_socket_addr(format!(
+            "{}:{}",
+            info.external_http_ip, info.external_http_port
+        ))?;
 
-        let internal_tcp =
-            parse_socket_addr(format!("{}:{}", info.internal_tcp_ip, info.internal_tcp_port))?;
+        let internal_tcp = parse_socket_addr(format!(
+            "{}:{}",
+            info.internal_tcp_ip, info.internal_tcp_port
+        ))?;
 
         let internal_secure_tcp = {
             if info.internal_secure_tcp_port < 1 {
                 Ok(None)
             } else {
-                parse_socket_addr(format!("{}:{}", info.internal_tcp_ip, info.internal_secure_tcp_port))
-                    .map(Some)
+                parse_socket_addr(format!(
+                    "{}:{}",
+                    info.internal_tcp_ip, info.internal_secure_tcp_port
+                ))
+                .map(Some)
             }
         }?;
 
-        let internal_http =
-            parse_socket_addr(format!("{}:{}", info.internal_http_ip, info.internal_http_port))?;
+        let internal_http = parse_socket_addr(format!(
+            "{}:{}",
+            info.internal_http_ip, info.internal_http_port
+        ))?;
 
         let member = Member {
             external_tcp,
@@ -311,8 +322,7 @@ impl Member {
 }
 
 fn parse_socket_addr(str_repr: String) -> std::io::Result<SocketAddr> {
-    str_repr.parse()
-        .map_err(addr_parse_error_to_io_error)
+    str_repr.parse().map_err(addr_parse_error_to_io_error)
 }
 
 struct Candidates {
@@ -358,28 +368,23 @@ pub(crate) struct NodeEndpoints {
     pub secure_tcp_endpoint: Option<Endpoint>,
 }
 
-fn get_gossip_from(client: reqwest::r#async::Client, gossip: GossipSeed)
-    -> impl Future<Item=Vec<MemberInfo>, Error=std::io::Error>
-{
-    gossip.url()
-        .into_future()
-        .and_then(move |url|
-        {
-            client
-                .get(url)
-                .send()
-                .and_then(|mut res| res.json::<Gossip>().map(|g| g.members))
-                .map_err(move |error|
-                {
-                    let msg = format!("[{}] responded with [{}]", gossip, error);
-                    std::io::Error::new(std::io::ErrorKind::Other, msg)
-                })
-        })
+fn get_gossip_from(
+    client: reqwest::r#async::Client,
+    gossip: GossipSeed,
+) -> impl Future<Item = Vec<MemberInfo>, Error = std::io::Error> {
+    gossip.url().into_future().and_then(move |url| {
+        client
+            .get(url)
+            .send()
+            .and_then(|mut res| res.json::<Gossip>().map(|g| g.members))
+            .map_err(move |error| {
+                let msg = format!("[{}] responded with [{}]", gossip, error);
+                std::io::Error::new(std::io::ErrorKind::Other, msg)
+            })
+    })
 }
 
-fn determine_best_node(preference: NodePreference, members: &[Member])
-    -> Option<NodeEndpoints>
-{
+fn determine_best_node(preference: NodePreference, members: &[Member]) -> Option<NodeEndpoints> {
     fn allowed_states(state: VNodeState) -> bool {
         match state {
             VNodeState::Manager | VNodeState::ShuttingDown | VNodeState::Shutdown => false,
@@ -387,13 +392,12 @@ fn determine_best_node(preference: NodePreference, members: &[Member])
         }
     }
 
-    let mut members: Vec<&Member> =
-        members.iter()
-            .filter(|member| allowed_states(member.state))
-            .collect();
+    let mut members: Vec<&Member> = members
+        .iter()
+        .filter(|member| allowed_states(member.state))
+        .collect();
 
-    members.as_mut_slice()
-        .sort_by(|a, b| a.state.cmp(&b.state));
+    members.as_mut_slice().sort_by(|a, b| a.state.cmp(&b.state));
 
     {
         let mut rng = rand::thread_rng();
@@ -407,9 +411,11 @@ fn determine_best_node(preference: NodePreference, members: &[Member])
 
     let member_opt = members.into_iter().next();
 
-    member_opt.map(|member|
-    {
-        info!("Discovering: found best choice [{},{:?}] ({})", member.external_tcp, member.external_secure_tcp, member.state);
+    member_opt.map(|member| {
+        info!(
+            "Discovering: found best choice [{},{:?}] ({})",
+            member.external_tcp, member.external_secure_tcp, member.state
+        );
 
         NodeEndpoints {
             tcp_endpoint: Endpoint::from_addr(member.external_tcp),
@@ -418,9 +424,9 @@ fn determine_best_node(preference: NodePreference, members: &[Member])
     })
 }
 
-fn boxed_future<F: 'static>(future: F)
-    -> Box<dyn Future<Item=F::Item, Error=F::Error> + Send>
-        where F: Future + Send
+fn boxed_future<F: 'static>(future: F) -> Box<dyn Future<Item = F::Item, Error = F::Error> + Send>
+where
+    F: Future + Send,
 {
     Box::new(future)
 }
