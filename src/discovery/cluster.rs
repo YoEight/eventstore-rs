@@ -1,144 +1,115 @@
 use crate::internal::messaging::Msg;
 use crate::types::{Endpoint, GossipSeed, GossipSeedClusterSettings, NodePreference};
-use futures::future::{self, Loop};
-use futures::prelude::{Future, IntoFuture, Sink, Stream};
-use futures::sync::mpsc;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use rand;
 use rand::seq::SliceRandom;
 use std::iter::FromIterator;
 use std::net::{AddrParseError, SocketAddr};
 use std::time::Duration;
-use std::vec::IntoIter;
-use tokio::spawn;
-use tokio_timer::sleep;
 use uuid::Uuid;
 
-pub(crate) fn discover(
-    consumer: mpsc::Receiver<Option<Endpoint>>,
+pub(crate) async fn discover(
+    mut consumer: mpsc::Receiver<Option<Endpoint>>,
     sender: mpsc::Sender<Msg>,
     settings: GossipSeedClusterSettings,
-) -> impl Future<Item = (), Error = ()> {
-    struct State {
-        settings: GossipSeedClusterSettings,
-        client: reqwest::r#async::Client,
-        previous_candidates: Option<Vec<Member>>,
+) {
+    let preference = NodePreference::Random;
+    let client = reqwest::Client::new();
+    let mut previous_candidates = None;
+
+    async fn discover(
+        client: &reqwest::Client,
+        settings: &GossipSeedClusterSettings,
+        previous_candidates: &mut Option<Vec<Member>>,
         preference: NodePreference,
-        sender: mpsc::Sender<Msg>,
-        candidates: IntoIter<GossipSeed>,
-    }
-
-    let initial = State {
-        settings,
-        sender,
-        client: reqwest::r#async::Client::new(),
-        previous_candidates: None,
-        preference: NodePreference::Random,
-        candidates: vec![].into_iter(),
-    };
-
-    fn discover(
-        mut state: State,
         failed_endpoint: Option<Endpoint>,
-    ) -> impl Future<Item = (Option<NodeEndpoints>, State), Error = ()> {
-        let candidates = match state.previous_candidates.take() {
+    ) -> Option<NodeEndpoints> {
+        let candidates = match previous_candidates.take() {
             Some(old_candidates) => candidates_from_old_gossip(failed_endpoint, old_candidates),
 
-            None => candidates_from_dns(&state.settings),
+            None => candidates_from_dns(&settings),
         };
 
-        state.candidates = candidates.into_iter();
+        let mut outcome = None;
 
-        future::loop_fn(state, move |mut state| {
-            let client = state.client.clone();
+        for candidate in candidates {
+            let result = get_gossip_from(client, candidate).await;
+            let result: std::io::Result<Vec<Member>> = result.and_then(|member_info| {
+                let members: Vec<std::io::Result<Member>> = member_info
+                    .into_iter()
+                    .map(Member::from_member_info)
+                    .collect();
 
-            if let Some(candidate) = state.candidates.next() {
-                let fut = get_gossip_from(client, candidate).then(move |result| {
-                    let result: std::io::Result<Vec<Member>> = result.and_then(|member_info| {
-                        let members: Vec<std::io::Result<Member>> = member_info
-                            .into_iter()
-                            .map(Member::from_member_info)
-                            .collect();
+                Result::from_iter(members)
+            });
 
-                        Result::from_iter(members)
-                    });
+            match result {
+                Err(error) => {
+                    info!("candidate [{}] resolution error: {}", candidate, error);
 
-                    match result {
-                        Err(error) => {
-                            info!("candidate [{}] resolution error: {}", candidate, error);
+                    continue;
+                }
 
-                            Ok(Loop::Continue(state))
+                Ok(members) => {
+                    if members.is_empty() {
+                        continue;
+                    } else {
+                        outcome = determine_best_node(preference, members.as_slice());
+
+                        if outcome.is_some() {
+                            *previous_candidates = Some(members);
+                            break;
                         }
 
-                        Ok(members) => {
-                            if members.is_empty() {
-                                Ok(Loop::Continue(state))
-                            } else {
-                                let node_opt =
-                                    determine_best_node(state.preference, members.as_slice());
-
-                                if node_opt.is_some() {
-                                    state.previous_candidates = Some(members);
-                                }
-
-                                Ok(Loop::Break((node_opt, state)))
-                            }
-                        }
+                        warn!("determine_best_node found no candidate!");
                     }
-                });
-
-                boxed_future(fut)
-            } else {
-                boxed_future(future::ok(Loop::Break((None, state))))
+                }
             }
-        })
+        }
+
+        outcome
     }
 
-    consumer
-        .fold(initial, |state, failed_endpoint| {
-            future::loop_fn((1usize, state), move |(att, state)| {
-                if att > state.settings.max_discover_attempts {
-                    let err_msg = format!(
-                        "Failed to discover candidate in {} attempts",
-                        state.settings.max_discover_attempts
-                    );
+    while let Some(failed_endpoint) = consumer.next().await {
+        let mut att = 1usize;
 
-                    let err = std::io::Error::new(std::io::ErrorKind::NotFound, err_msg);
-                    let send_err = state
-                        .sender
-                        .clone()
-                        .send(Msg::ConnectionClosed(Uuid::nil(), err))
-                        .then(|_| Ok(()));
+        loop {
+            if att > settings.max_discover_attempts {
+                let err_msg = format!(
+                    "Failed to discover candidate in {} attempts",
+                    settings.max_discover_attempts
+                );
 
-                    spawn(send_err);
+                let err = std::io::Error::new(std::io::ErrorKind::NotFound, err_msg);
+                let _ = sender
+                    .clone()
+                    .send(Msg::ConnectionClosed(Uuid::nil(), err))
+                    .await;
 
-                    boxed_future(future::ok(Loop::Break(state)))
-                } else {
-                    let fut =
-                        discover(state, failed_endpoint).and_then(move |(node_opt, new_state)| {
-                            if let Some(node) = node_opt {
-                                let send_endpoint = new_state
-                                    .sender
-                                    .clone()
-                                    .send(Msg::Establish(node.tcp_endpoint))
-                                    .then(|_| Ok(()));
+                break;
+            }
 
-                                spawn(send_endpoint);
+            let result_opt = discover(
+                &client,
+                &settings,
+                &mut previous_candidates,
+                preference,
+                failed_endpoint,
+            )
+            .await;
 
-                                boxed_future(future::ok(Loop::Break(new_state)))
-                            } else {
-                                let fut = sleep(Duration::from_millis(500))
-                                    .map(move |_| Loop::Continue((att + 1, new_state)))
-                                    .map_err(|_| ());
+            if let Some(node) = result_opt {
+                let _ = sender.clone().send(Msg::Establish(node.tcp_endpoint)).await;
 
-                                boxed_future(fut)
-                            }
-                        });
+                break;
+            }
 
-                    boxed_future(fut)
-                }
-            })
-        })
-        .map(|_| ())
+            tokio::time::delay_for(Duration::from_millis(500)).await;
+            att += 1;
+        }
+    }
 }
 
 fn candidates_from_dns(settings: &GossipSeedClusterSettings) -> Vec<GossipSeed> {
@@ -368,20 +339,26 @@ pub(crate) struct NodeEndpoints {
     pub secure_tcp_endpoint: Option<Endpoint>,
 }
 
-fn get_gossip_from(
-    client: reqwest::r#async::Client,
+async fn get_gossip_from(
+    client: &reqwest::Client,
     gossip: GossipSeed,
-) -> impl Future<Item = Vec<MemberInfo>, Error = std::io::Error> {
-    gossip.url().into_future().and_then(move |url| {
-        client
-            .get(url)
-            .send()
-            .and_then(|mut res| res.json::<Gossip>().map(|g| g.members))
-            .map_err(move |error| {
-                let msg = format!("[{}] responded with [{}]", gossip, error);
-                std::io::Error::new(std::io::ErrorKind::Other, msg)
-            })
-    })
+) -> std::io::Result<Vec<MemberInfo>> {
+    let url = gossip.url()?;
+
+    let result = client.get(url).send().await;
+
+    let resp = result.map_err(|error| {
+        let msg = format!("[{}] responded with [{}]", gossip, error);
+        std::io::Error::new(std::io::ErrorKind::Other, msg)
+    })?;
+
+    match resp.json::<Gossip>().await {
+        Ok(gossip) => Ok(gossip.members),
+        Err(error) => {
+            let msg = format!("[{}] responded with [{}]", gossip, error);
+            Err(std::io::Error::new(std::io::ErrorKind::Other, msg))
+        }
+    }
 }
 
 fn determine_best_node(preference: NodePreference, members: &[Member]) -> Option<NodeEndpoints> {
@@ -422,11 +399,4 @@ fn determine_best_node(preference: NodePreference, members: &[Member]) -> Option
             secure_tcp_endpoint: member.external_secure_tcp.map(Endpoint::from_addr),
         }
     })
-}
-
-fn boxed_future<F: 'static>(future: F) -> Box<dyn Future<Item = F::Item, Error = F::Error> + Send>
-where
-    F: Future + Send,
-{
-    Box::new(future)
 }

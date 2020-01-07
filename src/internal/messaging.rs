@@ -3,11 +3,42 @@ use std::io::Error;
 
 use uuid::Uuid;
 
-use crate::internal::operations;
 use crate::internal::package::Pkg;
-use crate::types::Endpoint;
+use crate::types::{Endpoint, OperationError};
+use futures::channel::mpsc;
 
-pub(crate) enum Msg {
+#[derive(Debug)]
+pub enum OpMsg {
+    Recv(Pkg),
+    Failed(OperationError),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Lifetime<A> {
+    OneTime(A),
+    KeepAlive(A),
+}
+
+impl<A> Lifetime<A> {
+    pub fn is_keep_alive(&self) -> bool {
+        if let Lifetime::KeepAlive(_) = self {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn inner(self) -> A {
+        match self {
+            Lifetime::KeepAlive(a) => a,
+            Lifetime::OneTime(a) => a,
+        }
+    }
+}
+
+pub type Mailbox = mpsc::Sender<OpMsg>;
+
+pub enum Msg {
     Start,
     Shutdown,
     Tick,
@@ -15,7 +46,7 @@ pub(crate) enum Msg {
     Established(Uuid),
     Arrived(Pkg),
     ConnectionClosed(Uuid, Error),
-    NewOp(operations::OperationWrapper),
+    Transmit(Lifetime<Pkg>, Mailbox),
     Send(Pkg),
     Marker, // Use as checkpoint detection.
 }
@@ -32,15 +63,9 @@ impl fmt::Debug for Msg {
             Established(id) => writeln!(f, "Established({:?})", id),
             Arrived(pkg) => writeln!(f, "Arrived({:?})", pkg),
             ConnectionClosed(id, e) => writeln!(f, "ConnectionClosed({:?}, {:?})", id, e),
-            NewOp(op) => writeln!(f, "NewOp({:?})", op.id),
+            Transmit(pkg, _) => writeln!(f, "Transmit({:?})", pkg),
             Send(pkg) => writeln!(f, "Send({:?})", pkg),
             Marker => writeln!(f, "Marker"),
         }
-    }
-}
-
-impl Msg {
-    pub(crate) fn new_op(op: operations::OperationWrapper) -> Msg {
-        Msg::NewOp(op)
     }
 }

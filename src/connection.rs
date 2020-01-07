@@ -1,16 +1,15 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::sync::mpsc::{channel, Receiver, Sender};
-use futures::{Future, Sink, Stream};
-use tokio::runtime::{Runtime, Shutdown};
+use futures::channel::mpsc::{channel, Receiver, Sender};
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 
 use crate::discovery;
 use crate::internal::commands;
 use crate::internal::driver::{Driver, Report};
-use crate::internal::messaging::Msg;
-use crate::internal::operations::OperationError;
-use crate::types::{self, GossipSeedClusterSettings, Settings, StreamMetadata};
+use crate::internal::messaging::{Msg, OpMsg};
+use crate::types::{self, GossipSeedClusterSettings, OperationError, Settings, StreamMetadata};
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
@@ -25,9 +24,7 @@ use crate::types::{self, GossipSeedClusterSettings, Settings, StreamMetadata};
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
 pub struct Connection {
-    shutdown: Option<Shutdown>,
     sender: Sender<Msg>,
-    settings: Settings,
 }
 
 /// Helps constructing a connection to the server.
@@ -92,49 +89,26 @@ impl ConnectionBuilder {
 
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
-    pub fn single_node_connection(self, addr: SocketAddr) -> Connection {
-        self.start_common_with_runtime(DiscoveryProcess::Static(addr), None)
-    }
-
-    /// Creates a connection to a single EventStore node. The connection will
-    /// start right away.
-    pub fn single_node_connection_with_runtime(
-        self,
-        addr: SocketAddr,
-        runtime: &mut Runtime,
-    ) -> Connection {
-        self.start_common_with_runtime(DiscoveryProcess::Static(addr), Some(runtime))
+    pub async fn single_node_connection(self, addr: SocketAddr) -> Connection {
+        self.start_common_with_runtime(DiscoveryProcess::Static(addr))
+            .await
     }
 
     /// Creates a connection to a cluster of EventStore nodes. The connection will
     /// start right away. Those `GossipSeed` should be the external HTTP endpoint
     /// of a node. The standard external HTTP endpoint is running on `2113`.
-    pub fn cluster_nodes_through_gossip_connection(
+    pub async fn cluster_nodes_through_gossip_connection(
         self,
         setts: GossipSeedClusterSettings,
     ) -> Connection {
-        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts), None)
+        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts))
+            .await
     }
 
-    /// Creates a connection to a cluster of EventStore nodes. The connection will
-    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
-    /// of a node. The standard external HTTP endpoint is running on `2113`.
-    pub fn cluster_nodes_through_gossip_connection_with_runtime(
-        self,
-        setts: GossipSeedClusterSettings,
-        runtime: &mut Runtime,
-    ) -> Connection {
-        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts), Some(runtime))
-    }
+    async fn start_common_with_runtime(self, discovery: DiscoveryProcess) -> Connection {
+        let mut client = Connection::make(self.settings, discovery);
 
-    fn start_common_with_runtime(
-        self,
-        discovery: DiscoveryProcess,
-        runtime_opt: Option<&mut Runtime>,
-    ) -> Connection {
-        let client = Connection::with_runtime(self.settings, discovery, runtime_opt);
-
-        client.start();
+        client.start().await;
 
         client
     }
@@ -142,80 +116,68 @@ impl ConnectionBuilder {
 
 const DEFAULT_BOX_SIZE: usize = 500;
 
-fn connection_state_machine(
-    sender: Sender<Msg>,
-    recv: Receiver<Msg>,
+async fn connection_state_machine(
+    mut sender: Sender<Msg>,
+    mut recv: Receiver<Msg>,
     mut driver: Driver,
-) -> impl Future<Item = (), Error = ()> {
-    #[derive(Debug)]
-    enum State {
-        Live,
-        Clearing,
-    }
-
-    fn start_closing<E>(sender: &Sender<Msg>, driver: &mut Driver) -> Result<State, E> {
+) {
+    async fn closing(sender: &mut Sender<Msg>, driver: &mut Driver) {
         driver.close_connection();
-
-        let action = sender.clone().send(Msg::Marker).map(|_| ()).map_err(|_| ());
-
-        tokio::spawn(action);
+        let _ = sender.send(Msg::Marker).await;
 
         info!("Closing the connection...");
         info!("Start clearing uncomplete operations...");
-
-        Ok(State::Clearing)
     }
 
-    recv.fold(State::Live, move |acc, msg| {
-        debug!("Bus loop received state {:?}: {:?}", acc, msg);
+    // Live state
+    while let Some(msg) = recv.next().await {
+        match msg {
+            Msg::Start => driver.start().await,
+            Msg::Establish(endpoint) => driver.on_establish(endpoint),
+            Msg::Established(id) => driver.on_established(id).await,
+            Msg::ConnectionClosed(conn_id, error) => driver.on_connection_closed(conn_id, &error),
+            Msg::Arrived(pkg) => driver.on_package_arrived(pkg).await,
+            Msg::Transmit(pkg, mailbox) => driver.on_transmit(mailbox, pkg).await,
+            Msg::Send(pkg) => driver.on_send_pkg(pkg).await,
 
-        if let State::Live = &acc {
-            match msg {
-                Msg::Start => driver.start(),
-                Msg::Establish(endpoint) => driver.on_establish(endpoint),
-                Msg::Established(id) => driver.on_established(id),
-                Msg::ConnectionClosed(conn_id, error) => {
-                    driver.on_connection_closed(conn_id, &error)
-                }
-                Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
-                Msg::NewOp(op) => driver.on_new_op(op),
-                Msg::Send(pkg) => driver.on_send_pkg(pkg),
-
-                Msg::Tick => {
-                    if let Report::Quit = driver.on_tick() {
-                        return start_closing(&sender, &mut driver);
-                    }
-                }
-
-                // It's impossible to receive `Msg::Marker` at `State::Live` state.
-                // However we can hit two birds with one stone with pattern-matching
-                // coverage checker.
-                Msg::Shutdown | Msg::Marker => {
-                    info!("User-shutdown request received.");
-
-                    return start_closing(&sender, &mut driver);
+            Msg::Tick => {
+                if let Report::Quit = driver.on_tick().await {
+                    closing(&mut sender, &mut driver).await;
+                    break;
                 }
             }
-        } else {
-            match msg {
-                Msg::NewOp(mut op) => op.failed(OperationError::Aborted),
-                Msg::Arrived(pkg) => driver.on_package_arrived(pkg),
-                Msg::Marker => {
-                    // We've reached the end of our checkpoint, we can properly
-                    // aborts uncompleted operations.
-                    driver.abort();
-                    info!("Connection closed properly.");
 
-                    return Err(());
-                }
-
-                _ => {}
+            // It's impossible to receive `Msg::Marker` at `State::Live` state.
+            // However we can hit two birds with one stone with pattern-matching
+            // coverage checker.
+            Msg::Shutdown | Msg::Marker => {
+                info!("User-shutdown request received.");
+                closing(&mut sender, &mut driver).await;
+                break;
             }
         }
+    }
 
-        Ok(acc)
-    })
-    .map(|_| ())
+    // Closing state
+    while let Some(msg) = recv.next().await {
+        match msg {
+            Msg::Transmit(_, mut mailbox) => {
+                let _ = mailbox.send(OpMsg::Failed(OperationError::Aborted)).await;
+            }
+
+            Msg::Arrived(pkg) => driver.on_package_arrived(pkg).await,
+            Msg::Marker => {
+                // We've reached the end of our checkpoint, we can properly
+                // aborts uncompleted operations.
+                driver.abort().await;
+                info!("Connection closed properly.");
+
+                break;
+            }
+
+            _ => {}
+        }
+    }
 }
 
 enum DiscoveryProcess {
@@ -231,39 +193,15 @@ impl Connection {
         }
     }
 
-    fn with_runtime(
-        settings: Settings,
-        discovery: DiscoveryProcess,
-        runtime_opt: Option<&mut Runtime>,
-    ) -> Connection {
-        if let Some(runtime) = runtime_opt {
-            let sender = Self::initialize(&settings, discovery, runtime);
+    fn make(settings: Settings, discovery: DiscoveryProcess) -> Connection {
+        let sender = Self::initialize(&settings, discovery);
 
-            Connection {
-                shutdown: None,
-                sender,
-                settings,
-            }
-        } else {
-            let mut runtime = Runtime::new().unwrap();
-            let sender = Self::initialize(&settings, discovery, &mut runtime);
-            let shutdown = runtime.shutdown_on_idle();
-
-            Connection {
-                shutdown: Some(shutdown),
-                sender,
-                settings,
-            }
-        }
+        Connection { sender }
     }
 
-    fn initialize(
-        settings: &Settings,
-        discovery: DiscoveryProcess,
-        runtime: &mut Runtime,
-    ) -> Sender<Msg> {
+    fn initialize(settings: &Settings, discovery: DiscoveryProcess) -> Sender<Msg> {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
-        let (start_discovery, run_discovery) = channel(DEFAULT_BOX_SIZE);
+        let (start_discovery, run_discovery) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
         let cloned_sender = sender.clone();
         let driver = Driver::new(&settings, start_discovery, sender.clone());
 
@@ -272,23 +210,22 @@ impl Connection {
                 let endpoint = types::Endpoint::from_addr(addr);
                 let action = discovery::constant::discover(run_discovery, sender.clone(), endpoint);
 
-                runtime.spawn(action);
+                tokio::spawn(action);
             }
 
             DiscoveryProcess::ClusterThroughGossip(setts) => {
                 let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
 
-                runtime.spawn(action);
+                tokio::spawn(action);
             }
         };
 
-        let action = connection_state_machine(cloned_sender, recv, driver);
-        let _ = runtime.spawn(action);
+        tokio::spawn(connection_state_machine(cloned_sender, recv, driver));
         sender
     }
 
-    fn start(&self) {
-        self.sender.clone().send(Msg::Start).wait().unwrap();
+    async fn start(&mut self) {
+        let _ = self.sender.send(Msg::Start).await;
     }
 
     /// Sends events to a given stream.
@@ -296,7 +233,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::WriteEvents::new(self.sender.clone(), stream, &self.settings)
+        commands::WriteEvents::new(self.sender.clone(), stream)
     }
 
     /// Sets the metadata for a stream.
@@ -308,7 +245,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::WriteStreamMetadata::new(self.sender.clone(), stream, metadata, &self.settings)
+        commands::WriteStreamMetadata::new(self.sender.clone(), stream, metadata)
     }
 
     /// Reads a single event from a given stream.
@@ -316,7 +253,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::ReadEvent::new(self.sender.clone(), stream, event_number, &self.settings)
+        commands::ReadEvent::new(self.sender.clone(), stream, event_number)
     }
 
     /// Gets the metadata of a stream.
@@ -324,7 +261,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::ReadStreamMetadata::new(self.sender.clone(), stream, &self.settings)
+        commands::ReadStreamMetadata::new(self.sender.clone(), stream)
     }
 
     /// Starts a transaction on a given stream.
@@ -332,7 +269,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::TransactionStart::new(self.sender.clone(), stream, &self.settings)
+        commands::TransactionStart::new(self.sender.clone(), stream)
     }
 
     /// Reads events from a given stream. The reading can be done forward and
@@ -341,13 +278,13 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::ReadStreamEvents::new(self.sender.clone(), stream, &self.settings)
+        commands::ReadStreamEvents::new(self.sender.clone(), stream)
     }
 
     /// Reads events for the system stream `$all`. The reading can be done
     /// forward and backward.
     pub fn read_all(&self) -> commands::ReadAllEvents {
-        commands::ReadAllEvents::new(self.sender.clone(), &self.settings)
+        commands::ReadAllEvents::new(self.sender.clone())
     }
 
     /// Deletes a given stream. By default, the server performs a soft delete,
@@ -359,7 +296,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::DeleteStream::new(self.sender.clone(), stream, &self.settings)
+        commands::DeleteStream::new(self.sender.clone(), stream)
     }
 
     /// Subscribes to a given stream. You will get notified of each new events
@@ -368,7 +305,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::SubscribeToStream::new(self.sender.clone(), stream_id, &self.settings)
+        commands::SubscribeToStream::new(self.sender.clone(), stream_id)
     }
 
     /// Subscribes to a given stream. This kind of subscription specifies a
@@ -389,14 +326,14 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::RegularCatchupSubscribe::new(self.sender.clone(), stream, &self.settings)
+        commands::RegularCatchupSubscribe::new(self.sender.clone(), stream)
     }
 
     /// Like [`subscribe_to_stream_from`] but specific to system `$all` stream.
     ///
     /// [`subscribe_to_stream_from`]: #method.subscribe_to_stream_from
     pub fn subscribe_to_all_from(&self) -> commands::AllCatchupSubscribe {
-        commands::AllCatchupSubscribe::new(self.sender.clone(), &self.settings)
+        commands::AllCatchupSubscribe::new(self.sender.clone())
     }
 
     /// Creates a persistent subscription group on a stream.
@@ -413,12 +350,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::CreatePersistentSubscription::new(
-            stream_id,
-            group_name,
-            self.sender.clone(),
-            &self.settings,
-        )
+        commands::CreatePersistentSubscription::new(stream_id, group_name, self.sender.clone())
     }
 
     /// Updates a persistent subscription group on a stream.
@@ -430,12 +362,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::UpdatePersistentSubscription::new(
-            stream_id,
-            group_name,
-            self.sender.clone(),
-            &self.settings,
-        )
+        commands::UpdatePersistentSubscription::new(stream_id, group_name, self.sender.clone())
     }
 
     /// Deletes a persistent subscription group on a stream.
@@ -447,12 +374,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::DeletePersistentSubscription::new(
-            stream_id,
-            group_name,
-            self.sender.clone(),
-            &self.settings,
-        )
+        commands::DeletePersistentSubscription::new(stream_id, group_name, self.sender.clone())
     }
 
     /// Connects to a persistent subscription group on a stream.
@@ -464,12 +386,7 @@ impl Connection {
     where
         S: AsRef<str>,
     {
-        commands::ConnectToPersistentSubscription::new(
-            stream_id,
-            group_name,
-            self.sender.clone(),
-            &self.settings,
-        )
+        commands::ConnectToPersistentSubscription::new(stream_id, group_name, self.sender.clone())
     }
 
     /// Closes the connection to the server.
@@ -479,8 +396,7 @@ impl Connection {
     /// everything properly when returning.
     ///
     /// `shutdown` blocks the current thread.
-    pub fn shutdown(self) {
-        self.sender.send(Msg::Shutdown).wait().unwrap();
-        self.shutdown.wait().unwrap();
+    pub async fn shutdown(mut self) {
+        let _ = self.sender.send(Msg::Shutdown).await;
     }
 }
