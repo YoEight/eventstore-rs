@@ -47,3 +47,4 @@ name = "integration"
 
 [dev-dependencies]
 env_logger = "0.6"
+tokio-test = "0.2"
