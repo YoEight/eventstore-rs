@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.5.1"
+version = "0.6.0"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 edition = "2018"
 
@@ -18,7 +18,8 @@ exclude = [
   ".gitignore",
   ".gitlab-ci.yml",
   ".travis.yml",
-  ".github"
+  ".github",
+  "rustfmt.toml"
 ]
 
 categories = ["database", "api-bindings"]
@@ -37,7 +38,6 @@ log = "0.4"
 reqwest = { version = "0.10", features = ["json"] }
 vec1 = "1.4"
 rand = "0.7"
-async-trait = "0.1.22"
 
 [build-dependencies]
 protoc-rust = "=2.8.1"
