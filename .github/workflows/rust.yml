@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: rust:1.39
+      image: rust:1.40
 
     services:
       eventstore:
@@ -20,10 +20,14 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: Install
-      run: rustup component add clippy-preview
+      run: |
+        rustup component add clippy-preview
+        rustup component add rustfmt
     - name: Build
       run: cargo build
     - name: Run tests
       run: EVENTSTORE_HOST=eventstore RUST_BACKTRACE='1' RUST_LOG='eventstore=debug' cargo test
     - name: Linting
       run: cargo clippy -- -D warnings
+    - name: Formatting
+      run: cargo fmt -- --check
