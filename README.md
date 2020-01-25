@@ -49,8 +49,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let event = EventData::json("language-poll", payload)?;
 
-    // All the operations are asynchronous but for the sake of this example
-    // we decide to wait until the server sends a response.
     let result = connection
         .write_events("language-stream")
         .push_event(event)
