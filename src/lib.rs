@@ -13,6 +13,6 @@ pub mod types;
 
 pub use connection::{Connection, ConnectionBuilder};
 
-pub use internal::{commands, operations::OperationError};
+pub use internal::commands;
 
 pub use types::*;

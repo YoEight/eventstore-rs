@@ -1,513 +1,55 @@
-use std::error::Error;
-use std::fmt;
-use std::ops::Deref;
-use std::time::{Duration, Instant};
-
-use bytes::{BufMut, BytesMut};
-use futures::stream::iter_ok;
-use futures::sync::mpsc;
-use futures::{Future, Sink, Stream};
-use protobuf::{Chars, RepeatedField};
-use uuid::Uuid;
-
-use crate::internal::command::Cmd;
-use crate::internal::messages;
-use crate::internal::package::Pkg;
-use crate::types::{self, Slice};
-
 use self::messages::{
     CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult,
     DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult, OperationResult,
     ReadAllEventsCompleted_ReadAllResult, ReadStreamEventsCompleted_ReadStreamResult,
     UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult,
 };
+use crate::internal::command::Cmd;
+use crate::internal::messages;
+use crate::internal::messaging::{Lifetime, Msg, OpMsg};
+use crate::internal::package::Pkg;
+use crate::types::{self, Credentials, OperationError};
+use bytes::{BufMut, BytesMut};
+use futures::channel::{mpsc, oneshot};
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
+use protobuf::{Chars, RepeatedField};
+use std::ops::Deref;
+use uuid::Uuid;
 
-#[derive(Debug, Clone)]
-pub enum OperationError {
-    WrongExpectedVersion(String, types::ExpectedVersion),
-    StreamDeleted(String),
-    InvalidTransaction,
-    AccessDenied(String),
-    ProtobufDecodingError(String),
-    ServerError(Option<String>),
-    InvalidOperation(String),
-    StreamNotFound(String),
-    AuthenticationRequired,
-    Aborted,
-    WrongClientImpl(Option<Cmd>),
-    ConnectionHasDropped,
-    NotImplemented,
-}
+pub const DEFAULT_BOUNDED_SIZE: usize = 500;
 
-impl OperationError {
-    fn wrong_client_impl() -> OperationError {
-        OperationError::WrongClientImpl(None)
-    }
-
-    fn wrong_client_impl_on_cmd(cmd: Cmd) -> OperationError {
-        OperationError::WrongClientImpl(Some(cmd))
-    }
-}
-
-impl Error for OperationError {}
-
-impl fmt::Display for OperationError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use OperationError::*;
-
-        match self {
-            WrongExpectedVersion(stream, exp) => {
-                writeln!(f, "expected version {:?} for stream {}", exp, stream)
-            }
-            StreamDeleted(stream) => writeln!(f, "stream {} deleted", stream),
-            InvalidTransaction => writeln!(f, "invalid transaction"),
-            AccessDenied(info) => writeln!(f, "access denied: {}", info),
-            ProtobufDecodingError(error) => writeln!(f, "protobuf decoding error: {}", error),
-            ServerError(error) => writeln!(f, "server error: {:?}", error),
-            InvalidOperation(info) => writeln!(f, "invalid operation: {}", info),
-            StreamNotFound(stream) => writeln!(f, "stream {} not found", stream),
-            AuthenticationRequired => writeln!(f, "authentication required"),
-            Aborted => writeln!(f, "aborted"),
-            WrongClientImpl(info) => writeln!(f, "wrong client impl: {:?}", info),
-            ConnectionHasDropped => writeln!(f, "connection has dropped"),
-            NotImplemented => writeln!(f, "not implemented"),
-        }
-    }
-}
-
-pub enum Outcome {
-    Done,
-    Continue(Vec<Pkg>),
-}
-
-impl Outcome {
-    pub fn produced_pkgs(self) -> Vec<Pkg> {
-        match self {
-            Outcome::Done => Vec::new(),
-            Outcome::Continue(pkgs) => pkgs,
-        }
-    }
-
-    pub fn is_done(&self) -> bool {
-        match *self {
-            Outcome::Done => true,
-            _ => false,
-        }
-    }
-}
-
-pub type Decision = ::std::io::Result<Outcome>;
-
-pub struct Promise<A> {
-    inner: mpsc::Sender<Result<A, OperationError>>,
-}
-
-pub type Receiver<A> = mpsc::Receiver<Result<A, OperationError>>;
-
-impl<A> Promise<A> {
-    pub fn new(buffer: usize) -> (Receiver<A>, Promise<A>) {
-        let (tx, rcv) = mpsc::channel(buffer);
-        let this = Promise { inner: tx };
-
-        (rcv, this)
-    }
-
-    fn accept(&mut self, value: A) {
-        let _ = self.inner.try_send(Ok(value));
-    }
-
-    fn reject(&mut self, error: OperationError) {
-        let _ = self.inner.try_send(Err(error));
-    }
-}
-
-fn op_done() -> Decision {
-    Ok(Outcome::Done)
-}
-
-fn op_send(pkg: Pkg) -> Decision {
-    Ok(Outcome::Continue(vec![pkg]))
-}
-
-fn op_send_pkgs(pkgs: Vec<Pkg>) -> Decision {
-    Ok(Outcome::Continue(pkgs))
-}
-
-#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
-pub(crate) struct OperationId(Uuid);
-
-impl OperationId {
-    fn new() -> OperationId {
-        OperationId(Uuid::new_v4())
-    }
-}
-
-pub(crate) struct OperationWrapper {
-    // Operation unique id, useful for registry sessions.
-    pub(crate) id: OperationId,
-    max_retry: usize,
-    timeout: Duration,
-    inner: Box<dyn OperationImpl + Sync + Send>,
-    creds: Option<types::Credentials>,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct Tracking {
-    id: Uuid,
+fn create_pkg<M>(
     cmd: Cmd,
-    attempts: usize,
-    started: Instant,
-    lasting: bool,
-    conn_id: Uuid,
-}
+    creds_opt: Option<Credentials>,
+    correlation: Option<Uuid>,
+    msg: &mut M,
+    dest: &mut BytesMut,
+) -> std::io::Result<Pkg>
+where
+    M: protobuf::Message,
+{
+    dest.reserve(msg.compute_size() as usize);
+    msg.write_to_writer(&mut dest.writer())?;
 
-impl Tracking {
-    pub(crate) fn new(cmd: Cmd, conn_id: Uuid) -> Tracking {
-        Tracking {
-            cmd,
-            id: Uuid::new_v4(),
-            attempts: 0,
-            started: Instant::now(),
-            lasting: false,
-            conn_id,
-        }
-    }
+    let pkg = Pkg {
+        cmd,
+        creds_opt,
+        correlation: correlation.unwrap_or_else(Uuid::new_v4),
+        payload: dest.take().freeze(),
+    };
 
-    pub(crate) fn get_id(&self) -> Uuid {
-        self.id
-    }
-
-    pub(crate) fn has_timeout(&self, timeout: Duration) -> bool {
-        !self.lasting && self.started.elapsed() >= timeout
-    }
-
-    pub(crate) fn get_cmd(&self) -> Cmd {
-        self.cmd
-    }
-}
-
-pub(crate) trait ReqBuffer {
-    fn push_req(&mut self, req: Request) -> ::std::io::Result<()>;
-}
-
-/// Used to allow an operation to support multiple exchanges at the same time
-/// with the server.
-struct VecReqBuffer<'a, A: 'a + Session> {
-    session: &'a mut A,
-    dest: &'a mut BytesMut,
-    creds: Option<types::Credentials>,
-    pkgs: Vec<Pkg>,
-}
-
-impl<'a, A: Session> VecReqBuffer<'a, A> {
-    fn new(
-        session: &'a mut A,
-        dest: &'a mut BytesMut,
-        creds: Option<types::Credentials>,
-    ) -> VecReqBuffer<'a, A> {
-        VecReqBuffer {
-            session,
-            dest,
-            creds,
-            pkgs: Vec::new(),
-        }
-    }
-}
-
-impl<'a, A: Session> ReqBuffer for VecReqBuffer<'a, A> {
-    fn push_req(&mut self, req: Request) -> ::std::io::Result<()> {
-        let id = self.session.new_request(req.cmd);
-        let pkg = req.produce_pkg(id, self.creds.clone(), self.dest)?;
-
-        self.pkgs.push(pkg);
-
-        Ok(())
-    }
-}
-
-pub(crate) trait Session {
-    fn new_request(&mut self, _: Cmd) -> Uuid;
-    fn pop(&mut self, _: &Uuid) -> ::std::io::Result<Tracking>;
-    fn reuse(&mut self, _: Tracking);
-    fn using(&mut self, _: &Uuid) -> ::std::io::Result<&mut Tracking>;
-    fn requests(&self) -> Vec<&Tracking>;
-    fn terminate(&mut self);
-    fn connection_id(&self) -> Uuid;
-    fn has_running_requests(&self) -> bool;
-}
-
-impl OperationWrapper {
-    pub(crate) fn new<A>(
-        op: A,
-        creds: Option<types::Credentials>,
-        max_retry: usize,
-        timeout: Duration,
-    ) -> OperationWrapper
-    where
-        A: OperationImpl + Sync + Send + 'static,
-    {
-        OperationWrapper {
-            id: OperationId::new(),
-            inner: Box::new(op),
-            creds,
-            max_retry,
-            timeout,
-        }
-    }
-
-    pub(crate) fn send<A: Session>(&mut self, dest: &mut BytesMut, session: A) -> Decision {
-        self.poll(dest, session, None)
-    }
-
-    pub(crate) fn receive<A: Session>(
-        &mut self,
-        dest: &mut BytesMut,
-        session: A,
-        pkg: Pkg,
-    ) -> Decision {
-        self.poll(dest, session, Some(pkg))
-    }
-
-    fn poll<A: Session>(
-        &mut self,
-        dest: &mut BytesMut,
-        mut session: A,
-        input: Option<Pkg>,
-    ) -> Decision {
-        match input {
-            // It means this operation was newly created and has to issue its
-            // first package to the server.
-            None => {
-                let req = self.inner.initial_request();
-                let id = session.new_request(req.cmd);
-
-                req.send(id, self.creds.clone(), dest)
-            }
-
-            // At this point, it means this operation send a package to
-            // the server already.
-            Some(pkg) => {
-                let corr_id = pkg.correlation;
-
-                if self.inner.is_valid_response(pkg.cmd) {
-                    let (pkgs, result) = {
-                        let mut buffer = VecReqBuffer::new(&mut session, dest, self.creds.clone());
-                        let result = self.inner.respond(&mut buffer, pkg)?;
-
-                        (buffer.pkgs, result)
-                    };
-
-                    match result {
-                        ImplResult::Retry => return self.retry(dest, &mut session, corr_id),
-
-                        ImplResult::Done => {
-                            session.pop(&corr_id)?;
-                        }
-
-                        ImplResult::Awaiting => {
-                            let tracker = session.using(&corr_id)?;
-
-                            tracker.lasting = true;
-                        }
-
-                        ImplResult::Terminate => {
-                            session.terminate();
-
-                            return op_done();
-                        }
-                    };
-
-                    op_send_pkgs(pkgs)
-                } else {
-                    self.failed(OperationError::wrong_client_impl_on_cmd(pkg.cmd));
-
-                    op_done()
-                }
-            }
-        }
-    }
-
-    pub(crate) fn failed(&mut self, error: OperationError) {
-        self.inner.report_operation_error(error);
-    }
-
-    pub(crate) fn retry<A: Session>(
-        &mut self,
-        dest: &mut BytesMut,
-        session: &mut A,
-        id: Uuid,
-    ) -> Decision {
-        let mut tracker = session.pop(&id)?;
-
-        if tracker.attempts + 1 >= self.max_retry {
-            self.failed(OperationError::Aborted);
-            session.terminate();
-
-            return op_done();
-        }
-
-        tracker.attempts += 1;
-        tracker.id = Uuid::new_v4();
-        tracker.started = Instant::now();
-
-        let req = self.inner.retry(tracker.cmd);
-        let decision = req.send(tracker.id, self.creds.clone(), dest);
-
-        session.reuse(tracker);
-
-        decision
-    }
-
-    pub(crate) fn check_and_retry<A>(&mut self, dest: &mut BytesMut, mut session: A) -> Decision
-    where
-        A: Session,
-    {
-        enum State {
-            HasDropped(Uuid),
-            Retry(Uuid),
-        }
-
-        let mut process = Vec::new();
-        let mut pkgs = Vec::new();
-
-        for tracker in session.requests() {
-            if tracker.conn_id != session.connection_id() {
-                process.push(State::HasDropped(tracker.id));
-            } else if tracker.has_timeout(self.timeout) {
-                process.push(State::Retry(tracker.id));
-            }
-        }
-
-        for state in process {
-            match state {
-                State::HasDropped(id) => {
-                    let tracker = session.pop(&id)?;
-
-                    let mut buffer = VecReqBuffer::new(&mut session, dest, self.creds.clone());
-
-                    self.inner
-                        .connection_has_dropped(&mut buffer, tracker.cmd)?;
-
-                    pkgs.append(&mut buffer.pkgs);
-                }
-
-                State::Retry(id) => {
-                    let outcome = self.retry(dest, &mut session, id)?;
-
-                    pkgs.append(&mut outcome.produced_pkgs());
-                }
-            };
-        }
-
-        if session.has_running_requests() {
-            op_send_pkgs(pkgs)
-        } else {
-            op_done()
-        }
-    }
-}
-
-pub(crate) struct Request<'a> {
-    cmd: Cmd,
-    msg: &'a dyn ::protobuf::Message,
-}
-
-impl<'a> Request<'a> {
-    fn produce_pkg(
-        self,
-        id: Uuid,
-        creds: Option<types::Credentials>,
-        dest: &mut BytesMut,
-    ) -> ::std::io::Result<Pkg> {
-        dest.reserve(self.msg.compute_size() as usize);
-
-        self.msg.write_to_writer(&mut dest.writer())?;
-
-        let pkg = Pkg {
-            cmd: self.cmd,
-            correlation: id,
-            creds_opt: creds,
-            payload: dest.take().freeze(),
-        };
-
-        Ok(pkg)
-    }
-
-    fn send(self, id: Uuid, creds: Option<types::Credentials>, dest: &mut BytesMut) -> Decision {
-        let pkg = self.produce_pkg(id, creds, dest)?;
-
-        op_send(pkg)
-    }
-}
-
-pub(crate) enum ImplResult {
-    Retry,
-    Awaiting,
-    Done,
-    Terminate,
-}
-
-impl ImplResult {
-    fn retrying() -> ::std::io::Result<ImplResult> {
-        Ok(ImplResult::Retry)
-    }
-
-    fn awaiting() -> ::std::io::Result<ImplResult> {
-        Ok(ImplResult::Awaiting)
-    }
-
-    fn done() -> ::std::io::Result<ImplResult> {
-        Ok(ImplResult::Done)
-    }
-
-    fn terminate() -> ::std::io::Result<ImplResult> {
-        Ok(ImplResult::Terminate)
-    }
-
-    fn is_done(&self) -> bool {
-        match *self {
-            ImplResult::Done => true,
-            _ => false,
-        }
-    }
-}
-
-pub(crate) trait OperationImpl {
-    /// Issues a new `Request` for the server. `prev_id` indicates what was
-    /// the previous id for that `Request`. `prev_id` is useful for operation
-    /// that handles multiple smaller operations at the same time. `prev_id`
-    /// ease the process of `retry` in this context. The implementation in this
-    /// case is required to keep track of its last attempt in order to know
-    /// which request it has to re-issue if `prev_id` is defined.
-    ///
-    /// 'new_id' indicates the correlation id that will be used for that new
-    /// request.
-    fn initial_request(&self) -> Request;
-    fn is_valid_response(&self, cmd: Cmd) -> bool;
-    fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult>;
-    fn report_operation_error(&mut self, error: OperationError);
-
-    fn retry(&self, _: Cmd) -> Request {
-        self.initial_request()
-    }
-
-    fn connection_has_dropped(&mut self, _: &mut dyn ReqBuffer, _: Cmd) -> ::std::io::Result<()> {
-        self.report_operation_error(OperationError::ConnectionHasDropped);
-
-        Ok(())
-    }
+    Ok(pkg)
 }
 
 pub struct WriteEvents {
     inner: messages::WriteEvents,
-    promise: Promise<types::WriteResult>,
 }
 
 impl WriteEvents {
-    pub fn new(promise: Promise<types::WriteResult>) -> WriteEvents {
+    pub fn new() -> Self {
         WriteEvents {
             inner: messages::WriteEvents::new(),
-            promise,
         }
     }
 
@@ -532,95 +74,120 @@ impl WriteEvents {
     pub fn set_require_master(&mut self, require_master: bool) {
         self.inner.set_require_master(require_master);
     }
-}
 
-impl OperationImpl for WriteEvents {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::WriteEvents,
-            msg: &self.inner,
-        }
-    }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::WriteResult, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::WriteEventsCompleted == cmd
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::WriteEvents,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::WriteEventsCompleted = pkg.to_message()?;
+            let _ = bus
+                .send(Msg::Transmit(
+                    Lifetime::OneTime(pkg.clone()),
+                    mailbox.clone(),
+                ))
+                .await;
 
-        match response.get_result() {
-            OperationResult::Success => {
-                let position = types::Position {
-                    commit: response.get_commit_position(),
-                    prepare: response.get_prepare_position(),
-                };
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response = resp.to_message::<messages::WriteEventsCompleted>()?;
 
-                let result = types::WriteResult {
-                    next_expected_version: response.get_last_event_number(),
-                    position,
-                };
+                        match response.get_result() {
+                            OperationResult::Success => {
+                                let position = types::Position {
+                                    commit: response.get_commit_position(),
+                                    prepare: response.get_prepare_position(),
+                                };
 
-                self.promise.accept(result);
+                                let result = types::WriteResult {
+                                    next_expected_version: response.get_last_event_number(),
+                                    position,
+                                };
 
-                ImplResult::done()
+                                let _ = respond.send(Ok(result));
+                                break;
+                            }
+
+                            OperationResult::PrepareTimeout
+                            | OperationResult::ForwardTimeout
+                            | OperationResult::CommitTimeout => {
+                                let _ = bus
+                                    .send(Msg::Transmit(
+                                        Lifetime::OneTime(pkg.clone()),
+                                        mailbox.clone(),
+                                    ))
+                                    .await;
+                            }
+
+                            OperationResult::WrongExpectedVersion => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let exp_i64 = self.inner.get_expected_version();
+                                let exp = types::ExpectedVersion::from_i64(exp_i64);
+                                let error = OperationError::WrongExpectedVersion(stream_id, exp);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::StreamDeleted => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::StreamDeleted(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::InvalidTransaction => {
+                                let _ = respond.send(Err(OperationError::InvalidTransaction));
+
+                                break;
+                            }
+
+                            OperationResult::AccessDenied => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::AccessDenied(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                        break;
+                    }
+                }
             }
 
-            OperationResult::PrepareTimeout
-            | OperationResult::ForwardTimeout
-            | OperationResult::CommitTimeout => ImplResult::retrying(),
+            Ok(()) as std::io::Result<()>
+        });
 
-            OperationResult::WrongExpectedVersion => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-                let exp_i64 = self.inner.get_expected_version();
-                let exp = types::ExpectedVersion::from_i64(exp_i64);
-
-                self.promise
-                    .reject(OperationError::WrongExpectedVersion(stream_id, exp));
-
-                ImplResult::done()
-            }
-
-            OperationResult::StreamDeleted => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-
-                self.promise
-                    .reject(OperationError::StreamDeleted(stream_id));
-
-                ImplResult::done()
-            }
-
-            OperationResult::InvalidTransaction => {
-                self.promise.reject(OperationError::InvalidTransaction);
-
-                ImplResult::done()
-            }
-
-            OperationResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-
-                self.promise.reject(OperationError::AccessDenied(stream_id));
-
-                ImplResult::done()
-            }
-        }
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error);
+        promise.await.unwrap()
     }
 }
 
 pub struct ReadEvent {
     inner: messages::ReadEvent,
-    promise: Promise<types::ReadEventStatus<types::ReadEventResult>>,
 }
 
 impl ReadEvent {
-    pub fn new(promise: Promise<types::ReadEventStatus<types::ReadEventResult>>) -> ReadEvent {
+    pub fn new() -> Self {
         ReadEvent {
             inner: messages::ReadEvent::new(),
-            promise,
         }
     }
 
@@ -639,18 +206,98 @@ impl ReadEvent {
     pub fn set_require_master(&mut self, require_master: bool) {
         self.inner.set_require_master(require_master);
     }
+
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::ReadEventStatus<types::ReadEventResult>, OperationError> {
+        let (respond, promise) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::ReadEvent,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
+
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+                .await;
+
+            if let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let mut response = resp.to_message::<messages::ReadEventCompleted>()?;
+
+                        match response.get_result() {
+                            messages::ReadEventCompleted_ReadEventResult::Success => {
+                                let event = response.take_event();
+                                let event = types::ResolvedEvent::new_from_indexed(event)?;
+                                let event_number = self.inner.get_event_number();
+                                let stream_id = self.inner.get_event_stream_id().to_owned();
+
+                                let result = types::ReadEventResult {
+                                    stream_id,
+                                    event_number,
+                                    event,
+                                };
+
+                                let result = types::ReadEventStatus::Success(result);
+                                let _ = respond.send(Ok(result));
+                            }
+
+                            messages::ReadEventCompleted_ReadEventResult::NotFound => {
+                                let _ = respond.send(Ok(types::ReadEventStatus::NotFound));
+                            }
+
+                            messages::ReadEventCompleted_ReadEventResult::NoStream => {
+                                let _ = respond.send(Ok(types::ReadEventStatus::NoStream));
+                            }
+
+                            messages::ReadEventCompleted_ReadEventResult::StreamDeleted => {
+                                let _ = respond.send(Ok(types::ReadEventStatus::Deleted));
+                            }
+
+                            messages::ReadEventCompleted_ReadEventResult::Error => {
+                                let error = response.take_error().to_string();
+                                let error = OperationError::ServerError(Some(error));
+                                let _ = respond.send(Err(error));
+                            }
+
+                            messages::ReadEventCompleted_ReadEventResult::AccessDenied => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::AccessDenied(stream_id);
+                                let _ = respond.send(Err(error));
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                    }
+                }
+            }
+
+            Ok(()) as std::io::Result<()>
+        });
+
+        promise.await.unwrap()
+    }
 }
 
 pub struct TransactionStart {
     inner: messages::TransactionStart,
-    promise: Promise<types::TransactionId>,
 }
 
 impl TransactionStart {
-    pub fn new(promise: Promise<types::TransactionId>) -> TransactionStart {
+    pub fn new() -> Self {
         TransactionStart {
             inner: messages::TransactionStart::new(),
-            promise,
         }
     }
 
@@ -665,155 +312,113 @@ impl TransactionStart {
     pub fn set_require_master(&mut self, value: bool) {
         self.inner.set_require_master(value);
     }
-}
 
-impl OperationImpl for ReadEvent {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::ReadEvent,
-            msg: &self.inner,
-        }
-    }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::TransactionId, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::ReadEventCompleted == cmd
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::TransactionStart,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let mut response: messages::ReadEventCompleted = pkg.to_message()?;
+            let _ = bus
+                .send(Msg::Transmit(
+                    Lifetime::OneTime(pkg.clone()),
+                    mailbox.clone(),
+                ))
+                .await;
 
-        match response.get_result() {
-            messages::ReadEventCompleted_ReadEventResult::Success => {
-                let event = response.take_event();
-                let event = types::ResolvedEvent::new_from_indexed(event)?;
-                let event_number = self.inner.get_event_number();
-                let stream_id = self.inner.get_event_stream_id().to_owned();
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response = resp.to_message::<messages::TransactionStartCompleted>()?;
 
-                let result = types::ReadEventResult {
-                    stream_id,
-                    event_number,
-                    event,
-                };
+                        match response.get_result() {
+                            OperationResult::Success => {
+                                let id = response.get_transaction_id();
+                                let _ = respond.send(Ok(types::TransactionId::new(id)));
 
-                let result = types::ReadEventStatus::Success(result);
+                                break;
+                            }
 
-                self.promise.accept(result);
+                            OperationResult::PrepareTimeout
+                            | OperationResult::ForwardTimeout
+                            | OperationResult::CommitTimeout => {
+                                let _ = bus
+                                    .send(Msg::Transmit(
+                                        Lifetime::OneTime(pkg.clone()),
+                                        mailbox.clone(),
+                                    ))
+                                    .await;
+                            }
+
+                            OperationResult::WrongExpectedVersion => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let exp_i64 = self.inner.get_expected_version();
+                                let exp = types::ExpectedVersion::from_i64(exp_i64);
+                                let error = OperationError::WrongExpectedVersion(stream_id, exp);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::StreamDeleted => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::StreamDeleted(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::InvalidTransaction => {
+                                let _ = respond.send(Err(OperationError::InvalidTransaction));
+
+                                break;
+                            }
+
+                            OperationResult::AccessDenied => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::AccessDenied(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                        break;
+                    }
+                }
             }
 
-            messages::ReadEventCompleted_ReadEventResult::NotFound => {
-                self.promise.accept(types::ReadEventStatus::NotFound);
-            }
+            Ok(()) as std::io::Result<()>
+        });
 
-            messages::ReadEventCompleted_ReadEventResult::NoStream => {
-                self.promise.accept(types::ReadEventStatus::NoStream);
-            }
-
-            messages::ReadEventCompleted_ReadEventResult::StreamDeleted => {
-                self.promise.accept(types::ReadEventStatus::Deleted);
-            }
-
-            messages::ReadEventCompleted_ReadEventResult::Error => {
-                let error = response.take_error().to_string();
-                let error = OperationError::ServerError(Some(error));
-
-                self.promise.reject(error);
-            }
-
-            messages::ReadEventCompleted_ReadEventResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-                let error = OperationError::AccessDenied(stream_id);
-
-                self.promise.reject(error);
-            }
-        }
-
-        ImplResult::done()
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error)
-    }
-}
-
-impl OperationImpl for TransactionStart {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::TransactionStart,
-            msg: &self.inner,
-        }
-    }
-
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::TransactionStartCompleted == cmd
-    }
-
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::TransactionStartCompleted = pkg.to_message()?;
-
-        match response.get_result() {
-            OperationResult::Success => {
-                let id = response.get_transaction_id();
-                self.promise.accept(types::TransactionId::new(id));
-
-                ImplResult::done()
-            }
-
-            OperationResult::PrepareTimeout
-            | OperationResult::ForwardTimeout
-            | OperationResult::CommitTimeout => ImplResult::retrying(),
-
-            OperationResult::WrongExpectedVersion => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-                let exp_i64 = self.inner.get_expected_version();
-                let exp = types::ExpectedVersion::from_i64(exp_i64);
-
-                self.promise
-                    .reject(OperationError::WrongExpectedVersion(stream_id, exp));
-
-                ImplResult::done()
-            }
-
-            OperationResult::StreamDeleted => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-
-                self.promise
-                    .reject(OperationError::StreamDeleted(stream_id));
-
-                ImplResult::done()
-            }
-
-            OperationResult::InvalidTransaction => {
-                self.promise.reject(OperationError::InvalidTransaction);
-
-                ImplResult::done()
-            }
-
-            OperationResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-
-                self.promise.reject(OperationError::AccessDenied(stream_id));
-
-                ImplResult::done()
-            }
-        }
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error)
+        promise.await.unwrap()
     }
 }
 
 pub struct TransactionWrite {
     stream: Chars,
-    promise: Promise<()>,
     inner: messages::TransactionWrite,
 }
 
 impl TransactionWrite {
-    pub fn new(promise: Promise<()>, stream: Chars) -> TransactionWrite {
+    pub fn new(stream: Chars) -> Self {
         TransactionWrite {
             stream,
-            promise,
             inner: messages::TransactionWrite::new(),
         }
     }
@@ -838,83 +443,109 @@ impl TransactionWrite {
     pub fn set_require_master(&mut self, value: bool) {
         self.inner.set_require_master(value);
     }
-}
 
-impl OperationImpl for TransactionWrite {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::TransactionWrite,
-            msg: &self.inner,
-        }
-    }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<(), OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::TransactionWriteCompleted == cmd
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::TransactionWrite,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::TransactionWriteCompleted = pkg.to_message()?;
+            let _ = bus
+                .send(Msg::Transmit(
+                    Lifetime::OneTime(pkg.clone()),
+                    mailbox.clone(),
+                ))
+                .await;
 
-        match response.get_result() {
-            OperationResult::Success => {
-                self.promise.accept(());
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response = resp.to_message::<messages::TransactionWriteCompleted>()?;
 
-                ImplResult::done()
+                        match response.get_result() {
+                            OperationResult::Success => {
+                                let _ = respond.send(Ok(()));
+
+                                break;
+                            }
+
+                            OperationResult::PrepareTimeout
+                            | OperationResult::ForwardTimeout
+                            | OperationResult::CommitTimeout => {
+                                let _ = bus
+                                    .send(Msg::Transmit(
+                                        Lifetime::OneTime(pkg.clone()),
+                                        mailbox.clone(),
+                                    ))
+                                    .await;
+                            }
+
+                            OperationResult::WrongExpectedVersion => {
+                                // You can't have a wrong expected version on a transaction
+                                // because, the write hasn't been committed yet.
+                                unreachable!()
+                            }
+
+                            OperationResult::StreamDeleted => {
+                                let stream_id = self.stream.deref().into();
+                                let error = OperationError::StreamDeleted(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::InvalidTransaction => {
+                                let _ = respond.send(Err(OperationError::InvalidTransaction));
+
+                                break;
+                            }
+
+                            OperationResult::AccessDenied => {
+                                let stream_id = self.stream.deref().into();
+                                let error = OperationError::AccessDenied(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                        break;
+                    }
+                }
             }
 
-            OperationResult::PrepareTimeout
-            | OperationResult::ForwardTimeout
-            | OperationResult::CommitTimeout => ImplResult::retrying(),
+            Ok(()) as std::io::Result<()>
+        });
 
-            OperationResult::WrongExpectedVersion => {
-                // You can't have a wrong expected version on a transaction
-                // because, the write hasn't been committed yet.
-                unreachable!()
-            }
-
-            OperationResult::StreamDeleted => {
-                let stream = self.stream.deref().into();
-                self.promise.reject(OperationError::StreamDeleted(stream));
-
-                ImplResult::done()
-            }
-
-            OperationResult::InvalidTransaction => {
-                self.promise.reject(OperationError::InvalidTransaction);
-
-                ImplResult::done()
-            }
-
-            OperationResult::AccessDenied => {
-                let stream = self.stream.deref().into();
-                self.promise.reject(OperationError::AccessDenied(stream));
-
-                ImplResult::done()
-            }
-        }
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error)
+        promise.await.unwrap()
     }
 }
 
 pub struct TransactionCommit {
     stream: Chars,
     version: types::ExpectedVersion,
-    promise: Promise<types::WriteResult>,
     inner: messages::TransactionCommit,
 }
 
 impl TransactionCommit {
-    pub fn new(
-        promise: Promise<types::WriteResult>,
-        stream: Chars,
-        version: types::ExpectedVersion,
-    ) -> TransactionCommit {
+    pub fn new(stream: Chars, version: types::ExpectedVersion) -> TransactionCommit {
         TransactionCommit {
             stream,
-            promise,
             version,
             inner: messages::TransactionCommit::new(),
         }
@@ -927,110 +558,128 @@ impl TransactionCommit {
     pub fn set_require_master(&mut self, value: bool) {
         self.inner.set_require_master(value);
     }
-}
 
-impl OperationImpl for TransactionCommit {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::TransactionCommit,
-            msg: &self.inner,
-        }
-    }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::WriteResult, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::TransactionCommitCompleted == cmd
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::TransactionCommit,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::TransactionCommitCompleted = pkg.to_message()?;
+            let _ = bus
+                .send(Msg::Transmit(
+                    Lifetime::OneTime(pkg.clone()),
+                    mailbox.clone(),
+                ))
+                .await;
 
-        match response.get_result() {
-            OperationResult::Success => {
-                let position = types::Position {
-                    commit: response.get_commit_position(),
-                    prepare: response.get_prepare_position(),
-                };
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response = resp.to_message::<messages::TransactionCommitCompleted>()?;
 
-                let result = types::WriteResult {
-                    next_expected_version: response.get_last_event_number(),
-                    position,
-                };
+                        match response.get_result() {
+                            OperationResult::Success => {
+                                let position = types::Position {
+                                    commit: response.get_commit_position(),
+                                    prepare: response.get_prepare_position(),
+                                };
 
-                self.promise.accept(result);
+                                let result = types::WriteResult {
+                                    next_expected_version: response.get_last_event_number(),
+                                    position,
+                                };
 
-                ImplResult::done()
+                                let _ = respond.send(Ok(result));
+
+                                break;
+                            }
+
+                            OperationResult::PrepareTimeout
+                            | OperationResult::ForwardTimeout
+                            | OperationResult::CommitTimeout => {
+                                let _ = bus
+                                    .send(Msg::Transmit(
+                                        Lifetime::OneTime(pkg.clone()),
+                                        mailbox.clone(),
+                                    ))
+                                    .await;
+                            }
+
+                            OperationResult::WrongExpectedVersion => {
+                                let stream = self.stream.deref().into();
+                                let error =
+                                    OperationError::WrongExpectedVersion(stream, self.version);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::StreamDeleted => {
+                                let stream_id = self.stream.deref().into();
+                                let error = OperationError::StreamDeleted(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::InvalidTransaction => {
+                                let _ = respond.send(Err(OperationError::InvalidTransaction));
+
+                                break;
+                            }
+
+                            OperationResult::AccessDenied => {
+                                let stream_id = self.stream.deref().into();
+                                let error = OperationError::AccessDenied(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                        break;
+                    }
+                }
             }
 
-            OperationResult::PrepareTimeout
-            | OperationResult::ForwardTimeout
-            | OperationResult::CommitTimeout => ImplResult::retrying(),
+            Ok(()) as std::io::Result<()>
+        });
 
-            OperationResult::WrongExpectedVersion => {
-                let stream = self.stream.deref().into();
-
-                self.promise
-                    .reject(OperationError::WrongExpectedVersion(stream, self.version));
-
-                ImplResult::done()
-            }
-
-            OperationResult::StreamDeleted => {
-                let stream = self.stream.deref().into();
-
-                self.promise.reject(OperationError::StreamDeleted(stream));
-
-                ImplResult::done()
-            }
-
-            OperationResult::InvalidTransaction => {
-                self.promise.reject(OperationError::InvalidTransaction);
-
-                ImplResult::done()
-            }
-
-            OperationResult::AccessDenied => {
-                let stream = self.stream.deref().into();
-
-                self.promise.reject(OperationError::AccessDenied(stream));
-
-                ImplResult::done()
-            }
-        }
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error);
+        promise.await.unwrap()
     }
 }
 
 pub struct ReadStreamEvents {
-    promise: Promise<types::ReadStreamStatus<types::StreamSlice>>,
     direction: types::ReadDirection,
     request_cmd: Cmd,
-    response_cmd: Cmd,
     pub inner: messages::ReadStreamEvents,
 }
 
 impl ReadStreamEvents {
-    pub fn new(
-        promise: Promise<types::ReadStreamStatus<types::StreamSlice>>,
-        direction: types::ReadDirection,
-    ) -> ReadStreamEvents {
+    pub fn new(direction: types::ReadDirection) -> Self {
         let request_cmd = match direction {
             types::ReadDirection::Forward => Cmd::ReadStreamEventsForward,
             types::ReadDirection::Backward => Cmd::ReadStreamEventsBackward,
         };
 
-        let response_cmd = match direction {
-            types::ReadDirection::Forward => Cmd::ReadStreamEventsForwardCompleted,
-            types::ReadDirection::Backward => Cmd::ReadStreamEventsBackwardCompleted,
-        };
-
         ReadStreamEvents {
-            promise,
             direction,
             request_cmd,
-            response_cmd,
             inner: messages::ReadStreamEvents::new(),
         }
     }
@@ -1055,120 +704,130 @@ impl ReadStreamEvents {
         self.inner.set_require_master(value);
     }
 
-    fn report_error(&mut self, error: types::ReadStreamError) {
-        self.promise.accept(types::ReadStreamStatus::Error(error))
-    }
-}
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::ReadStreamStatus<types::StreamSlice>, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-impl OperationImpl for ReadStreamEvents {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: self.request_cmd,
-            msg: &self.inner,
-        }
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                self.request_cmd,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        self.response_cmd == cmd
-    }
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+                .await;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let mut response: messages::ReadStreamEventsCompleted = pkg.to_message()?;
+            if let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let mut response =
+                            resp.to_message::<messages::ReadStreamEventsCompleted>()?;
 
-        match response.get_result() {
-            ReadStreamEventsCompleted_ReadStreamResult::Success => {
-                let is_eof = response.get_is_end_of_stream();
-                let events = response.take_events().into_vec();
-                let mut resolveds = Vec::with_capacity(events.len());
+                        match response.get_result() {
+                            ReadStreamEventsCompleted_ReadStreamResult::Success => {
+                                let is_eof = response.get_is_end_of_stream();
+                                let events = response.take_events().into_vec();
+                                let mut resolveds = Vec::with_capacity(events.len());
 
-                for event in events {
-                    let resolved = types::ResolvedEvent::new_from_indexed(event)?;
+                                for event in events {
+                                    let resolved = types::ResolvedEvent::new_from_indexed(event)?;
 
-                    resolveds.push(resolved);
-                }
+                                    resolveds.push(resolved);
+                                }
 
-                let next_num_opt = {
-                    if !is_eof {
-                        Some(response.get_next_event_number())
-                    } else {
-                        None
+                                let next_num_opt = {
+                                    if !is_eof {
+                                        Some(response.get_next_event_number())
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                let from = self.inner.get_from_event_number();
+                                let slice = types::StreamSlice::new(
+                                    self.direction,
+                                    from,
+                                    resolveds,
+                                    next_num_opt,
+                                );
+                                let result = types::ReadStreamStatus::Success(slice);
+                                let _ = respond.send(Ok(result));
+                            }
+
+                            ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
+                                let stream = self.inner.take_event_stream_id().to_string();
+                                let error = types::ReadStreamError::NoStream(stream);
+                                let error = types::ReadStreamStatus::Error(error);
+                                let _ = respond.send(Ok(error));
+                            }
+
+                            ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
+                                let stream = self.inner.take_event_stream_id().to_string();
+                                let error = types::ReadStreamError::StreamDeleted(stream);
+                                let error = types::ReadStreamStatus::Error(error);
+                                let _ = respond.send(Ok(error));
+                            }
+
+                            ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
+                                let stream = self.inner.take_event_stream_id().to_string();
+                                let error = types::ReadStreamError::AccessDenied(stream);
+                                let error = types::ReadStreamStatus::Error(error);
+                                let _ = respond.send(Ok(error));
+                            }
+
+                            ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
+                                let stream = self.inner.take_event_stream_id().to_string();
+                                let error = types::ReadStreamError::NotModified(stream);
+                                let error = types::ReadStreamStatus::Error(error);
+                                let _ = respond.send(Ok(error));
+                            }
+
+                            ReadStreamEventsCompleted_ReadStreamResult::Error => {
+                                let error = response.take_error().to_string();
+                                let error = OperationError::ServerError(Some(error));
+                                let _ = respond.send(Err(error));
+                            }
+                        }
                     }
-                };
 
-                let from = self.inner.get_from_event_number();
-                let slice = types::StreamSlice::new(self.direction, from, resolveds, next_num_opt);
-                let result = types::ReadStreamStatus::Success(slice);
-
-                self.promise.accept(result);
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                    }
+                }
             }
 
-            ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
-                let stream = self.inner.take_event_stream_id().to_string();
+            Ok(()) as std::io::Result<()>
+        });
 
-                self.report_error(types::ReadStreamError::NoStream(stream));
-            }
-
-            ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
-                let stream = self.inner.take_event_stream_id().to_string();
-
-                self.report_error(types::ReadStreamError::StreamDeleted(stream));
-            }
-
-            ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
-                let stream = self.inner.take_event_stream_id().to_string();
-
-                self.report_error(types::ReadStreamError::AccessDenied(stream));
-            }
-
-            ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
-                let stream = self.inner.take_event_stream_id().to_string();
-
-                self.report_error(types::ReadStreamError::NotModified(stream));
-            }
-
-            ReadStreamEventsCompleted_ReadStreamResult::Error => {
-                let error_msg = response.take_error().to_string();
-
-                self.report_error(types::ReadStreamError::Error(error_msg));
-            }
-        };
-
-        ImplResult::done()
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error);
+        promise.await.unwrap()
     }
 }
 
 pub struct ReadAllEvents {
-    promise: Promise<types::ReadStreamStatus<types::AllSlice>>,
     direction: types::ReadDirection,
     request_cmd: Cmd,
-    response_cmd: Cmd,
     inner: messages::ReadAllEvents,
 }
 
 impl ReadAllEvents {
-    pub fn new(
-        promise: Promise<types::ReadStreamStatus<types::AllSlice>>,
-        direction: types::ReadDirection,
-    ) -> ReadAllEvents {
+    pub fn new(direction: types::ReadDirection) -> Self {
         let request_cmd = match direction {
             types::ReadDirection::Forward => Cmd::ReadAllEventsForward,
             types::ReadDirection::Backward => Cmd::ReadAllEventsBackward,
         };
 
-        let response_cmd = match direction {
-            types::ReadDirection::Forward => Cmd::ReadAllEventsForwardCompleted,
-            types::ReadDirection::Backward => Cmd::ReadAllEventsBackwardCompleted,
-        };
-
         ReadAllEvents {
-            promise,
             direction,
             request_cmd,
-            response_cmd,
             inner: messages::ReadAllEvents::new(),
         }
     }
@@ -1190,87 +849,102 @@ impl ReadAllEvents {
         self.inner.set_require_master(value);
     }
 
-    fn report_error(&mut self, error: types::ReadStreamError) {
-        self.promise.accept(types::ReadStreamStatus::Error(error))
-    }
-}
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::ReadStreamStatus<types::AllSlice>, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-impl OperationImpl for ReadAllEvents {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: self.request_cmd,
-            msg: &self.inner,
-        }
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                self.request_cmd,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        self.response_cmd == cmd
-    }
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+                .await;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let mut response: messages::ReadAllEventsCompleted = pkg.to_message()?;
+            if let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let mut response = resp.to_message::<messages::ReadAllEventsCompleted>()?;
 
-        match response.get_result() {
-            ReadAllEventsCompleted_ReadAllResult::Success => {
-                let commit = response.get_commit_position();
-                let prepare = response.get_prepare_position();
-                let nxt_commit = response.get_next_commit_position();
-                let nxt_prepare = response.get_next_prepare_position();
-                let events = response.take_events().into_vec();
-                let mut resolveds = Vec::with_capacity(events.len());
+                        match response.get_result() {
+                            ReadAllEventsCompleted_ReadAllResult::Success => {
+                                let commit = response.get_commit_position();
+                                let prepare = response.get_prepare_position();
+                                let nxt_commit = response.get_next_commit_position();
+                                let nxt_prepare = response.get_next_prepare_position();
+                                let events = response.take_events().into_vec();
+                                let mut resolveds = Vec::with_capacity(events.len());
 
-                for event in events {
-                    let resolved = types::ResolvedEvent::new(event)?;
+                                for event in events {
+                                    let resolved = types::ResolvedEvent::new(event)?;
 
-                    resolveds.push(resolved);
+                                    resolveds.push(resolved);
+                                }
+
+                                let from = types::Position { commit, prepare };
+
+                                let next = types::Position {
+                                    commit: nxt_commit,
+                                    prepare: nxt_prepare,
+                                };
+
+                                let slice =
+                                    types::AllSlice::new(self.direction, from, resolveds, next);
+                                let result = types::ReadStreamStatus::Success(slice);
+                                let _ = respond.send(Ok(result));
+                            }
+
+                            ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
+                                let error = types::ReadStreamError::AccessDenied("$all".into());
+                                let error = types::ReadStreamStatus::Error(error);
+                                let _ = respond.send(Ok(error));
+                            }
+
+                            ReadAllEventsCompleted_ReadAllResult::NotModified => {
+                                let error = types::ReadStreamError::NotModified("$all".into());
+                                let error = types::ReadStreamStatus::Error(error);
+                                let _ = respond.send(Ok(error));
+                            }
+
+                            ReadAllEventsCompleted_ReadAllResult::Error => {
+                                let error = response.take_error().to_string();
+                                let error = OperationError::ServerError(Some(error));
+                                let _ = respond.send(Err(error));
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                    }
                 }
-
-                let from = types::Position { commit, prepare };
-
-                let next = types::Position {
-                    commit: nxt_commit,
-                    prepare: nxt_prepare,
-                };
-
-                let slice = types::AllSlice::new(self.direction, from, resolveds, next);
-                let result = types::ReadStreamStatus::Success(slice);
-
-                self.promise.accept(result);
             }
 
-            ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
-                self.report_error(types::ReadStreamError::AccessDenied("$all".into()));
-            }
+            Ok(()) as std::io::Result<()>
+        });
 
-            ReadAllEventsCompleted_ReadAllResult::NotModified => {
-                self.report_error(types::ReadStreamError::NotModified("$all".into()));
-            }
-
-            ReadAllEventsCompleted_ReadAllResult::Error => {
-                let error_msg = response.take_error();
-
-                self.report_error(types::ReadStreamError::Error(error_msg.to_string()));
-            }
-        };
-
-        ImplResult::done()
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error)
+        promise.await.unwrap()
     }
 }
 
 pub struct DeleteStream {
     inner: messages::DeleteStream,
-    promise: Promise<types::Position>,
 }
 
 impl DeleteStream {
-    pub fn new(promise: Promise<types::Position>) -> DeleteStream {
+    pub fn new() -> Self {
         DeleteStream {
             inner: messages::DeleteStream::new(),
-            promise,
         }
     }
 
@@ -1289,97 +963,115 @@ impl DeleteStream {
     pub fn set_hard_delete(&mut self, value: bool) {
         self.inner.set_hard_delete(value);
     }
-}
 
-impl OperationImpl for DeleteStream {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::DeleteStream,
-            msg: &self.inner,
-        }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::Position, OperationError> {
+        let (respond, promise) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::DeleteStream,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
+
+            let _ = bus
+                .send(Msg::Transmit(
+                    Lifetime::OneTime(pkg.clone()),
+                    mailbox.clone(),
+                ))
+                .await;
+
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response = resp.to_message::<messages::DeleteStreamCompleted>()?;
+
+                        match response.get_result() {
+                            OperationResult::Success => {
+                                let position = types::Position {
+                                    commit: response.get_commit_position(),
+                                    prepare: response.get_prepare_position(),
+                                };
+
+                                let _ = respond.send(Ok(position));
+                                break;
+                            }
+
+                            OperationResult::PrepareTimeout
+                            | OperationResult::ForwardTimeout
+                            | OperationResult::CommitTimeout => {
+                                let _ = bus
+                                    .send(Msg::Transmit(
+                                        Lifetime::OneTime(pkg.clone()),
+                                        mailbox.clone(),
+                                    ))
+                                    .await;
+                            }
+
+                            OperationResult::WrongExpectedVersion => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let exp_i64 = self.inner.get_expected_version();
+                                let exp = types::ExpectedVersion::from_i64(exp_i64);
+                                let error = OperationError::WrongExpectedVersion(stream_id, exp);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::StreamDeleted => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::StreamDeleted(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+
+                            OperationResult::InvalidTransaction => {
+                                let _ = respond.send(Err(OperationError::InvalidTransaction));
+
+                                break;
+                            }
+
+                            OperationResult::AccessDenied => {
+                                let stream_id = self.inner.take_event_stream_id().to_string();
+                                let error = OperationError::AccessDenied(stream_id);
+                                let _ = respond.send(Err(error));
+
+                                break;
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                        break;
+                    }
+                }
+            }
+
+            Ok(()) as std::io::Result<()>
+        });
+
+        promise.await.unwrap()
     }
-
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::DeleteStreamCompleted == cmd
-    }
-
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::DeleteStreamCompleted = pkg.to_message()?;
-
-        match response.get_result() {
-            OperationResult::Success => {
-                let position = types::Position {
-                    commit: response.get_commit_position(),
-                    prepare: response.get_prepare_position(),
-                };
-
-                self.promise.accept(position);
-
-                ImplResult::done()
-            }
-
-            OperationResult::PrepareTimeout
-            | OperationResult::ForwardTimeout
-            | OperationResult::CommitTimeout => ImplResult::retrying(),
-
-            OperationResult::WrongExpectedVersion => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-                let exp_i64 = self.inner.get_expected_version();
-                let exp = types::ExpectedVersion::from_i64(exp_i64);
-
-                self.promise
-                    .reject(OperationError::WrongExpectedVersion(stream_id, exp));
-
-                ImplResult::done()
-            }
-
-            OperationResult::StreamDeleted => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-
-                self.promise
-                    .reject(OperationError::StreamDeleted(stream_id));
-
-                ImplResult::done()
-            }
-
-            OperationResult::InvalidTransaction => {
-                self.promise.reject(OperationError::InvalidTransaction);
-
-                ImplResult::done()
-            }
-
-            OperationResult::AccessDenied => {
-                let stream_id = self.inner.take_event_stream_id().to_string();
-
-                self.promise.reject(OperationError::AccessDenied(stream_id));
-
-                ImplResult::done()
-            }
-        }
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error)
-    }
-}
-
-enum SubState {
-    Requesting,
-    Confirmed,
 }
 
 pub struct SubscribeToStream {
-    sub_bus: mpsc::Sender<types::SubEvent>,
     inner: messages::SubscribeToStream,
-    state: SubState,
 }
 
 impl SubscribeToStream {
-    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>) -> SubscribeToStream {
+    pub fn new() -> SubscribeToStream {
         SubscribeToStream {
-            sub_bus,
             inner: messages::SubscribeToStream::new(),
-            state: SubState::Requesting,
         }
     }
 
@@ -1391,661 +1083,631 @@ impl SubscribeToStream {
         self.inner.set_resolve_link_tos(value);
     }
 
-    fn publish(&mut self, event: types::SubEvent) -> ::std::io::Result<ImplResult> {
-        let result = self.sub_bus.clone().send(event).wait();
+    pub fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> types::Subscription {
+        let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+        let bus_cloned = bus.clone();
 
-        if result.is_ok() {
-            ImplResult::awaiting()
-        } else {
-            ImplResult::done()
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::SubscribeToStream,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
+            let sub_id = pkg.correlation;
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox))
+                .await;
+
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        match resp.cmd {
+                            Cmd::SubscriptionConfirmed => {
+                                info!("Subscription [{}] is confirmed", sub_id);
+
+                                let response =
+                                    resp.to_message::<messages::SubscriptionConfirmation>()?;
+                                let last_commit_position = response.get_last_commit_position();
+                                let last_event_number = response.get_last_event_number();
+                                let confirmed = types::SubEvent::Confirmed {
+                                    id: sub_id,
+                                    last_commit_position,
+                                    last_event_number,
+                                    persistent_id: None,
+                                };
+
+                                let _ = respond.send(confirmed).await;
+                            }
+
+                            Cmd::StreamEventAppeared => {
+                                let mut response =
+                                    resp.to_message::<messages::StreamEventAppeared>()?;
+                                let event = types::ResolvedEvent::new(response.take_event())?;
+
+                                debug!("Subscription [{}] event appeared [{:?}]", sub_id, event);
+
+                                let appeared = types::SubEvent::EventAppeared {
+                                    event: Box::new(event),
+                                    retry_count: 0,
+                                };
+
+                                let _ = respond.send(appeared).await;
+                            }
+
+                            Cmd::SubscriptionDropped => {
+                                info!("Subscription [{}] has dropped", sub_id);
+
+                                let _ = respond.send(types::SubEvent::Dropped).await;
+                                break;
+                            }
+
+                            _ => {
+                                // Will never happened, has error in subscription is
+                                // reported through `Cmd::SubscriptionDropped`
+                                // command.
+                                unreachable!()
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        error!(
+                            "Subscription [{:?}] has dropped because of error: {}",
+                            sub_id, error
+                        );
+
+                        let _ = respond.send(types::SubEvent::Dropped).await;
+                        break;
+                    }
+                }
+            }
+
+            Ok(()) as std::io::Result<()>
+        });
+
+        types::Subscription {
+            receiver: promise,
+            sender: bus_cloned,
         }
     }
 }
 
-impl OperationImpl for SubscribeToStream {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::SubscribeToStream,
-            msg: &self.inner,
+enum CatchupLiveLoop {
+    Continue,
+    Break,
+}
+
+enum CatchupLoop<A> {
+    Continue(A),
+    Break,
+}
+
+enum Mode<A> {
+    Catchup(A),
+    Live(A),
+}
+
+impl<A> Mode<A> {
+    fn offset(&self) -> A
+    where
+        A: Copy,
+    {
+        match *self {
+            Mode::Catchup(a) => a,
+            Mode::Live(a) => a,
         }
     }
+}
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        if Cmd::SubscriptionDropped == cmd {
-            return true;
-        }
+type CatchupLoopResult<Offset> =
+    std::io::Result<CatchupLoop<(Vec<types::ResolvedEvent>, Option<Offset>)>>;
 
-        match self.state {
-            SubState::Requesting => Cmd::SubscriptionConfirmed == cmd,
-            SubState::Confirmed => Cmd::StreamEventAppeared == cmd,
-        }
+trait Track {
+    type Offset: Copy + Send;
+
+    fn get_offset(&self, event: &types::ResolvedEvent) -> Self::Offset;
+}
+
+trait Catchup: Track {
+    type Msg: protobuf::Message;
+    type Resp: protobuf::Message;
+
+    fn update_read_msg(&self, msg: &mut Self::Msg, offset: Self::Offset);
+
+    fn iterate(&self, sub_id: Uuid, resp: &mut Self::Resp) -> CatchupLoopResult<Self::Offset>;
+}
+
+struct RegularTrack {
+    stream: protobuf::Chars,
+}
+
+impl Track for RegularTrack {
+    type Offset = i64;
+
+    fn get_offset(&self, event: &types::ResolvedEvent) -> Self::Offset {
+        event.get_original_event().event_number
+    }
+}
+
+impl Catchup for RegularTrack {
+    type Msg = messages::ReadStreamEvents;
+    type Resp = messages::ReadStreamEventsCompleted;
+
+    fn update_read_msg(&self, msg: &mut Self::Msg, offset: Self::Offset) {
+        msg.set_from_event_number(offset);
     }
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        match pkg.cmd {
-            Cmd::SubscriptionConfirmed => {
-                let response: messages::SubscriptionConfirmation = pkg.to_message()?;
-
-                let last_commit_position = response.get_last_commit_position();
-                let last_event_number = response.get_last_event_number();
-
-                let confirmed = types::SubEvent::Confirmed {
-                    id: pkg.correlation,
-                    last_commit_position,
-                    last_event_number,
-                    persistent_id: None,
+    fn iterate(&self, sub_id: Uuid, response: &mut Self::Resp) -> CatchupLoopResult<Self::Offset> {
+        match response.get_result() {
+            ReadStreamEventsCompleted_ReadStreamResult::Success => {
+                let is_eos = response.get_is_end_of_stream();
+                let events = response.take_events().into_vec();
+                let mut resolved_events = Vec::with_capacity(events.len());
+                let next = if is_eos {
+                    None
+                } else {
+                    Some(response.get_next_event_number())
                 };
 
-                self.state = SubState::Confirmed;
-                self.publish(confirmed)
+                for event in events {
+                    let resolved = types::ResolvedEvent::new_from_indexed(event)?;
+
+                    resolved_events.push(resolved);
+                }
+
+                Ok(CatchupLoop::Continue((resolved_events, next)))
             }
 
-            Cmd::StreamEventAppeared => {
-                let mut response: messages::StreamEventAppeared = pkg.to_message()?;
+            ReadStreamEventsCompleted_ReadStreamResult::NoStream => {
+                Ok(CatchupLoop::Continue((vec![], None)))
+            }
 
+            ReadStreamEventsCompleted_ReadStreamResult::StreamDeleted => {
+                error!(
+                    "Catchup subscription [{:?}] has dropped because stream [{:?}] is deleted",
+                    sub_id,
+                    self.stream.to_string(),
+                );
+
+                Ok(CatchupLoop::Break)
+            }
+
+            ReadStreamEventsCompleted_ReadStreamResult::AccessDenied => {
+                error!(
+                    "Catchup subscription [{:?}] has dropped because of access denied on [{:?}]",
+                    sub_id,
+                    self.stream.to_string(),
+                );
+
+                Ok(CatchupLoop::Break)
+            }
+
+            ReadStreamEventsCompleted_ReadStreamResult::NotModified => {
+                Ok(CatchupLoop::Continue((vec![], None)))
+            }
+
+            ReadStreamEventsCompleted_ReadStreamResult::Error => {
+                let error = response.take_error().to_string();
+
+                error!(
+                    "Catchup subscription [{:?}] has dropped because of a server error: {:?}",
+                    sub_id, error,
+                );
+
+                Ok(CatchupLoop::Break)
+            }
+        }
+    }
+}
+
+struct AllTrack();
+
+impl Track for AllTrack {
+    type Offset = types::Position;
+
+    fn get_offset(&self, event: &types::ResolvedEvent) -> Self::Offset {
+        event
+            .position
+            .expect("position property should be defined when reading from $all stream")
+    }
+}
+
+impl Catchup for AllTrack {
+    type Msg = messages::ReadAllEvents;
+    type Resp = messages::ReadAllEventsCompleted;
+
+    fn update_read_msg(&self, msg: &mut Self::Msg, offset: Self::Offset) {
+        msg.set_commit_position(offset.commit);
+        msg.set_prepare_position(offset.prepare);
+    }
+
+    fn iterate(&self, sub_id: Uuid, response: &mut Self::Resp) -> CatchupLoopResult<Self::Offset> {
+        match response.get_result() {
+            ReadAllEventsCompleted_ReadAllResult::Success => {
+                let nxt_commit = response.get_next_commit_position();
+                let nxt_prepare = response.get_next_prepare_position();
+                let events = response.take_events().into_vec();
+                let mut resolved_events = Vec::with_capacity(events.len());
+                let next = types::Position {
+                    commit: nxt_commit,
+                    prepare: nxt_prepare,
+                };
+
+                for event in events {
+                    let resolved = types::ResolvedEvent::new(event)?;
+
+                    resolved_events.push(resolved);
+                }
+
+                if !resolved_events.is_empty() {
+                    Ok(CatchupLoop::Continue((resolved_events, Some(next))))
+                } else {
+                    // ^ Stands for end of stream
+                    Ok(CatchupLoop::Continue((resolved_events, None)))
+                }
+            }
+
+            ReadAllEventsCompleted_ReadAllResult::AccessDenied => {
+                error!(
+                    "Catchup subscription [{:?}] has dropped because of access denied on [$all]",
+                    sub_id,
+                );
+
+                Ok(CatchupLoop::Break)
+            }
+
+            ReadAllEventsCompleted_ReadAllResult::NotModified => {
+                Ok(CatchupLoop::Continue((vec![], None)))
+            }
+
+            ReadAllEventsCompleted_ReadAllResult::Error => {
+                let error = response.take_error().to_string();
+
+                error!(
+                    "Catchup subscription [{:?}] has dropped because of a server error: {:?}",
+                    sub_id, error,
+                );
+
+                Ok(CatchupLoop::Break)
+            }
+        }
+    }
+}
+
+fn catchup_impl<C>(
+    track: C,
+    creds_opt: Option<Credentials>,
+    start_position: <C as Track>::Offset,
+    read_cmd: Cmd,
+    mut read_msg: <C as Catchup>::Msg,
+    mut sub_msg: messages::SubscribeToStream,
+    mut bus: mpsc::Sender<Msg>,
+) -> types::Subscription
+where
+    C: Catchup + std::marker::Sync + std::marker::Send + 'static,
+{
+    use futures::stream::iter;
+
+    let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+    let bus_cloned = bus.clone();
+
+    tokio::spawn(async move {
+        let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+        let mut buffer = BytesMut::new();
+        let mut mode = Mode::Catchup(start_position);
+
+        let mut sub_pkg = create_pkg(
+            Cmd::SubscribeToStream,
+            creds_opt.clone(),
+            None,
+            &mut sub_msg,
+            &mut buffer,
+        )?;
+
+        let mut read_pkg = create_pkg(
+            read_cmd,
+            creds_opt.clone(),
+            None,
+            &mut read_msg,
+            &mut buffer,
+        )?;
+
+        let mut read_id = read_pkg.correlation;
+        let mut sub_id = sub_pkg.correlation;
+        let _ = bus
+            .send(Msg::Transmit(Lifetime::OneTime(read_pkg), mailbox.clone()))
+            .await;
+
+        let _ = bus
+            .send(Msg::Transmit(
+                Lifetime::KeepAlive(sub_pkg.clone()),
+                mailbox.clone(),
+            ))
+            .await;
+
+        while let Some(msg) = recv.next().await {
+            match msg {
+                OpMsg::Recv(resp) => {
+                    if sub_id == resp.correlation {
+                        let outcome =
+                            handle_catchup_sub(sub_id, &track, &resp, &mut respond, &mut mode)
+                                .await?;
+
+                        if let CatchupLiveLoop::Break = outcome {
+                            break;
+                        }
+                    // I know I didn't do that check for other operations but considering in
+                    // some situations we can have multiple pending requests, better be
+                    // cautious.
+                    } else if read_id == resp.correlation {
+                        let mut response = resp.to_message::<<C as Catchup>::Resp>()?;
+
+                        match track.iterate(sub_id, &mut response)? {
+                            CatchupLoop::Continue((batch, next_opt)) => {
+                                let last = batch.last().map(|evt| track.get_offset(evt));
+
+                                if !batch.is_empty() {
+                                    let events = batch.into_iter().map(|event| {
+                                        let appeared = types::SubEvent::EventAppeared {
+                                            event: Box::new(event),
+                                            retry_count: 0,
+                                        };
+
+                                        Ok(appeared)
+                                    });
+
+                                    let _ = respond.send_all(&mut iter(events)).await;
+
+                                    if let Some(next) = next_opt {
+                                        mode = Mode::Catchup(next);
+
+                                        track.update_read_msg(&mut read_msg, next);
+                                        read_pkg = create_pkg(
+                                            read_cmd,
+                                            creds_opt.clone(),
+                                            None,
+                                            &mut read_msg,
+                                            &mut buffer,
+                                        )?;
+
+                                        read_id = read_pkg.correlation;
+
+                                        let _ = bus
+                                            .send(Msg::Transmit(
+                                                Lifetime::OneTime(read_pkg),
+                                                mailbox.clone(),
+                                            ))
+                                            .await;
+                                    } else {
+                                        // Means we reach end of stream.
+                                        let offset =
+                                            last.expect("Batch was tested non empty earlier");
+
+                                        mode = Mode::Live(offset);
+                                    }
+                                } else if let Mode::Catchup(offset) = mode {
+                                    mode = Mode::Live(offset);
+                                }
+                            }
+
+                            CatchupLoop::Break => {
+                                let _ = respond.send(types::SubEvent::Dropped).await;
+
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                OpMsg::Failed(error) => {
+                    if let OperationError::ConnectionHasDropped = error {
+                        let next = mode.offset();
+
+                        track.update_read_msg(&mut read_msg, next);
+                        read_pkg = create_pkg(
+                            read_cmd,
+                            creds_opt.clone(),
+                            None,
+                            &mut read_msg,
+                            &mut buffer,
+                        )?;
+
+                        read_id = read_pkg.correlation;
+
+                        let _ = bus
+                            .send(Msg::Transmit(Lifetime::OneTime(read_pkg), mailbox.clone()))
+                            .await;
+
+                        sub_id = Uuid::new_v4();
+                        sub_pkg.correlation = sub_id;
+
+                        let _ = bus
+                            .send(Msg::Transmit(
+                                Lifetime::KeepAlive(sub_pkg.clone()),
+                                mailbox.clone(),
+                            ))
+                            .await;
+
+                        continue;
+                    }
+
+                    error!(
+                        "subscription [{:?}] has dropped because of error: {}",
+                        sub_id, error
+                    );
+
+                    let _ = respond.send(types::SubEvent::Dropped).await;
+                    break;
+                }
+            }
+        }
+
+        Ok(()) as std::io::Result<()>
+    });
+
+    types::Subscription {
+        receiver: promise,
+        sender: bus_cloned,
+    }
+}
+
+async fn handle_catchup_sub<T: Track>(
+    sub_id: Uuid,
+    track: &T,
+    resp: &Pkg,
+    respond: &mut mpsc::Sender<types::SubEvent>,
+    mode: &mut Mode<<T as Track>::Offset>,
+) -> std::io::Result<CatchupLiveLoop> {
+    match resp.cmd {
+        Cmd::SubscriptionConfirmed => {
+            info!("Catchup subscription [{}] is confirmed", sub_id);
+
+            let response = resp.to_message::<messages::SubscriptionConfirmation>()?;
+            let last_commit_position = response.get_last_commit_position();
+            let last_event_number = response.get_last_event_number();
+            let confirmed = types::SubEvent::Confirmed {
+                id: sub_id,
+                last_commit_position,
+                last_event_number,
+                persistent_id: None,
+            };
+
+            let _ = respond.send(confirmed).await;
+        }
+
+        Cmd::StreamEventAppeared => {
+            if let Mode::Live(_) = mode {
+                let mut response = resp.to_message::<messages::StreamEventAppeared>()?;
                 let event = types::ResolvedEvent::new(response.take_event())?;
+                let offset = track.get_offset(&event);
+
+                debug!(
+                    "Catchup subscription [{}] event appeared [{:?}]",
+                    sub_id, event
+                );
+
                 let appeared = types::SubEvent::EventAppeared {
                     event: Box::new(event),
                     retry_count: 0,
                 };
 
-                self.publish(appeared)
-            }
-
-            Cmd::SubscriptionDropped => {
-                let _ = self.publish(types::SubEvent::Dropped)?;
-                ImplResult::done()
-            }
-
-            _ => {
-                // Will never happened, has error in subscription is
-                // reported through `Cmd::SubscriptionDropped`
-                // command.
-                unreachable!()
+                let _ = respond.send(appeared).await;
+                *mode = Mode::Live(offset);
             }
         }
-    }
 
-    fn report_operation_error(&mut self, _: OperationError) {
-        let _ = self.publish(types::SubEvent::Dropped);
-    }
-}
+        Cmd::SubscriptionDropped => {
+            info!("Catchup subscription [{}] has dropped", sub_id);
 
-fn single_value_future<S, A>(stream: S) -> impl Future<Item = A, Error = OperationError>
-where
-    S: Stream<Item = Result<A, OperationError>, Error = ()>,
-{
-    stream.into_future().then(|res| match res {
-        Ok((Some(x), _)) => x,
-        _ => unreachable!(),
-    })
-}
+            let _ = respond.send(types::SubEvent::Dropped).await;
 
-pub(crate) struct OperationExtractor<A, O: OperationImpl> {
-    recv: mpsc::Receiver<Result<A, OperationError>>,
-    inner: O,
-}
+            return Ok(CatchupLiveLoop::Break);
+        }
 
-impl<A, O: OperationImpl> OperationImpl for OperationExtractor<A, O> {
-    fn initial_request(&self) -> Request {
-        self.inner.initial_request()
-    }
-
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        self.inner.is_valid_response(cmd)
-    }
-
-    fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        self.inner.respond(buffer, pkg)
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.inner.report_operation_error(error)
-    }
-
-    fn retry(&self, cmd: Cmd) -> Request {
-        self.inner.retry(cmd)
-    }
-}
-
-pub const DEFAULT_BOUNDED_SIZE: usize = 500;
-
-impl<A, O: OperationImpl> OperationExtractor<A, O> {
-    fn new<F>(maker: F) -> OperationExtractor<A, O>
-    where
-        F: FnOnce(Promise<A>) -> O,
-    {
-        let (recv, promise) = Promise::new(DEFAULT_BOUNDED_SIZE);
-
-        OperationExtractor {
-            recv,
-            inner: maker(promise),
+        _ => {
+            // Will never happened, has error in subscription is
+            // reported through `Cmd::SubscriptionDropped`
+            // command.
+            unreachable!()
         }
     }
 
-    fn get_result(self) -> Result<A, OperationError> {
-        single_value_future(self.recv).wait()
+    Ok(CatchupLiveLoop::Continue)
+}
+
+pub struct CatchupRegularSubscription {
+    pub require_master: bool,
+    pub start_position: i64,
+    pub resolve_link_tos: bool,
+    pub batch_size: i32,
+    pub stream: protobuf::Chars,
+}
+
+impl CatchupRegularSubscription {
+    pub fn execute(
+        self,
+        creds_opt: Option<Credentials>,
+        bus: mpsc::Sender<Msg>,
+    ) -> types::Subscription {
+        let track = RegularTrack {
+            stream: self.stream,
+        };
+
+        let mut sub_msg = messages::SubscribeToStream::new();
+        let mut read_msg = messages::ReadStreamEvents::new();
+
+        sub_msg.set_event_stream_id(track.stream.clone());
+        sub_msg.set_resolve_link_tos(self.resolve_link_tos);
+        read_msg.set_event_stream_id(track.stream.clone());
+        read_msg.set_from_event_number(self.start_position);
+        read_msg.set_max_count(self.batch_size);
+        read_msg.set_resolve_link_tos(self.resolve_link_tos);
+        read_msg.set_require_master(self.require_master);
+
+        catchup_impl(
+            track,
+            creds_opt,
+            self.start_position,
+            Cmd::ReadStreamEventsForward,
+            read_msg,
+            sub_msg,
+            bus,
+        )
     }
 }
 
-pub(crate) struct CatchupWrapper<A: Catchup> {
-    inner: A,
-    checkpoint: Checkpoint,
-    puller: Option<OperationExtractor<A::Item, A::Puller>>,
-    recv: mpsc::Receiver<types::SubEvent>,
-    sender: mpsc::Sender<types::SubEvent>,
-    sub: SubscribeToStream,
-    // Number of events the subscription received already.
-    flying_event_count: usize,
-    has_caught_up: bool,
+pub struct CatchupAllSubscription {
+    pub require_master: bool,
+    pub start_position: types::Position,
+    pub resolve_link_tos: bool,
+    pub batch_size: i32,
 }
 
-impl<A: Catchup> CatchupWrapper<A> {
-    pub(crate) fn new(
-        inner: A,
-        stream_id: &Chars,
-        resolve_link_tos: bool,
-        sender: mpsc::Sender<types::SubEvent>,
-    ) -> CatchupWrapper<A> {
-        let (tx, recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
-        let mut sub = SubscribeToStream::new(tx);
-        let checkpoint = inner.starting_checkpoint();
+impl CatchupAllSubscription {
+    pub fn execute(
+        self,
+        creds_opt: Option<Credentials>,
+        bus: mpsc::Sender<Msg>,
+    ) -> types::Subscription {
+        let track = AllTrack();
+        let mut sub_msg = messages::SubscribeToStream::new();
+        let mut read_msg = messages::ReadAllEvents::new();
 
-        sub.set_event_stream_id(stream_id.clone());
-        sub.set_resolve_link_tos(resolve_link_tos);
+        sub_msg.set_resolve_link_tos(self.resolve_link_tos);
+        sub_msg.set_event_stream_id("".into());
+        read_msg.set_commit_position(self.start_position.commit);
+        read_msg.set_prepare_position(self.start_position.prepare);
+        read_msg.set_max_count(self.batch_size);
+        read_msg.set_resolve_link_tos(self.resolve_link_tos);
+        read_msg.set_require_master(self.require_master);
 
-        CatchupWrapper {
-            inner,
-            checkpoint,
-            puller: None,
-            sub,
-            sender,
-            recv,
-            flying_event_count: 0,
-            has_caught_up: false,
-        }
-    }
-
-    fn propagate_events(&mut self) -> Result<(), mpsc::SendError<types::SubEvent>> {
-        use std::mem;
-
-        let mut events = Vec::new();
-
-        // We need to move `self.recv` for a very small amount of time.
-        // It would not be possible to do it without tricking the
-        // Rust move semantic.
-        unsafe {
-            let mut recv = mem::replace(&mut self.recv, mem::MaybeUninit::uninit().assume_init());
-            let mut cpt = 0;
-
-            while cpt < self.flying_event_count {
-                let (evt_opt, next) = recv.into_future().wait().ok().unwrap();
-                let evt = evt_opt.unwrap();
-
-                recv = next;
-                cpt += 1;
-
-                let can_be_dispatched = match evt.event_appeared() {
-                    Some(event) => {
-                        let can_be_dispatched =
-                            self.inner.can_be_dispatched(&self.checkpoint, &event);
-
-                        // We update catchup tracking state if we can dispatch
-                        // that event.
-                        if can_be_dispatched {
-                            self.checkpoint.position =
-                                event.position.unwrap_or_else(types::Position::start);
-
-                            self.checkpoint.event_number =
-                                event.get_original_event().map(|e| e.event_number).unwrap();
-                        }
-
-                        can_be_dispatched
-                    }
-
-                    None => true,
-                };
-
-                if can_be_dispatched {
-                    events.push(evt);
-                }
-            }
-
-            mem::forget(mem::replace(&mut self.recv, recv));
-        }
-
-        self.flying_event_count = 0;
-
-        if !events.is_empty() {
-            self.sender
-                .clone()
-                .send_all(iter_ok(events))
-                .wait()
-                .map(|_| ())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn pull(&mut self, buffer: &mut dyn ReqBuffer) -> ::std::io::Result<()> {
-        let extractor = self.inner.create_next_puller(&self.checkpoint);
-
-        buffer.push_req(extractor.initial_request())?;
-        self.puller = Some(extractor);
-
-        Ok(())
-    }
-
-    fn is_sub_pkg(&self, cmd: Cmd) -> bool {
-        match cmd {
-            Cmd::SubscriptionDropped | Cmd::StreamEventAppeared | Cmd::SubscriptionConfirmed => {
-                true
-            }
-
-            _ => false,
-        }
+        catchup_impl(
+            track,
+            creds_opt,
+            self.start_position,
+            Cmd::ReadAllEventsForward,
+            read_msg,
+            sub_msg,
+            bus,
+        )
     }
 }
-
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct Checkpoint {
-    event_number: i64,
-    position: types::Position,
-}
-
-impl Checkpoint {
-    fn from_event_number(event_number: i64) -> Checkpoint {
-        Checkpoint {
-            event_number,
-            position: types::Position::start(),
-        }
-    }
-
-    fn from_position(position: types::Position) -> Checkpoint {
-        Checkpoint {
-            event_number: -1,
-            position,
-        }
-    }
-}
-
-pub(crate) enum Pull {
-    Success(Vec<types::ResolvedEvent>, bool),
-    Fail(OperationError),
-}
-
-pub(crate) trait Catchup {
-    type Puller: OperationImpl;
-    type Item;
-
-    fn starting_checkpoint(&self) -> Checkpoint;
-
-    fn create_next_puller(&self, _: &Checkpoint) -> OperationExtractor<Self::Item, Self::Puller>;
-
-    fn can_be_dispatched(&self, _: &Checkpoint, _: &types::ResolvedEvent) -> bool;
-
-    fn handle_pulled_item(&self, _: &mut Checkpoint, _: Self::Item) -> Pull;
-}
-
-pub(crate) struct RegularCatchup {
-    stream_id: Chars,
-    start_event_number: i64,
-    require_master: bool,
-    resolve_link_tos: bool,
-    max_count: u16,
-}
-
-impl RegularCatchup {
-    pub(crate) fn new(
-        stream_id: Chars,
-        start_event_number: i64,
-        require_master: bool,
-        resolve_link_tos: bool,
-        max_count: u16,
-    ) -> RegularCatchup {
-        RegularCatchup {
-            stream_id,
-            start_event_number,
-            require_master,
-            resolve_link_tos,
-            max_count,
-        }
-    }
-}
-
-impl Catchup for RegularCatchup {
-    type Puller = ReadStreamEvents;
-    type Item = types::ReadStreamStatus<types::StreamSlice>;
-
-    fn starting_checkpoint(&self) -> Checkpoint {
-        Checkpoint::from_event_number(self.start_event_number)
-    }
-
-    fn create_next_puller(
-        &self,
-        checkpoint: &Checkpoint,
-    ) -> OperationExtractor<types::ReadStreamStatus<types::StreamSlice>, ReadStreamEvents> {
-        let stream_id = self.stream_id.clone();
-        let event_number = checkpoint.event_number;
-        let max_count = self.max_count;
-        let require_master = self.require_master;
-        let resolve_link_tos = self.resolve_link_tos;
-
-        OperationExtractor::new(|promise| {
-            let mut op = ReadStreamEvents::new(promise, types::ReadDirection::Forward);
-
-            op.set_event_stream_id(stream_id);
-            op.set_from_event_number(event_number);
-            op.set_max_count(i32::from(max_count));
-            op.set_require_master(require_master);
-            op.set_resolve_link_tos(resolve_link_tos);
-
-            op
-        })
-    }
-
-    fn can_be_dispatched(&self, checkpoint: &Checkpoint, event: &types::ResolvedEvent) -> bool {
-        match event.get_original_event() {
-            Some(event) => checkpoint.event_number <= event.event_number,
-            None => unreachable!(),
-        }
-    }
-
-    fn handle_pulled_item(
-        &self,
-        checkpoint: &mut Checkpoint,
-        item: types::ReadStreamStatus<types::StreamSlice>,
-    ) -> Pull {
-        match item {
-            types::ReadStreamStatus::Error(error) => match error {
-                types::ReadStreamError::NoStream(_) | types::ReadStreamError::NotModified(_) => {
-                    Pull::Success(Vec::new(), true)
-                }
-
-                types::ReadStreamError::StreamDeleted(stream) => {
-                    Pull::Fail(OperationError::StreamDeleted(stream))
-                }
-
-                types::ReadStreamError::AccessDenied(stream) => {
-                    Pull::Fail(OperationError::AccessDenied(stream))
-                }
-
-                types::ReadStreamError::Error(msg) => {
-                    Pull::Fail(OperationError::ServerError(Some(msg)))
-                }
-            },
-
-            types::ReadStreamStatus::Success(slice) => match slice.events() {
-                types::LocatedEvents::EndOfStream => Pull::Success(Vec::new(), true),
-
-                types::LocatedEvents::Events { events, next } => {
-                    if let Some(ref next) = next {
-                        checkpoint.event_number = *next;
-                    } else {
-                        let event = events.last().unwrap();
-
-                        checkpoint.event_number =
-                            event.get_original_event().map(|e| e.event_number).unwrap();
-                    }
-
-                    Pull::Success(events, next.is_none())
-                }
-            },
-        }
-    }
-}
-
-pub(crate) struct AllCatchup {
-    start_position: types::Position,
-    require_master: bool,
-    resolve_link_tos: bool,
-    max_count: u16,
-}
-
-impl AllCatchup {
-    pub(crate) fn new(
-        start_position: types::Position,
-        require_master: bool,
-        resolve_link_tos: bool,
-        max_count: u16,
-    ) -> AllCatchup {
-        AllCatchup {
-            start_position,
-            require_master,
-            resolve_link_tos,
-            max_count,
-        }
-    }
-}
-
-impl Catchup for AllCatchup {
-    type Puller = ReadAllEvents;
-    type Item = types::ReadStreamStatus<types::AllSlice>;
-
-    fn starting_checkpoint(&self) -> Checkpoint {
-        Checkpoint::from_position(self.start_position)
-    }
-
-    fn create_next_puller(
-        &self,
-        checkpoint: &Checkpoint,
-    ) -> OperationExtractor<types::ReadStreamStatus<types::AllSlice>, ReadAllEvents> {
-        let position = checkpoint.position;
-        let max_count = self.max_count;
-        let require_master = self.require_master;
-        let resolve_link_tos = self.resolve_link_tos;
-
-        OperationExtractor::new(|promise| {
-            let mut op = ReadAllEvents::new(promise, types::ReadDirection::Forward);
-
-            op.set_from_position(position);
-            op.set_max_count(i32::from(max_count));
-            op.set_require_master(require_master);
-            op.set_resolve_link_tos(resolve_link_tos);
-
-            op
-        })
-    }
-
-    fn can_be_dispatched(&self, checkpoint: &Checkpoint, event: &types::ResolvedEvent) -> bool {
-        let current = event
-            .position
-            .expect("Position must be defined for $all stream");
-
-        checkpoint.position <= current
-    }
-
-    fn handle_pulled_item(
-        &self,
-        checkpoint: &mut Checkpoint,
-        item: types::ReadStreamStatus<types::AllSlice>,
-    ) -> Pull {
-        match item {
-            types::ReadStreamStatus::Error(error) => match error {
-                types::ReadStreamError::AccessDenied(stream) => {
-                    Pull::Fail(OperationError::AccessDenied(stream))
-                }
-
-                types::ReadStreamError::Error(msg) => {
-                    Pull::Fail(OperationError::ServerError(Some(msg)))
-                }
-
-                types::ReadStreamError::NotModified(_) => Pull::Success(Vec::new(), true),
-
-                _ => unreachable!(),
-            },
-
-            types::ReadStreamStatus::Success(slice) => match slice.events() {
-                types::LocatedEvents::EndOfStream => Pull::Success(Vec::new(), true),
-
-                types::LocatedEvents::Events { events, next } => {
-                    if let Some(ref next) = next {
-                        checkpoint.position = *next;
-                    } else {
-                        let event = events.last().unwrap();
-
-                        checkpoint.position = event
-                            .position
-                            .expect("Position must be available for $all stream");
-                    }
-
-                    Pull::Success(events, next.is_none())
-                }
-            },
-        }
-    }
-}
-
-impl<A: Catchup> OperationImpl for CatchupWrapper<A> {
-    fn initial_request(&self) -> Request {
-        self.sub.initial_request()
-    }
-
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        let valid_for_puller = self
-            .puller
-            .as_ref()
-            .map_or(false, |p| p.is_valid_response(cmd));
-
-        self.sub.is_valid_response(cmd) || valid_for_puller
-    }
-
-    fn respond(&mut self, buffer: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        if self.is_sub_pkg(pkg.cmd) {
-            let cmd = pkg.cmd;
-            let result = self.sub.respond(buffer, pkg)?;
-
-            self.flying_event_count += 1;
-
-            // Once we receive our subscription confirmation, we can start
-            // reading the stream through.
-            if cmd == Cmd::SubscriptionConfirmed {
-                let result = self.propagate_events();
-
-                if result.is_ok() {
-                    self.pull(buffer)?;
-                } else {
-                    return ImplResult::terminate();
-                }
-            } else if self.has_caught_up {
-                // We propagate live event only if we already caugh up the head of
-                // the stream. Otherwise, we accumulate.
-                let result = self.propagate_events();
-
-                if result.is_err() {
-                    return ImplResult::terminate();
-                }
-            }
-
-            return Ok(result);
-        }
-
-        if let Some(mut puller) = self.puller.take() {
-            let outcome = puller.respond(buffer, pkg)?;
-
-            if outcome.is_done() {
-                match puller.get_result() {
-                    Err(error) => {
-                        self.report_operation_error(error);
-
-                        ImplResult::terminate()
-                    }
-
-                    Ok(item) => {
-                        let result = { self.inner.handle_pulled_item(&mut self.checkpoint, item) };
-
-                        match result {
-                            Pull::Success(events, end_of_stream) => {
-                                let stream =
-                                    iter_ok(events).map(types::SubEvent::new_event_appeared);
-                                let result = self.sender.clone().send_all(stream).wait();
-
-                                // The subscription consumer might have asked
-                                // to close the subscription. If it's the
-                                // case, it means the `sender` is no longer
-                                // available.
-                                if result.is_ok() {
-                                    if end_of_stream {
-                                        self.has_caught_up = true;
-                                        let result = self.propagate_events();
-
-                                        if result.is_err() {
-                                            return ImplResult::terminate();
-                                        }
-                                    } else {
-                                        self.pull(buffer)?;
-                                    }
-
-                                    ImplResult::done()
-                                } else {
-                                    ImplResult::terminate()
-                                }
-                            }
-
-                            Pull::Fail(error) => {
-                                self.report_operation_error(error);
-
-                                ImplResult::terminate()
-                            }
-                        }
-                    }
-                }
-            } else {
-                Ok(outcome)
-            }
-        } else {
-            warn!(
-                "Catchup subscription is in wrong state. \
-                  Submit an issue in https://github.com/YoEight/eventstore-rs"
-            );
-
-            self.report_operation_error(OperationError::wrong_client_impl());
-
-            ImplResult::done()
-        }
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.sub.report_operation_error(error.clone());
-
-        if let Some(mut puller) = self.puller.take() {
-            puller.report_operation_error(error);
-        }
-    }
-
-    fn connection_has_dropped(
-        &mut self,
-        buffer: &mut dyn ReqBuffer,
-        _: Cmd,
-    ) -> ::std::io::Result<()> {
-        // When the connection has dropped, we proceed like we are starting
-        // this operation from scratch. The only state we don't update is
-        // the current `event_number` this catchup subscription is at.
-        self.has_caught_up = false;
-        self.flying_event_count = 0;
-
-        buffer.push_req(self.initial_request())?;
-
-        Ok(())
-    }
-}
-
-fn duration_to_millis(duration: &::std::time::Duration) -> i32 {
-    let secs_as_millis = duration.as_secs() as i32 * 1_000;
-
-    secs_as_millis + duration.subsec_millis() as i32
-}
-
 pub struct CreatePersistentSubscription {
     inner: messages::CreatePersistentSubscription,
-    promise: Promise<types::PersistActionResult>,
 }
 
 impl CreatePersistentSubscription {
-    pub fn new(promise: Promise<types::PersistActionResult>) -> CreatePersistentSubscription {
+    pub fn new() -> Self {
         CreatePersistentSubscription {
             inner: messages::CreatePersistentSubscription::new(),
-            promise,
         }
     }
 
@@ -2061,7 +1723,7 @@ impl CreatePersistentSubscription {
         self.inner.set_resolve_link_tos(settings.resolve_link_tos);
         self.inner.set_start_from(settings.start_from);
         self.inner
-            .set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+            .set_message_timeout_milliseconds(settings.msg_timeout.as_millis() as i32);
         self.inner.set_record_statistics(settings.extra_stats);
         self.inner
             .set_live_buffer_size(i32::from(settings.live_buf_size));
@@ -2073,7 +1735,7 @@ impl CreatePersistentSubscription {
             .set_max_retry_count(i32::from(settings.max_retry_count));
         self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
         self.inner
-            .set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+            .set_checkpoint_after_time(settings.checkpoint_after.as_millis() as i32);
         self.inner
             .set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
         self.inner
@@ -2083,61 +1745,77 @@ impl CreatePersistentSubscription {
         self.inner
             .set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
     }
-}
 
-impl OperationImpl for CreatePersistentSubscription {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::CreatePersistentSubscription,
-            msg: &self.inner,
-        }
-    }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::PersistActionResult, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::CreatePersistentSubscriptionCompleted == cmd
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::CreatePersistentSubscription,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::CreatePersistentSubscriptionCompleted = pkg.to_message()?;
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+                .await;
 
-        let result = match response.get_result() {
-            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Success => {
-                types::PersistActionResult::Success
-            },
+            if let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response =
+                            resp.to_message::<messages::CreatePersistentSubscriptionCompleted>()?;
 
-            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AlreadyExists => {
-                types::PersistActionResult::Failure(types::PersistActionError::AlreadyExists)
-            },
+                        let result = match response.get_result() {
+                            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Success => {
+                                types::PersistActionResult::Success
+                            },
 
-            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Fail => {
-                types::PersistActionResult::Failure(types::PersistActionError::Fail)
-            },
+                            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AlreadyExists => {
+                                types::PersistActionResult::Failure(types::PersistActionError::AlreadyExists)
+                            },
 
-            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AccessDenied => {
-                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
-            },
-        };
+                            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::Fail => {
+                                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+                            },
 
-        self.promise.accept(result);
+                            CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult::AccessDenied => {
+                                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+                            },
+                        };
 
-        ImplResult::done()
-    }
+                        let _ = respond.send(Ok(result));
+                    }
 
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error);
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                    }
+                }
+            }
+
+            Ok(()) as std::io::Result<()>
+        });
+
+        promise.await.unwrap()
     }
 }
 
 pub struct UpdatePersistentSubscription {
     inner: messages::UpdatePersistentSubscription,
-    promise: Promise<types::PersistActionResult>,
 }
 
 impl UpdatePersistentSubscription {
-    pub fn new(promise: Promise<types::PersistActionResult>) -> UpdatePersistentSubscription {
+    pub fn new() -> Self {
         UpdatePersistentSubscription {
             inner: messages::UpdatePersistentSubscription::new(),
-            promise,
         }
     }
 
@@ -2153,7 +1831,7 @@ impl UpdatePersistentSubscription {
         self.inner.set_resolve_link_tos(settings.resolve_link_tos);
         self.inner.set_start_from(settings.start_from);
         self.inner
-            .set_message_timeout_milliseconds(duration_to_millis(&settings.msg_timeout));
+            .set_message_timeout_milliseconds(settings.msg_timeout.as_millis() as i32);
         self.inner.set_record_statistics(settings.extra_stats);
         self.inner
             .set_live_buffer_size(i32::from(settings.live_buf_size));
@@ -2165,7 +1843,7 @@ impl UpdatePersistentSubscription {
             .set_max_retry_count(i32::from(settings.max_retry_count));
         self.inner.set_prefer_round_robin(false); // Legacy way of picking strategy.
         self.inner
-            .set_checkpoint_after_time(duration_to_millis(&settings.checkpoint_after));
+            .set_checkpoint_after_time(settings.checkpoint_after.as_millis() as i32);
         self.inner
             .set_checkpoint_max_count(i32::from(settings.max_checkpoint_count));
         self.inner
@@ -2175,61 +1853,77 @@ impl UpdatePersistentSubscription {
         self.inner
             .set_named_consumer_strategy(settings.named_consumer_strategy.as_str().into());
     }
-}
 
-impl OperationImpl for UpdatePersistentSubscription {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::UpdatePersistentSubscription,
-            msg: &self.inner,
-        }
-    }
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::PersistActionResult, OperationError> {
+        let (respond, promise) = oneshot::channel();
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::UpdatePersistentSubscriptionCompleted == cmd
-    }
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::UpdatePersistentSubscription,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::UpdatePersistentSubscriptionCompleted = pkg.to_message()?;
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+                .await;
 
-        let result = match response.get_result() {
-            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Success => {
-                types::PersistActionResult::Success
-            },
+            if let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response =
+                            resp.to_message::<messages::UpdatePersistentSubscriptionCompleted>()?;
 
-            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::DoesNotExist => {
-                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
-            },
+                        let result = match response.get_result() {
+                            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Success => {
+                                types::PersistActionResult::Success
+                            },
 
-            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Fail => {
-                types::PersistActionResult::Failure(types::PersistActionError::Fail)
-            },
+                            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::DoesNotExist => {
+                                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
+                            },
 
-            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::AccessDenied => {
-                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
-            },
-        };
+                            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::Fail => {
+                                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+                            },
 
-        self.promise.accept(result);
+                            UpdatePersistentSubscriptionCompleted_UpdatePersistentSubscriptionResult::AccessDenied => {
+                                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+                            },
+                        };
 
-        ImplResult::done()
-    }
+                        let _ = respond.send(Ok(result));
+                    }
 
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error);
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                    }
+                }
+            }
+
+            Ok(()) as std::io::Result<()>
+        });
+
+        promise.await.unwrap()
     }
 }
 
 pub struct DeletePersistentSubscription {
     inner: messages::DeletePersistentSubscription,
-    promise: Promise<types::PersistActionResult>,
 }
 
 impl DeletePersistentSubscription {
-    pub fn new(promise: Promise<types::PersistActionResult>) -> DeletePersistentSubscription {
+    pub fn new() -> Self {
         DeletePersistentSubscription {
             inner: messages::DeletePersistentSubscription::new(),
-            promise,
         }
     }
 
@@ -2240,148 +1934,196 @@ impl DeletePersistentSubscription {
     pub fn set_event_stream_id(&mut self, stream_id: Chars) {
         self.inner.set_event_stream_id(stream_id);
     }
+
+    pub async fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> Result<types::PersistActionResult, OperationError> {
+        let (respond, promise) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::DeletePersistentSubscription,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
+
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+                .await;
+
+            if let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        let response =
+                            resp.to_message::<messages::DeletePersistentSubscriptionCompleted>()?;
+
+                        let result = match response.get_result() {
+                            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Success => {
+                                types::PersistActionResult::Success
+                            },
+
+                            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::DoesNotExist => {
+                                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
+                            },
+
+                            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Fail => {
+                                types::PersistActionResult::Failure(types::PersistActionError::Fail)
+                            },
+
+                            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::AccessDenied => {
+                                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
+                            },
+                        };
+
+                        let _ = respond.send(Ok(result));
+                    }
+
+                    OpMsg::Failed(error) => {
+                        let _ = respond.send(Err(error));
+                    }
+                }
+            }
+
+            Ok(()) as std::io::Result<()>
+        });
+
+        promise.await.unwrap()
+    }
 }
 
-impl OperationImpl for DeletePersistentSubscription {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::DeletePersistentSubscription,
-            msg: &self.inner,
-        }
-    }
-
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        Cmd::DeletePersistentSubscriptionCompleted == cmd
-    }
-
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        let response: messages::DeletePersistentSubscriptionCompleted = pkg.to_message()?;
-
-        let result = match response.get_result() {
-            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Success => {
-                types::PersistActionResult::Success
-            },
-
-            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::DoesNotExist => {
-                types::PersistActionResult::Failure(types::PersistActionError::DoesNotExist)
-            },
-
-            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::Fail => {
-                types::PersistActionResult::Failure(types::PersistActionError::Fail)
-            },
-
-            DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult::AccessDenied => {
-                types::PersistActionResult::Failure(types::PersistActionError::AccessDenied)
-            },
-        };
-
-        self.promise.accept(result);
-
-        ImplResult::done()
-    }
-
-    fn report_operation_error(&mut self, error: OperationError) {
-        self.promise.reject(error);
-    }
-}
-
-pub(crate) struct ConnectToPersistentSubscription {
-    sub_bus: mpsc::Sender<types::SubEvent>,
+pub struct ConnectToPersistentSubscription {
     inner: messages::ConnectToPersistentSubscription,
 }
 
 impl ConnectToPersistentSubscription {
-    pub(crate) fn new(sub_bus: mpsc::Sender<types::SubEvent>) -> ConnectToPersistentSubscription {
+    pub fn new() -> ConnectToPersistentSubscription {
         ConnectToPersistentSubscription {
-            sub_bus,
             inner: messages::ConnectToPersistentSubscription::new(),
         }
     }
 
-    pub(crate) fn set_event_stream_id(&mut self, stream_id: Chars) {
+    pub fn set_event_stream_id(&mut self, stream_id: Chars) {
         self.inner.set_event_stream_id(stream_id);
     }
 
-    pub(crate) fn set_group_name(&mut self, group_name: Chars) {
+    pub fn set_group_name(&mut self, group_name: Chars) {
         self.inner.set_subscription_id(group_name);
     }
 
-    pub(crate) fn set_buffer_size(&mut self, size: u16) {
+    pub fn set_buffer_size(&mut self, size: u16) {
         self.inner.set_allowed_in_flight_messages(i32::from(size));
     }
 
-    fn publish(&mut self, event: types::SubEvent) -> ::std::io::Result<ImplResult> {
-        let result = self.sub_bus.clone().send(event).wait();
+    pub fn execute(
+        mut self,
+        creds_opt: Option<Credentials>,
+        mut bus: mpsc::Sender<Msg>,
+    ) -> types::Subscription {
+        let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+        let bus_cloned = bus.clone();
 
-        if result.is_ok() {
-            ImplResult::awaiting()
-        } else {
-            ImplResult::done()
-        }
-    }
-}
+        tokio::spawn(async move {
+            let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
+            let mut buffer = BytesMut::new();
+            let pkg = create_pkg(
+                Cmd::ConnectToPersistentSubscription,
+                creds_opt,
+                None,
+                &mut self.inner,
+                &mut buffer,
+            )?;
 
-impl OperationImpl for ConnectToPersistentSubscription {
-    fn initial_request(&self) -> Request {
-        Request {
-            cmd: Cmd::ConnectToPersistentSubscription,
-            msg: &self.inner,
-        }
-    }
+            let sub_id = pkg.correlation;
+            let _ = bus
+                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox))
+                .await;
 
-    fn is_valid_response(&self, cmd: Cmd) -> bool {
-        match cmd {
-            Cmd::SubscriptionDropped => true,
-            Cmd::PersistentSubscriptionConfirmation => true,
-            Cmd::PersistentSubscriptionStreamEventAppeared => true,
-            _ => false,
-        }
-    }
+            while let Some(msg) = recv.next().await {
+                match msg {
+                    OpMsg::Recv(resp) => {
+                        match resp.cmd {
+                            Cmd::PersistentSubscriptionConfirmation => {
+                                info!(
+                                    "Persistent subscription connection [{}] is confirmed",
+                                    sub_id
+                                );
 
-    fn respond(&mut self, _: &mut dyn ReqBuffer, pkg: Pkg) -> ::std::io::Result<ImplResult> {
-        match pkg.cmd {
-            Cmd::PersistentSubscriptionConfirmation => {
-                let mut response: messages::PersistentSubscriptionConfirmation =
-                    pkg.to_message()?;
+                                let mut response = resp
+                                    .to_message::<messages::PersistentSubscriptionConfirmation>(
+                                )?;
+                                let last_commit_position = response.get_last_commit_position();
+                                let last_event_number = response.get_last_event_number();
+                                let persistent_id = response.take_subscription_id().to_string();
 
-                let last_commit_position = response.get_last_commit_position();
-                let last_event_number = response.get_last_event_number();
-                let persistent_id = response.take_subscription_id().to_string();
+                                let confirmed = types::SubEvent::Confirmed {
+                                    id: sub_id,
+                                    last_commit_position,
+                                    last_event_number,
+                                    persistent_id: Some(persistent_id),
+                                };
 
-                let confirmed = types::SubEvent::Confirmed {
-                    id: pkg.correlation,
-                    last_commit_position,
-                    last_event_number,
-                    persistent_id: Some(persistent_id),
-                };
+                                let _ = respond.send(confirmed).await;
+                            }
 
-                self.publish(confirmed)
+                            Cmd::PersistentSubscriptionStreamEventAppeared => {
+                                let mut response = resp.to_message::<messages::PersistentSubscriptionStreamEventAppeared>()?;
+                                let event =
+                                    types::ResolvedEvent::new_from_indexed(response.take_event())?;
+                                let retry_count = response.get_retryCount() as usize;
+
+                                debug!(
+                                    "Persistent subscription [{}] event appeared [{:?}]",
+                                    sub_id, event
+                                );
+
+                                let appeared = types::SubEvent::EventAppeared {
+                                    event: Box::new(event),
+                                    retry_count,
+                                };
+
+                                let _ = respond.send(appeared).await;
+                            }
+
+                            Cmd::SubscriptionDropped => {
+                                info!("Persistent subscription [{}] has dropped", sub_id);
+
+                                let _ = respond.send(types::SubEvent::Dropped).await;
+                                break;
+                            }
+
+                            _ => {
+                                // Will never happened, has error in subscription is
+                                // reported through `Cmd::SubscriptionDropped`
+                                // command.
+                                unreachable!()
+                            }
+                        }
+                    }
+
+                    OpMsg::Failed(error) => {
+                        error!(
+                            "Persistent subscription [{:?}] has dropped because of error: {}",
+                            sub_id, error
+                        );
+
+                        let _ = respond.send(types::SubEvent::Dropped).await;
+                        break;
+                    }
+                }
             }
 
-            Cmd::PersistentSubscriptionStreamEventAppeared => {
-                let mut response: messages::PersistentSubscriptionStreamEventAppeared =
-                    pkg.to_message()?;
+            Ok(()) as std::io::Result<()>
+        });
 
-                let event = types::ResolvedEvent::new_from_indexed(response.take_event())?;
-                let retry_count = response.get_retryCount() as usize;
-                let appeared = types::SubEvent::EventAppeared {
-                    event: Box::new(event),
-                    retry_count,
-                };
-
-                self.publish(appeared)
-            }
-
-            Cmd::SubscriptionDropped => {
-                let _ = self.publish(types::SubEvent::Dropped)?;
-                ImplResult::done()
-            }
-
-            _ => unreachable!(),
+        types::Subscription {
+            receiver: promise,
+            sender: bus_cloned,
         }
-    }
-
-    fn report_operation_error(&mut self, _: OperationError) {
-        let _ = self.publish(types::SubEvent::Dropped);
     }
 }

@@ -2,16 +2,14 @@ use core::option::Option;
 use std::io::{Error, ErrorKind};
 use std::time::{Duration, Instant};
 
-use futures::sync::mpsc::Sender;
-use futures::{Future, Sink, Stream};
-use tokio::spawn;
-use tokio::timer::Interval;
+use futures::channel::mpsc::Sender;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use uuid::Uuid;
 
 use crate::internal::command::Cmd;
 use crate::internal::connection::Connection;
-use crate::internal::messaging::Msg;
-use crate::internal::operations::OperationWrapper;
+use crate::internal::messaging::{Lifetime, Mailbox, Msg};
 use crate::internal::package::Pkg;
 use crate::internal::registry::Registry;
 use crate::types::{Credentials, Endpoint, Settings};
@@ -53,7 +51,7 @@ impl HealthTracker {
         self.state = HeartbeatStatus::Init;
     }
 
-    fn manage_heartbeat(&mut self, conn: &Connection) -> Heartbeat {
+    async fn manage_heartbeat(&mut self, conn: &mut Connection) -> Heartbeat {
         match self.state {
             HeartbeatStatus::Init => {
                 self.state = HeartbeatStatus::Delay(self.pkg_num, Instant::now());
@@ -67,7 +65,7 @@ impl HealthTracker {
                 } else if start.elapsed() >= self.heartbeat_delay {
                     self.state = HeartbeatStatus::Timeout(self.pkg_num, Instant::now());
 
-                    conn.enqueue(Pkg::heartbeat_request());
+                    conn.enqueue(Pkg::heartbeat_request()).await;
                 }
 
                 Heartbeat::Valid
@@ -180,7 +178,7 @@ impl Driver {
             setts.connection_name.as_ref().map(|c| c.as_str().into());
 
         Driver {
-            registry: Registry::new(),
+            registry: Registry::new(setts.operation_timeout, setts.operation_retry),
             candidate: None,
             tracker: HealthTracker::new(&setts),
             attempt_opt: None,
@@ -200,36 +198,32 @@ impl Driver {
         }
     }
 
-    pub(crate) fn start(&mut self) {
+    pub(crate) async fn start(&mut self) {
         self.attempt_opt = Some(Attempt::new());
         self.state = ConnectionState::Connecting;
         self.phase = Phase::Reconnecting;
 
         let tick_period = Duration::from_millis(200);
-        let tick = Interval::new(Instant::now(), tick_period).map_err(|_| ());
+        let mut tick = tokio::time::interval(tick_period);
+        let mut sender = self.sender.clone();
 
-        let tick = tick.fold(self.sender.clone(), |sender, _| {
-            sender.send(Msg::Tick).map_err(|_| ())
+        tokio::spawn(async move {
+            while let Some(_) = tick.next().await {
+                let _ = sender.send(Msg::Tick).await;
+            }
         });
 
-        spawn(tick.then(|_| Ok(())));
-
-        self.discover();
+        self.discover().await;
     }
 
-    fn discover(&mut self) {
+    async fn discover(&mut self) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Reconnecting {
             let failed_endpoint = self.last_endpoint.take();
-            let start_discovery = self
-                .discovery
-                .clone()
-                .send(failed_endpoint)
-                .then(|_| Ok(()));
+
+            let _ = self.discovery.send(failed_endpoint).await;
 
             self.phase = Phase::EndpointDiscovery;
             self.tracker.reset();
-
-            spawn(start_discovery);
         }
     }
 
@@ -241,20 +235,20 @@ impl Driver {
         }
     }
 
-    fn authenticate(&mut self, creds: Credentials) {
+    async fn authenticate(&mut self, creds: Credentials) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
             let pkg = Pkg::authenticate(creds);
 
             self.init_req_opt = Some(InitReq::new(pkg.correlation));
             self.phase = Phase::Authentication;
 
-            if let Some(conn) = self.candidate.as_ref() {
-                conn.enqueue(pkg);
+            if let Some(conn) = self.candidate.as_mut() {
+                conn.enqueue(pkg).await;
             }
         }
     }
 
-    fn identify_client(&mut self) {
+    async fn identify_client(&mut self) {
         if self.state == ConnectionState::Connecting
             && (self.phase == Phase::Authentication || self.phase == Phase::Establishing)
         {
@@ -263,13 +257,13 @@ impl Driver {
             self.init_req_opt = Some(InitReq::new(pkg.correlation));
             self.phase = Phase::Identification;
 
-            if let Some(conn) = self.candidate.as_ref() {
-                conn.enqueue(pkg);
+            if let Some(conn) = self.candidate.as_mut() {
+                conn.enqueue(pkg).await;
             }
         }
     }
 
-    pub(crate) fn on_established(&mut self, id: Uuid) {
+    pub(crate) async fn on_established(&mut self, id: Uuid) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::Establishing {
             let same_connection = match self.candidate {
                 Some(ref conn) => conn.id == id,
@@ -285,8 +279,8 @@ impl Driver {
                 self.tracker.reset();
 
                 match self.default_user.clone() {
-                    Some(creds) => self.authenticate(creds),
-                    None => self.identify_client(),
+                    Some(creds) => self.authenticate(creds).await,
+                    None => self.identify_client().await,
                 }
             }
         }
@@ -336,7 +330,7 @@ impl Driver {
         }
     }
 
-    pub(crate) fn on_package_arrived(&mut self, pkg: Pkg) {
+    pub(crate) async fn on_package_arrived(&mut self, pkg: Pkg) {
         self.tracker.incr_pkg_num();
 
         if pkg.cmd == Cmd::HeartbeatRequest {
@@ -344,8 +338,8 @@ impl Driver {
 
             resp.cmd = Cmd::HeartbeatResponse;
 
-            if let Some(ref conn) = self.candidate {
-                conn.enqueue(resp);
+            if let Some(ref mut conn) = self.candidate {
+                conn.enqueue(resp).await;
             } else {
                 warn!("We received an heartbeat request when having no active connection on our side!");
             }
@@ -357,7 +351,7 @@ impl Driver {
         {
             if let Some(req) = self.init_req_opt.take() {
                 if req.correlation == pkg.correlation {
-                    if let Some(ref conn) = self.candidate {
+                    if let Some(ref mut conn) = self.candidate {
                         info!("Connection identified: {} on {}.", conn.id, conn.desc);
 
                         // HACK: It can happen the user submitted operations before the connection was
@@ -365,7 +359,11 @@ impl Driver {
                         // ms. This could lead the first operation to take time before gettings.
                         // FIXME: We might consider doing that hack only if it's the first time
                         // we connect with the server.
-                        self.registry.check_and_retry(conn);
+                        let pkgs = self.registry.check_and_retry(conn.id).await;
+
+                        if !pkgs.is_empty() {
+                            conn.enqueue_all(pkgs).await;
+                        }
                     }
 
                     self.attempt_opt = None;
@@ -383,13 +381,13 @@ impl Driver {
                         warn!("Not authenticated.");
                     }
 
-                    self.identify_client();
+                    self.identify_client().await;
                 }
             }
         } else if self.state == ConnectionState::Connected {
             // It will be always 'Some' when receiving a package.
             if let Some(conn) = self.candidate.take() {
-                if let Some(new_endpoint) = self.registry.handle(pkg, &conn) {
+                if let Some(new_endpoint) = self.registry.handle(pkg).await {
                     // We have been notified to connect to an other eventstore node.
                     // This only happens if the user uses a cluster-mode connection.
                     info!(
@@ -409,17 +407,17 @@ impl Driver {
         }
     }
 
-    pub(crate) fn on_new_op(&mut self, operation: OperationWrapper) {
-        let conn_opt = {
+    pub(crate) async fn on_transmit(&mut self, mailbox: Mailbox, pkg: Lifetime<Pkg>) {
+        if let Some(ref mut conn) = self.candidate {
             if self.state.is_connected() {
-                // Will be always 'Some' when connected.
-                self.candidate.as_ref()
+                conn.enqueue(pkg.clone().inner()).await;
+                self.registry.register(conn.id, mailbox, pkg);
             } else {
-                None
+                self.registry.postpone(mailbox, pkg);
             }
-        };
-
-        self.registry.register(operation, conn_opt);
+        } else {
+            self.registry.postpone(mailbox, pkg);
+        }
     }
 
     fn has_init_req_timeout(&self) -> bool {
@@ -457,9 +455,9 @@ impl Driver {
         self.state = ConnectionState::Closed;
     }
 
-    fn manage_heartbeat(&mut self) {
-        let has_timeout = if let Some(ref conn) = self.candidate {
-            match self.tracker.manage_heartbeat(conn) {
+    async fn manage_heartbeat(&mut self) {
+        let has_timeout = if let Some(ref mut conn) = self.candidate {
+            match self.tracker.manage_heartbeat(conn).await {
                 Heartbeat::Valid => false,
                 Heartbeat::Failure => true,
             }
@@ -474,7 +472,7 @@ impl Driver {
         }
     }
 
-    pub(crate) fn on_tick(&mut self) -> Report {
+    pub(crate) async fn on_tick(&mut self) -> Report {
         if self.state == ConnectionState::Init || self.state == ConnectionState::Closed {
             return Report::Continue;
         }
@@ -485,9 +483,12 @@ impl Driver {
                     if let Some(attempt_cnt) = self.start_new_attempt() {
                         info!("Starting new connection attempt ({}).", attempt_cnt);
 
-                        self.discover();
+                        self.discover().await;
                     } else {
-                        error!("Maximum reconnection attempt count reached!");
+                        error!(
+                            "Maximum reconnection attempt count reached ({})!",
+                            self.max_reconnect
+                        );
                         return Report::Quit;
                     }
                 }
@@ -495,45 +496,48 @@ impl Driver {
                 if self.has_init_req_timeout() {
                     warn!("Authentication has timeout.");
 
-                    self.identify_client();
+                    self.identify_client().await;
                 }
 
-                self.manage_heartbeat();
+                self.manage_heartbeat().await;
             } else if self.phase == Phase::Identification {
                 if self.has_init_req_timeout() {
                     if let Some(conn) = self.candidate.take() {
                         self.tcp_connection_close(&conn.id, &identification_timeout_error());
                     }
                 } else {
-                    self.manage_heartbeat();
+                    self.manage_heartbeat().await;
                 }
             }
         } else {
             // Connected state
-            if let Some(ref conn) = self.candidate {
+            if let Some(ref mut conn) = self.candidate {
                 if self.last_operation_check.elapsed() >= self.operation_check_period {
-                    self.registry.check_and_retry(conn);
-
+                    let pkgs = self.registry.check_and_retry(conn.id).await;
                     self.last_operation_check = Instant::now();
+
+                    if !pkgs.is_empty() {
+                        conn.enqueue_all(pkgs).await;
+                    }
                 }
             }
 
-            self.manage_heartbeat();
+            self.manage_heartbeat().await;
         }
 
         Report::Continue
     }
 
-    pub(crate) fn on_send_pkg(&mut self, pkg: Pkg) {
+    pub(crate) async fn on_send_pkg(&mut self, pkg: Pkg) {
         if self.state == ConnectionState::Connected {
-            if let Some(ref conn) = self.candidate {
-                conn.enqueue(pkg);
+            if let Some(ref mut conn) = self.candidate {
+                conn.enqueue(pkg).await;
             }
         }
     }
 
-    pub(crate) fn abort(&mut self) {
-        self.registry.abort();
+    pub(crate) async fn abort(&mut self) {
+        self.registry.abort().await;
     }
 }
 

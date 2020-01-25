@@ -34,9 +34,12 @@ extern crate serde_json;
 use eventstore::{ Connection, EventData };
 use futures::Future;
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let addr = "127.0.0.1:1113".parse()?;
     let connection = Connection::builder()
-        .single_node_connection("127.0.0.1:1113".parse().unwrap());
+        .single_node_connection("127.0.0.1:1113")
+        .await;
 
     // It is not mandatory to use JSON as a data format however GetEventStore
     // provides great additional value if you do so.
@@ -44,7 +47,7 @@ fn main() {
         "is_rust_a_nice_language": true,
     });
 
-    let event = EventData::json("language-poll", payload).unwrap();
+    let event = EventData::json("language-poll", payload)?;
 
     // All the operations are asynchronous but for the sake of this example
     // we decide to wait until the server sends a response.
@@ -52,11 +55,12 @@ fn main() {
         .write_events("language-stream")
         .push_event(event)
         .execute()
-        .wait()
-        .unwrap();
+        .await?;
 
     // Do something productive with the result.
-	println!("{:?}", result);
+    println!("{:?}", result);
+
+    Ok(())
 }
 ```
 
