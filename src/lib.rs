@@ -8,6 +8,8 @@ extern crate log;
 
 mod connection;
 mod discovery;
+#[cfg(feature = "es6")]
+pub mod es6;
 mod internal;
 pub mod types;
 
