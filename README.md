@@ -38,7 +38,7 @@ use futures::Future;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "127.0.0.1:1113".parse()?;
     let connection = Connection::builder()
-        .single_node_connection("127.0.0.1:1113")
+        .single_node_connection(addr)
         .await;
 
     // It is not mandatory to use JSON as a data format however GetEventStore
