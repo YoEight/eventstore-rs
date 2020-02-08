@@ -696,9 +696,25 @@ impl Slice for AllSlice {
     }
 }
 
-enum Payload {
+pub enum Payload {
     Json(Bytes),
     Binary(Bytes),
+}
+
+impl Payload {
+    pub fn is_json(&self) -> bool {
+        match *self {
+            Payload::Json(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn into_inner(self) -> Bytes {
+        match self {
+            Payload::Json(bytes) => bytes,
+            Payload::Binary(bytes) => bytes,
+        }
+    }
 }
 
 /// Holds data of event about to be sent to the server.
