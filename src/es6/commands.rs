@@ -326,7 +326,6 @@ impl FilterConf {
         temp
     }
 
-
     pub fn max(self, max: i32) -> Self {
         FilterConf {
             max: Some(max),
@@ -346,14 +345,14 @@ impl FilterConf {
         self
     }
 
-    pub fn to_proto(self) -> streams::read_req::options::FilterOptions {
-        use streams::read_req::Empty;
+    pub fn into_proto(self) -> streams::read_req::options::FilterOptions {
+        use options::filter_options::{Expression, Filter, Window};
         use streams::read_req::options::{self, FilterOptions};
-        use options::filter_options::{Filter, Window, Expression};
+        use streams::read_req::Empty;
 
         let window = match self.max {
             Some(max) => Window::Max(max),
-            None => Window::Count(Empty{}),
+            None => Window::Count(Empty {}),
         };
 
         let expr = Expression {
@@ -599,7 +598,7 @@ impl ReadStreamEvents {
         };
 
         let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.to_proto()),
+            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
             None => options::FilterOption::NoFilter(Empty {}),
         };
 
@@ -767,7 +766,7 @@ impl ReadAllEvents {
         };
 
         let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.to_proto()),
+            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
             None => options::FilterOption::NoFilter(Empty {}),
         };
 
@@ -1068,7 +1067,7 @@ impl RegularCatchupSubscribe {
         };
 
         let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.to_proto()),
+            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
             None => options::FilterOption::NoFilter(Empty {}),
         };
 
@@ -1194,7 +1193,7 @@ impl AllCatchupSubscribe {
         };
 
         let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.to_proto()),
+            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
             None => options::FilterOption::NoFilter(Empty {}),
         };
 
