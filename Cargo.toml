@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 edition = "2018"
 
@@ -72,3 +72,7 @@ name = "integration"
 [dev-dependencies]
 env_logger = "0.6"
 tokio-test = "0.2"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
