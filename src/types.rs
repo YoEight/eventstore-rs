@@ -793,7 +793,7 @@ impl EventData {
         let mut new_event = messages::NewEvent::new();
         let id = self.id_opt.unwrap_or_else(Uuid::new_v4);
 
-        new_event.set_event_id(Bytes::from(&id.as_bytes()[..]));
+        new_event.set_event_id(Bytes::from(id.as_bytes().to_vec()));
 
         match self.payload {
             Payload::Json(bin) => {
@@ -1209,7 +1209,7 @@ where
                             state.buffer.reserve(16);
                             state.buffer.put_slice(id.as_bytes());
 
-                            let bytes = state.buffer.take().freeze();
+                            let bytes = state.buffer.split().freeze();
                             msg.mut_processed_event_ids().push(bytes);
                         }
 
@@ -1235,7 +1235,7 @@ where
                                 state.buffer.reserve(16);
                                 state.buffer.put_slice(id.as_bytes());
 
-                                let bytes = state.buffer.take().freeze();
+                                let bytes = state.buffer.split().freeze();
                                 bytes_vec.push(bytes);
                             }
 
