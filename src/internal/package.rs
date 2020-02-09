@@ -1,4 +1,4 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{buf::BufMutExt, Bytes, BytesMut};
 use protobuf::{parse_from_carllerche_bytes, Message};
 use uuid::Uuid;
 

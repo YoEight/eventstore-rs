@@ -9,7 +9,7 @@ use crate::internal::messages;
 use crate::internal::messaging::{Lifetime, Msg, OpMsg};
 use crate::internal::package::Pkg;
 use crate::types::{self, Credentials, OperationError};
-use bytes::{BufMut, BytesMut};
+use bytes::{buf::BufMutExt, BytesMut};
 use futures::channel::{mpsc, oneshot};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
@@ -36,7 +36,7 @@ where
         cmd,
         creds_opt,
         correlation: correlation.unwrap_or_else(Uuid::new_v4),
-        payload: dest.take().freeze(),
+        payload: dest.split().freeze(),
     };
 
     Ok(pkg)
