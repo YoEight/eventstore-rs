@@ -285,13 +285,11 @@ fn convert_persistent_proto_read_event(event: persistent::read_resp::ReadEvent) 
 }
 
 fn configure_auth_req<A>(req: &mut Request<A>, creds_opt: Option<types::Credentials>) {
-    use bytes::{Buf, IntoBuf};
     use tonic::metadata::MetadataValue;
 
     if let Some(creds) = creds_opt {
-        let login = unsafe { String::from_utf8_unchecked(creds.login.into_buf().collect()) };
-
-        let password = unsafe { String::from_utf8_unchecked(creds.password.into_buf().collect()) };
+        let login = String::from_utf8_lossy(&*creds.login).into_owned();
+        let password = String::from_utf8_lossy(&*creds.password).into_owned();
 
         let basic_auth_string = base64::encode(&format!("{}:{}", login, password));
         let basic_auth = format!("Basic {}", basic_auth_string);
