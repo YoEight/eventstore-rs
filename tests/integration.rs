@@ -937,6 +937,7 @@ pub mod es6 {
 
             let connection = eventstore::es6::connection::Connection::builder()
                 .with_default_user(eventstore::Credentials::new("admin", "changeit"))
+                .disable_server_certificate_validation()
                 .single_node_connection(uri)
                 .await?;
 

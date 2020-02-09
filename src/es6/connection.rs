@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::es6::commands::{self, persistent, streams};
-use crate::types::{self, GossipSeedClusterSettings, Settings};
+use crate::types::{self, Settings};
 
 use http::uri::Uri;
 use tonic::transport::Channel;
@@ -41,6 +41,7 @@ pub struct Connection {
 /// Helps constructing a connection to the server.
 pub struct ConnectionBuilder {
     pub settings: Settings,
+    disable_certs_validation: bool,
 }
 
 impl ConnectionBuilder {
@@ -98,38 +99,28 @@ impl ConnectionBuilder {
         self
     }
 
+    /// Disable the use of certificate validation.
+    ///
+    /// # Warning
+    ///
+    /// You should think very carefully before using this method. If
+    /// invalid certificates are trusted, *any* certificate for *any* site
+    /// will be trusted for use. This includes expired certificates. This
+    /// introduces significant vulnerabilities, and should only be used
+    /// as a last resort.
+    pub fn disable_server_certificate_validation(mut self) -> Self {
+        self.disable_certs_validation = true;
+        self
+    }
+
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
     pub async fn single_node_connection(
         self,
         uri: Uri,
     ) -> Result<Connection, Box<dyn std::error::Error>> {
-        self.start_common_with_runtime(DiscoveryProcess::Static(uri))
-            .await
+        Connection::initialize(self.settings, self.disable_certs_validation, uri).await
     }
-
-    /// Creates a connection to a cluster of EventStore nodes. The connection will
-    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
-    /// of a node. The standard external HTTP endpoint is running on `2113`.
-    pub async fn cluster_nodes_through_gossip_connection(
-        self,
-        setts: GossipSeedClusterSettings,
-    ) -> Result<Connection, Box<dyn std::error::Error>> {
-        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts))
-            .await
-    }
-
-    async fn start_common_with_runtime(
-        self,
-        discovery: DiscoveryProcess,
-    ) -> Result<Connection, Box<dyn std::error::Error>> {
-        Connection::make(self.settings, discovery).await
-    }
-}
-
-enum DiscoveryProcess {
-    Static(Uri),
-    ClusterThroughGossip(GossipSeedClusterSettings),
 }
 
 impl Connection {
@@ -137,50 +128,42 @@ impl Connection {
     pub fn builder() -> ConnectionBuilder {
         ConnectionBuilder {
             settings: Default::default(),
+            disable_certs_validation: false,
         }
-    }
-
-    async fn make(
-        settings: Settings,
-        discovery: DiscoveryProcess,
-    ) -> Result<Connection, Box<dyn std::error::Error>> {
-        Self::initialize(settings, discovery).await
     }
 
     async fn initialize(
         settings: Settings,
-        discovery: DiscoveryProcess,
+        disable_certs_validation: bool,
+        uri: http::uri::Uri,
     ) -> Result<Connection, Box<dyn std::error::Error>> {
-        match discovery {
-            DiscoveryProcess::Static(uri) => {
-                let mut rustls_config = rustls::ClientConfig::new();
-                let protocols = vec![(b"h2".to_vec())];
+        let mut channel = Channel::builder(uri);
 
-                rustls_config.set_protocols(protocols.as_slice());
+        if disable_certs_validation {
+            let mut rustls_config = rustls::ClientConfig::new();
+            let protocols = vec![(b"h2".to_vec())];
 
-                rustls_config
-                    .dangerous()
-                    .set_certificate_verifier(std::sync::Arc::new(NoVerification));
+            rustls_config.set_protocols(protocols.as_slice());
 
-                let client_config =
-                    tonic::transport::ClientTlsConfig::new().rustls_client_config(rustls_config);
+            rustls_config
+                .dangerous()
+                .set_certificate_verifier(std::sync::Arc::new(NoVerification));
 
-                let channel = Channel::builder(uri)
-                    .tls_config(client_config)
-                    .connect()
-                    .await?;
+            let client_config =
+                tonic::transport::ClientTlsConfig::new().rustls_client_config(rustls_config);
 
-                let conn = Connection{
-                    settings,
-                    streams: streams::streams_client::StreamsClient::new(channel.clone()),
-                    persistent: persistent::persistent_subscriptions_client::PersistentSubscriptionsClient::new(channel),
-                };
-
-                Ok(conn)
-            }
-
-            DiscoveryProcess::ClusterThroughGossip(_) => unimplemented!(),
+            channel = channel.tls_config(client_config);
         }
+
+        let channel = channel.connect().await?;
+
+        let conn = Connection{
+            settings,
+            streams: streams::streams_client::StreamsClient::new(channel.clone()),
+            persistent: persistent::persistent_subscriptions_client::PersistentSubscriptionsClient::new(channel),
+        };
+
+        Ok(conn)
     }
 
     /// Sends events to a given stream.
