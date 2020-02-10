@@ -1,3 +1,6 @@
+// We disable clippy::cognitive_complexity because of catchup_impl function. it is
+// very hard to reduce the complexity in this case.
+#![allow(clippy::cognitive_complexity)]
 use self::messages::{
     CreatePersistentSubscriptionCompleted_CreatePersistentSubscriptionResult,
     DeletePersistentSubscriptionCompleted_DeletePersistentSubscriptionResult, OperationResult,
@@ -6,13 +9,13 @@ use self::messages::{
 };
 use crate::internal::command::Cmd;
 use crate::internal::messages;
-use crate::internal::messaging::{Lifetime, Msg, OpMsg};
+use crate::internal::messaging::{Lifetime, Mailbox, Msg, OpMsg};
 use crate::internal::package::Pkg;
 use crate::types::{self, Credentials, OperationError};
 use bytes::{buf::BufMutExt, BytesMut};
 use futures::channel::{mpsc, oneshot};
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 use protobuf::{Chars, RepeatedField};
 use std::ops::Deref;
 use uuid::Uuid;
@@ -1087,9 +1090,8 @@ impl SubscribeToStream {
         mut self,
         creds_opt: Option<Credentials>,
         mut bus: mpsc::Sender<Msg>,
-    ) -> types::Subscription {
+    ) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
         let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
-        let bus_cloned = bus.clone();
 
         tokio::spawn(async move {
             let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
@@ -1103,7 +1105,7 @@ impl SubscribeToStream {
             )?;
             let sub_id = pkg.correlation;
             let _ = bus
-                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox))
+                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox.clone()))
                 .await;
 
             while let Some(msg) = recv.next().await {
@@ -1113,18 +1115,13 @@ impl SubscribeToStream {
                             Cmd::SubscriptionConfirmed => {
                                 info!("Subscription [{}] is confirmed", sub_id);
 
-                                let response =
-                                    resp.to_message::<messages::SubscriptionConfirmation>()?;
-                                let last_commit_position = response.get_last_commit_position();
-                                let last_event_number = response.get_last_event_number();
-                                let confirmed = types::SubEvent::Confirmed {
-                                    id: sub_id,
-                                    last_commit_position,
-                                    last_event_number,
-                                    persistent_id: None,
-                                };
+                                let _ = resp.to_message::<messages::SubscriptionConfirmation>()?;
 
-                                let _ = respond.send(confirmed).await;
+                                if respond.send(types::SubEvent::Confirmed).await.is_err() {
+                                    drop_subscription(mailbox, &mut bus, sub_id, SubType::Volatile)
+                                        .await;
+                                    break;
+                                }
                             }
 
                             Cmd::StreamEventAppeared => {
@@ -1139,11 +1136,16 @@ impl SubscribeToStream {
                                     retry_count: 0,
                                 };
 
-                                let _ = respond.send(appeared).await;
+                                if respond.send(appeared).await.is_err() {
+                                    drop_subscription(mailbox, &mut bus, sub_id, SubType::Volatile)
+                                        .await;
+
+                                    break;
+                                }
                             }
 
                             Cmd::SubscriptionDropped => {
-                                info!("Subscription [{}] has dropped", sub_id);
+                                info!("Volatile subscription [{}] has dropped", sub_id);
 
                                 let _ = respond.send(types::SubEvent::Dropped).await;
                                 break;
@@ -1173,16 +1175,21 @@ impl SubscribeToStream {
             Ok(()) as std::io::Result<()>
         });
 
-        types::Subscription {
-            receiver: promise,
-            sender: bus_cloned,
-        }
+        promise.filter_map(|resp| {
+            let ret = match resp {
+                types::SubEvent::Confirmed { .. } => None,
+                types::SubEvent::Dropped => None,
+                types::SubEvent::EventAppeared { event, .. } => Some(*event),
+            };
+
+            futures::future::ready(ret)
+        })
     }
 }
 
 enum CatchupLiveLoop {
     Continue,
-    Break,
+    Break(bool),
 }
 
 enum CatchupLoop<A> {
@@ -1382,6 +1389,40 @@ impl Catchup for AllTrack {
     }
 }
 
+enum SubType {
+    Volatile,
+    Catchup,
+    Persistent,
+}
+
+impl SubType {
+    fn as_str(&self) -> &str {
+        match self {
+            SubType::Volatile => "Volatile",
+            SubType::Catchup => "Catchup",
+            SubType::Persistent => "Persistent",
+        }
+    }
+}
+
+async fn drop_subscription(
+    mailbox: Mailbox,
+    bus: &mut mpsc::Sender<Msg>,
+    sub_id: uuid::Uuid,
+    tpe: SubType,
+) {
+    let pkg = Pkg::new(Cmd::UnsubscribeFromStream, sub_id);
+    let _ = bus
+        .send(Msg::Transmit(Lifetime::OneTime(pkg), mailbox))
+        .await;
+
+    info!(
+        "{} subscription [{}] has been dropped by the user",
+        tpe.as_str(),
+        sub_id
+    );
+}
+
 fn catchup_impl<C>(
     track: C,
     creds_opt: Option<Credentials>,
@@ -1390,14 +1431,13 @@ fn catchup_impl<C>(
     mut read_msg: <C as Catchup>::Msg,
     mut sub_msg: messages::SubscribeToStream,
     mut bus: mpsc::Sender<Msg>,
-) -> types::Subscription
+) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin
 where
     C: Catchup + std::marker::Sync + std::marker::Send + 'static,
 {
     use futures::stream::iter;
 
     let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
-    let bus_cloned = bus.clone();
 
     tokio::spawn(async move {
         let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
@@ -1441,7 +1481,12 @@ where
                             handle_catchup_sub(sub_id, &track, &resp, &mut respond, &mut mode)
                                 .await?;
 
-                        if let CatchupLiveLoop::Break = outcome {
+                        if let CatchupLiveLoop::Break(do_drop) = outcome {
+                            if do_drop {
+                                drop_subscription(mailbox, &mut bus, sub_id, SubType::Catchup)
+                                    .await;
+                            }
+
                             break;
                         }
                     // I know I didn't do that check for other operations but considering in
@@ -1464,7 +1509,16 @@ where
                                         Ok(appeared)
                                     });
 
-                                    let _ = respond.send_all(&mut iter(events)).await;
+                                    if respond.send_all(&mut iter(events)).await.is_err() {
+                                        drop_subscription(
+                                            mailbox,
+                                            &mut bus,
+                                            sub_id,
+                                            SubType::Catchup,
+                                        )
+                                        .await;
+                                        break;
+                                    }
 
                                     if let Some(next) = next_opt {
                                         mode = Mode::Catchup(next);
@@ -1501,6 +1555,14 @@ where
                             CatchupLoop::Break => {
                                 let _ = respond.send(types::SubEvent::Dropped).await;
 
+                                drop_subscription(mailbox, &mut bus, sub_id, SubType::Catchup)
+                                    .await;
+
+                                info!(
+                                    "Catchup subscription [{}] has been dropped by the user",
+                                    sub_id
+                                );
+
                                 break;
                             }
                         }
@@ -1522,8 +1584,7 @@ where
 
                         read_id = read_pkg.correlation;
 
-                        let _ = bus
-                            .send(Msg::Transmit(Lifetime::OneTime(read_pkg), mailbox.clone()))
+                        drop_subscription(mailbox.clone(), &mut bus, sub_id, SubType::Catchup)
                             .await;
 
                         sub_id = Uuid::new_v4();
@@ -1540,7 +1601,7 @@ where
                     }
 
                     error!(
-                        "subscription [{:?}] has dropped because of error: {}",
+                        "Catchup subscription [{:?}] has dropped because of error: {}",
                         sub_id, error
                     );
 
@@ -1553,10 +1614,15 @@ where
         Ok(()) as std::io::Result<()>
     });
 
-    types::Subscription {
-        receiver: promise,
-        sender: bus_cloned,
-    }
+    promise.filter_map(|resp| {
+        let ret = match resp {
+            types::SubEvent::Confirmed { .. } => None,
+            types::SubEvent::Dropped => None,
+            types::SubEvent::EventAppeared { event, .. } => Some(*event),
+        };
+
+        futures::future::ready(ret)
+    })
 }
 
 async fn handle_catchup_sub<T: Track>(
@@ -1570,17 +1636,16 @@ async fn handle_catchup_sub<T: Track>(
         Cmd::SubscriptionConfirmed => {
             info!("Catchup subscription [{}] is confirmed", sub_id);
 
-            let response = resp.to_message::<messages::SubscriptionConfirmation>()?;
-            let last_commit_position = response.get_last_commit_position();
-            let last_event_number = response.get_last_event_number();
-            let confirmed = types::SubEvent::Confirmed {
-                id: sub_id,
-                last_commit_position,
-                last_event_number,
-                persistent_id: None,
-            };
+            let _ = resp.to_message::<messages::SubscriptionConfirmation>()?;
 
-            let _ = respond.send(confirmed).await;
+            if respond.send(types::SubEvent::Confirmed).await.is_err() {
+                info!(
+                    "Catchup subscription [{}] has been dropped by the user",
+                    sub_id
+                );
+
+                return Ok(CatchupLiveLoop::Break(true));
+            }
         }
 
         Cmd::StreamEventAppeared => {
@@ -1599,7 +1664,15 @@ async fn handle_catchup_sub<T: Track>(
                     retry_count: 0,
                 };
 
-                let _ = respond.send(appeared).await;
+                if respond.send(appeared).await.is_err() {
+                    info!(
+                        "Catchup subscription [{}] has been dropped by the user",
+                        sub_id
+                    );
+
+                    return Ok(CatchupLiveLoop::Break(true));
+                }
+
                 *mode = Mode::Live(offset);
             }
         }
@@ -1609,7 +1682,7 @@ async fn handle_catchup_sub<T: Track>(
 
             let _ = respond.send(types::SubEvent::Dropped).await;
 
-            return Ok(CatchupLiveLoop::Break);
+            return Ok(CatchupLiveLoop::Break(false));
         }
 
         _ => {
@@ -1636,7 +1709,7 @@ impl CatchupRegularSubscription {
         self,
         creds_opt: Option<Credentials>,
         bus: mpsc::Sender<Msg>,
-    ) -> types::Subscription {
+    ) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
         let track = RegularTrack {
             stream: self.stream,
         };
@@ -1676,7 +1749,7 @@ impl CatchupAllSubscription {
         self,
         creds_opt: Option<Credentials>,
         bus: mpsc::Sender<Msg>,
-    ) -> types::Subscription {
+    ) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
         let track = AllTrack();
         let mut sub_msg = messages::SubscribeToStream::new();
         let mut read_msg = messages::ReadAllEvents::new();
@@ -2024,9 +2097,10 @@ impl ConnectToPersistentSubscription {
         mut self,
         creds_opt: Option<Credentials>,
         mut bus: mpsc::Sender<Msg>,
-    ) -> types::Subscription {
+    ) -> (types::PersistentSubRead, types::PersistentSubWrite) {
         let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
-        let bus_cloned = bus.clone();
+        let sender = bus.clone();
+        let sub_id = Uuid::new_v4();
 
         tokio::spawn(async move {
             let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
@@ -2034,14 +2108,13 @@ impl ConnectToPersistentSubscription {
             let pkg = create_pkg(
                 Cmd::ConnectToPersistentSubscription,
                 creds_opt,
-                None,
+                Some(sub_id),
                 &mut self.inner,
                 &mut buffer,
             )?;
 
-            let sub_id = pkg.correlation;
             let _ = bus
-                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox))
+                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox.clone()))
                 .await;
 
             while let Some(msg) = recv.next().await {
@@ -2054,21 +2127,20 @@ impl ConnectToPersistentSubscription {
                                     sub_id
                                 );
 
-                                let mut response = resp
-                                    .to_message::<messages::PersistentSubscriptionConfirmation>(
-                                )?;
-                                let last_commit_position = response.get_last_commit_position();
-                                let last_event_number = response.get_last_event_number();
-                                let persistent_id = response.take_subscription_id().to_string();
+                                let _ = resp
+                                    .to_message::<messages::PersistentSubscriptionConfirmation>()?;
 
-                                let confirmed = types::SubEvent::Confirmed {
-                                    id: sub_id,
-                                    last_commit_position,
-                                    last_event_number,
-                                    persistent_id: Some(persistent_id),
-                                };
+                                if respond.send(types::SubEvent::Confirmed).await.is_err() {
+                                    drop_subscription(
+                                        mailbox,
+                                        &mut bus,
+                                        sub_id,
+                                        SubType::Persistent,
+                                    )
+                                    .await;
 
-                                let _ = respond.send(confirmed).await;
+                                    break;
+                                }
                             }
 
                             Cmd::PersistentSubscriptionStreamEventAppeared => {
@@ -2087,7 +2159,17 @@ impl ConnectToPersistentSubscription {
                                     retry_count,
                                 };
 
-                                let _ = respond.send(appeared).await;
+                                if respond.send(appeared).await.is_err() {
+                                    drop_subscription(
+                                        mailbox,
+                                        &mut bus,
+                                        sub_id,
+                                        SubType::Persistent,
+                                    )
+                                    .await;
+
+                                    break;
+                                }
                             }
 
                             Cmd::SubscriptionDropped => {
@@ -2121,9 +2203,32 @@ impl ConnectToPersistentSubscription {
             Ok(()) as std::io::Result<()>
         });
 
-        types::Subscription {
-            receiver: promise,
-            sender: bus_cloned,
-        }
+        let stream = promise.filter_map(|resp| {
+            let ret = match resp {
+                types::SubEvent::Confirmed { .. } => None,
+                types::SubEvent::Dropped => None,
+                types::SubEvent::EventAppeared { event, retry_count } => {
+                    let sub_evt = types::PersistentSubEvent {
+                        inner: *event,
+                        retry_count,
+                    };
+
+                    Some(sub_evt)
+                }
+            };
+
+            futures::future::ready(ret)
+        });
+
+        let read = types::PersistentSubRead {
+            inner: Box::new(stream),
+        };
+
+        let write = types::PersistentSubWrite {
+            sub_id: sub_id.to_string().into(),
+            sender,
+        };
+
+        (read, write)
     }
 }

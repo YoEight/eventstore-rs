@@ -1,3 +1,11 @@
+0.7.2
+=====
+* Idiomatic streaming interface for subscriptions and batch reads (tcp API).
+
+0.7.1
+=====
+* Ask Docs.rs to also build documentation for es6 module.
+
 0.7.0
 =====
 * Expose ES 6 gRPC interface.

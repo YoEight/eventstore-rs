@@ -13,6 +13,7 @@ use crate::internal::messaging::Msg;
 use crate::internal::operations;
 use crate::internal::timespan::Timespan;
 use crate::types::{self, OperationError, Slice};
+use std::pin::Pin;
 
 /// Command that sends events to a given stream.
 pub struct WriteEvents {
@@ -738,7 +739,7 @@ impl ReadStreamEvents {
     /// element corresponds to a page with a length <= `max_count`.
     pub fn iterate_over_batch(
         self,
-    ) -> impl Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> {
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> + Send>> {
         struct State {
             stream: protobuf::Chars,
             pos: i64,
@@ -756,7 +757,7 @@ impl ReadStreamEvents {
         let require_master = self.require_master;
         let direction = self.direction;
 
-        futures::stream::unfold(Some(init), move |state_opt| {
+        let stream = futures::stream::unfold(Some(init), move |state_opt| {
             async move {
                 match state_opt {
                     Some(mut state) => {
@@ -818,7 +819,9 @@ impl ReadStreamEvents {
                     None => None,
                 }
             }
-        })
+        });
+
+        Box::pin(stream)
     }
 
     /// Returns a `Stream` that consumes a stream entirely. For example, if
@@ -826,7 +829,9 @@ impl ReadStreamEvents {
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> {
+    pub fn iterate_over(
+        self,
+    ) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> + Send + Unpin {
         self.iterate_over_batch()
             .map_ok(lift_to_stream)
             .try_flatten()
@@ -969,7 +974,7 @@ impl ReadAllEvents {
     /// element corresponds to a page with a length <= `max_count`.
     pub fn iterate_over_batch(
         self,
-    ) -> impl Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> {
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<types::ResolvedEvent>, OperationError>> + Send>> {
         struct State {
             pos: types::Position,
             sender: mpsc::Sender<Msg>,
@@ -985,7 +990,7 @@ impl ReadAllEvents {
         let require_master = self.require_master;
         let direction = self.direction;
 
-        futures::stream::unfold(Some(init), move |state_opt| {
+        let stream = futures::stream::unfold(Some(init), move |state_opt| {
             async move {
                 match state_opt {
                     Some(mut state) => {
@@ -1047,7 +1052,9 @@ impl ReadAllEvents {
                     None => None,
                 }
             }
-        })
+        });
+
+        Box::pin(stream)
     }
 
     /// Returns a `Stream` that consumes a stream entirely. For example, if
@@ -1055,7 +1062,9 @@ impl ReadAllEvents {
     /// However, if the direction is `Backward`, the iterator ends when the
     /// first event is reached. All the configuration is pass to the iterator
     /// (link resolution, require master, starting point, batch size, …etc).
-    pub fn iterate_over(self) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> {
+    pub fn iterate_over(
+        self,
+    ) -> impl Stream<Item = Result<types::ResolvedEvent, OperationError>> + Send + Unpin {
         self.iterate_over_batch()
             .map_ok(lift_to_stream)
             .try_flatten()
@@ -1196,9 +1205,9 @@ impl SubscribeToStream {
         }
     }
 
-    /// Sends the volatile subscription request to the server asynchronously
-    /// even if the subscription is available right away.
-    pub fn execute(self) -> types::Subscription {
+    /// Sends the volatile subscription request to the server. If the stream is dropped,
+    /// the subscription will automatically unsubscribe.
+    pub fn execute(self) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
         let mut op = operations::SubscribeToStream::new();
 
         op.set_event_stream_id(self.stream_id);
@@ -1292,7 +1301,7 @@ impl RegularCatchupSubscribe {
     /// Preforms the catching up phase of the subscription asynchronously. When
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
-    pub fn execute(self) -> types::Subscription {
+    pub fn execute(self) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
         let op = operations::CatchupRegularSubscription {
             require_master: self.require_master,
             batch_size: self.batch_size,
@@ -1365,7 +1374,7 @@ impl<'a> AllCatchupSubscribe {
     /// Preforms the catching up phase of the subscription asynchronously. When
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
-    pub async fn execute(self) -> types::Subscription {
+    pub fn execute(self) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
         let op = operations::CatchupAllSubscription {
             require_master: self.require_master,
             batch_size: self.batch_size,
@@ -1579,7 +1588,7 @@ impl ConnectToPersistentSubscription {
 
     /// Sends the persistent subscription connection request to the server
     /// asynchronously even if the subscription is available right away.
-    pub fn execute(self) -> types::Subscription {
+    pub fn execute(self) -> (types::PersistentSubRead, types::PersistentSubWrite) {
         let mut op = operations::ConnectToPersistentSubscription::new();
 
         op.set_event_stream_id(self.stream_id);
