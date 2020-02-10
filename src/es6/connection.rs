@@ -157,10 +157,13 @@ impl Connection {
 
         let channel = channel.connect().await?;
 
-        let conn = Connection{
+        let conn = Connection {
             settings,
             streams: streams::streams_client::StreamsClient::new(channel.clone()),
-            persistent: persistent::persistent_subscriptions_client::PersistentSubscriptionsClient::new(channel),
+            persistent:
+                persistent::persistent_subscriptions_client::PersistentSubscriptionsClient::new(
+                    channel,
+                ),
         };
 
         Ok(conn)
