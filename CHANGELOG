@@ -1,6 +1,7 @@
 0.7.2
 =====
 * Idiomatic streaming interface for subscriptions and batch reads (tcp API).
+* Fix UUID/GUID serialization.
 
 0.7.1
 =====
