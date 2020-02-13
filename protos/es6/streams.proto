@@ -1,5 +1,5 @@
 syntax = "proto3";
-package event_store.client.streams;
+package streams;
 option java_package = "com.eventstore.client.streams";
 
 service Streams {

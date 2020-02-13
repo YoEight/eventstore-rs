@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use futures::stream;
 use futures::Stream;
 
+use crate::es6::grpc::{persistent, streams};
 use crate::es6::types::{
     EventData, ExpectedVersion, PersistentSubscriptionSettings, Position, RecordedEvent,
     ResolvedEvent, Revision, WriteResult,
@@ -14,16 +15,6 @@ use persistent::persistent_subscriptions_client::PersistentSubscriptionsClient;
 use std::marker::Unpin;
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
-
-pub mod streams {
-    #![allow(clippy::large_enum_variant)]
-    tonic::include_proto!("event_store.client.streams");
-}
-
-pub mod persistent {
-    #![allow(clippy::large_enum_variant)]
-    tonic::include_proto!("event_store.client.persistent_subscriptions");
-}
 
 use tonic::transport::Channel;
 use tonic::Request;
