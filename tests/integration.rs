@@ -13,98 +13,11 @@ pub mod tcp {
     use super::fresh_stream_id;
     use eventstore::Slice;
     use futures::channel::oneshot;
-    use futures::pin_mut;
     use std::collections::HashMap;
     use std::error::Error;
     use std::net::ToSocketAddrs;
     use std::time::Duration;
     use tokio_test::block_on;
-    use uuid::Uuid;
-
-    #[derive(Debug)]
-    struct TestSub {
-        count: usize,
-        max: usize,
-    }
-
-    impl eventstore::SubscriptionConsumer for TestSub {
-        fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
-            debug!(
-                "Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
-                id, last_commit_position, last_event_number
-            );
-        }
-
-        fn when_event_appeared<E>(
-            &mut self,
-            _: &mut E,
-            event: Box<eventstore::ResolvedEvent>,
-        ) -> eventstore::OnEventAppeared
-        where
-            E: eventstore::SubscriptionEnv,
-        {
-            let event = event.get_original_event();
-            let num = &event.event_number;
-            let stream_id = &event.event_stream_id;
-
-            debug!("Event appeared, stream_id {}, num {}", stream_id, num);
-
-            self.count += 1;
-
-            if self.count == self.max {
-                eventstore::OnEventAppeared::Drop
-            } else {
-                eventstore::OnEventAppeared::Continue
-            }
-        }
-
-        fn when_dropped(&mut self) {
-            debug!("Subscription dropped!");
-        }
-    }
-
-    struct PersistentTestSub {
-        count: usize,
-        max: usize,
-    }
-
-    impl eventstore::SubscriptionConsumer for PersistentTestSub {
-        fn when_confirmed(&mut self, id: Uuid, last_commit_position: i64, last_event_number: i64) {
-            debug!(
-                "Subscription confirmed: {}, last_commit_position: {}, last_event_number: {}",
-                id, last_commit_position, last_event_number
-            );
-        }
-
-        fn when_event_appeared<E>(
-            &mut self,
-            env: &mut E,
-            event: Box<eventstore::ResolvedEvent>,
-        ) -> eventstore::OnEventAppeared
-        where
-            E: eventstore::SubscriptionEnv,
-        {
-            let event = event.get_original_event();
-            let num = &event.event_number;
-            let stream_id = &event.event_stream_id;
-
-            debug!("Event appeared, stream_id {}, num {}", stream_id, num);
-
-            self.count += 1;
-
-            env.push_ack(event.event_id);
-
-            if self.count == self.max {
-                eventstore::OnEventAppeared::Drop
-            } else {
-                eventstore::OnEventAppeared::Continue
-            }
-        }
-
-        fn when_dropped(&mut self) {
-            debug!("Subscription dropped!");
-        }
-    }
 
     fn generate_events(event_type: &str, cnt: usize) -> Vec<eventstore::EventData> {
         let mut events = Vec::with_capacity(cnt);
@@ -310,13 +223,11 @@ pub mod tcp {
             .execute()
             .await?;
 
-        let iter = connection
+        let mut iter = connection
             .read_stream(stream_id.as_str())
             .start_from_beginning()
             .max_count(1)
             .iterate_over();
-
-        pin_mut!(iter);
 
         let mut pos = 0;
         let mut idx = 0;
@@ -351,13 +262,11 @@ pub mod tcp {
             .execute()
             .await?;
 
-        let iter = connection
+        let mut iter = connection
             .read_stream(stream_id.as_str())
             .start_from_end_of_stream()
             .max_count(1)
             .iterate_over();
-
-        pin_mut!(iter);
 
         let mut pos = 0;
         let mut idx = 0;
@@ -417,19 +326,27 @@ pub mod tcp {
     async fn test_volatile_subscription(
         connection: &eventstore::Connection,
     ) -> Result<(), Box<dyn Error>> {
+        use futures::stream::StreamExt;
+
         let stream_id = fresh_stream_id("volatile");
-        let sub = connection.subcribe_to_stream(stream_id.as_str()).execute();
+        let mut sub = connection.subcribe_to_stream(stream_id.as_str()).execute();
         let events = generate_events("volatile-test", 3);
-        // let confirmation = sub.confirmation();
 
         let (tx, recv) = oneshot::channel();
 
         tokio::spawn(async move {
-            let test_res = sub.consume_async(TestSub { count: 0, max: 3 }).await;
-            tx.send(test_res).unwrap();
-        });
+            let mut count = 0usize;
 
-        // confirmation.await;
+            while let Some(_) = sub.next().await {
+                count += 1;
+
+                if count == 3 {
+                    break;
+                }
+            }
+
+            tx.send(count).unwrap();
+        });
 
         let _ = connection
             .write_events(stream_id)
@@ -437,12 +354,12 @@ pub mod tcp {
             .execute()
             .await?;
 
-        let test_sub = recv.await?;
+        let count = recv.await?;
 
         assert_eq!(
-            test_sub.count, 3,
+            count, 3,
             "We are testing proper state after volatile subscription: got {} expected {}.",
-            test_sub.count, 3
+            count, 3
         );
 
         Ok(())
@@ -456,6 +373,8 @@ pub mod tcp {
     async fn test_catchup_subscription(
         connection: &eventstore::Connection,
     ) -> Result<(), Box<dyn Error>> {
+        use futures::stream::StreamExt;
+
         let stream_id = fresh_stream_id("catchup");
         let events_before = generate_events("catchup-test-before", 3);
         let events_after = generate_events("catchup-test-after", 3);
@@ -466,15 +385,24 @@ pub mod tcp {
             .execute()
             .await?;
 
-        let sub = connection
+        let mut sub = connection
             .subscribe_to_stream_from(stream_id.clone())
             .execute();
 
         let (tx, recv) = oneshot::channel();
 
         tokio::spawn(async move {
-            let test_res = sub.consume_async(TestSub { count: 0, max: 6 }).await;
-            tx.send(test_res).unwrap();
+            let mut count = 0usize;
+
+            while let Some(_) = sub.next().await {
+                count += 1;
+
+                if count == 6 {
+                    break;
+                }
+            }
+
+            tx.send(count).unwrap();
         });
 
         let _ = connection
@@ -483,12 +411,12 @@ pub mod tcp {
             .execute()
             .await?;
 
-        let test_sub = recv.await?;
+        let count = recv.await?;
 
         assert_eq!(
-            test_sub.count, 6,
+            count, 6,
             "We are testing proper state after catchup subscription: got {} expected {}.",
-            test_sub.count, 3
+            count, 6
         );
 
         Ok(())
@@ -498,13 +426,20 @@ pub mod tcp {
     // we did in `test_catchup_subscription`
     // h
     async fn test_catchup_all_subscription(connection: &eventstore::Connection) {
-        let sub = connection.subscribe_to_all_from().execute().await;
-        let tmp = sub.consume_async(TestSub { count: 0, max: 10 }).await;
+        use futures::stream::StreamExt;
 
-        assert_eq!(
-            tmp.count, 10,
-            "We are testing proper state after $all catchup"
-        );
+        let mut sub = connection.subscribe_to_all_from().execute();
+        let mut count = 0usize;
+
+        while let Some(_) = sub.next().await {
+            count += 1;
+
+            if count == 10 {
+                break;
+            }
+        }
+
+        assert_eq!(count, 10, "We are testing proper state after $all catchup");
     }
 
     // We test we can successfully create a persistent subscription.
@@ -608,18 +543,25 @@ pub mod tcp {
             .execute()
             .await?;
 
-        let sub = connection
+        let (mut sub_read, mut sub_write) = connection
             .connect_persistent_subscription(stream_id.clone(), "a_group_name".to_string())
             .execute();
 
-        let test_sub = sub
-            .consume_async(PersistentTestSub { count: 0, max: 5 })
-            .await;
+        let mut count = 0usize;
+
+        while let Some(event) = sub_read.read_next().await {
+            count += 1;
+            sub_write.ack_event(event).await;
+
+            if count == 5 {
+                break;
+            }
+        }
 
         assert_eq!(
-            test_sub.count, 5,
+            count, 5,
             "We are testing proper state after persistent subscription: got {} expected {}",
-            test_sub.count, 5
+            count, 5
         );
 
         Ok(())
