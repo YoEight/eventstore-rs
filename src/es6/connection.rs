@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use crate::es6::commands::{self, persistent, streams};
+use crate::es6::commands;
+use crate::es6::grpc::{persistent, streams};
 use crate::types::{self, Settings};
 
 use http::uri::Uri;

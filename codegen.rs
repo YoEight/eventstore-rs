@@ -25,11 +25,18 @@ pub mod tcp {
 #[cfg(feature = "es6")]
 pub mod es6 {
     pub fn generate() {
-        tonic_build::compile_protos("protos/es6/persistent.proto").unwrap();
-        tonic_build::compile_protos("protos/es6/projections.proto").unwrap();
-        tonic_build::compile_protos("protos/es6/streams.proto").unwrap();
-        tonic_build::compile_protos("protos/es6/users.proto").unwrap();
-        tonic_build::compile_protos("protos/es6/operations.proto").unwrap();
+        let files = [
+            "protos/es6/persistent.proto",
+            "protos/es6/streams.proto",
+        ];
+
+        tonic_build::configure()
+            .build_server(false)
+            .out_dir("src/es6/grpc")
+            .compile(
+                &files,
+                &["protos/es6"]
+            ).unwrap();
     }
 }
 
