@@ -32,7 +32,7 @@
 0.4.4
 =====
 * Remove debugging leftovers.
-* Add `Pinned` system consumer stategy.
+* Add `Pinned` system consumer strategy.
 
 0.4.3
 =====
