@@ -1208,6 +1208,12 @@ impl SubscribeToStream {
     /// Sends the volatile subscription request to the server. If the stream is dropped,
     /// the subscription will automatically unsubscribe.
     pub fn execute(self) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
+        types::keep_subscription_events_only(self.execute_with_sub_events())
+    }
+
+    /// Same as `execute` but yields `types::SubEvent` instead. Useful if you want to be notified
+    /// when a subscription has been confirmed or dropped by the server for example.
+    pub fn execute_with_sub_events(self) -> impl Stream<Item = types::SubEvent> + Send + Unpin {
         let mut op = operations::SubscribeToStream::new();
 
         op.set_event_stream_id(self.stream_id);
@@ -1302,6 +1308,12 @@ impl RegularCatchupSubscribe {
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
     pub fn execute(self) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
+        types::keep_subscription_events_only(self.execute_with_sub_events())
+    }
+
+    /// Same as `execute` but yields `types::SubEvent` instead. Useful if you want to be notified
+    /// when a subscription has been confirmed or dropped by the server for example.
+    pub fn execute_with_sub_events(self) -> impl Stream<Item = types::SubEvent> + Send + Unpin {
         let op = operations::CatchupRegularSubscription {
             require_master: self.require_master,
             batch_size: self.batch_size,
@@ -1375,6 +1387,12 @@ impl<'a> AllCatchupSubscribe {
     /// it will reach the head of stream, the command will emit a volatile
     /// subscription request.
     pub fn execute(self) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
+        types::keep_subscription_events_only(self.execute_with_sub_events())
+    }
+
+    /// Same as `execute` but yields `types::SubEvent` instead. Useful if you want to be notified
+    /// when a subscription has been confirmed or dropped by the server for example.
+    pub fn execute_with_sub_events(self) -> impl Stream<Item = types::SubEvent> + Send + Unpin {
         let op = operations::CatchupAllSubscription {
             require_master: self.require_master,
             batch_size: self.batch_size,
