@@ -2085,6 +2085,8 @@ impl ConnectToPersistentSubscription {
         let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
         let sender = bus.clone();
         let sub_id = Uuid::new_v4();
+        let stream_name = self.inner.get_event_stream_id().to_string();
+        let group = self.inner.get_subscription_id().to_string();
 
         tokio::spawn(async move {
             let (mailbox, mut recv) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
@@ -2209,7 +2211,7 @@ impl ConnectToPersistentSubscription {
         };
 
         let write = types::PersistentSubWrite {
-            sub_id: sub_id.to_string().into(),
+            sub_id: format!("{}::{}", stream_name, group).into(),
             sender,
         };
 
