@@ -1,3 +1,8 @@
+0.7.3
+=====
+* Expose subscription events so the user can be notified when a subscription has been confirmed or dropped by the server.
+* Upgrade to uuid 0.8.* version.
+
 0.7.2
 =====
 * Idiomatic streaming interface for subscriptions and batch reads (tcp API).

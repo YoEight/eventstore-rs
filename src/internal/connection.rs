@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_byteorder::{AsyncWriteBytesExt, LittleEndian};
-use uuid::{BytesError, Uuid};
+use uuid::Uuid;
 
 use crate::internal::command::Cmd;
 use crate::internal::messaging::Msg;
@@ -18,7 +18,7 @@ pub struct Connection {
     sender: Sender<Pkg>,
 }
 
-fn decode_bytes_error(err: BytesError) -> std::io::Error {
+fn decode_bytes_error(err: uuid::Error) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, format!("BytesError {}", err))
 }
 

@@ -12,7 +12,7 @@ use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
 use serde_json;
-use uuid::{BytesError, Uuid};
+use uuid::Uuid;
 
 use crate::internal::command::Cmd;
 use crate::internal::messages;
@@ -330,7 +330,7 @@ pub struct RecordedEvent {
     pub created_epoch: Option<i64>,
 }
 
-fn decode_bytes_error(err: BytesError) -> ::std::io::Error {
+fn decode_bytes_error(err: uuid::Error) -> ::std::io::Error {
     ::std::io::Error::new(::std::io::ErrorKind::Other, format!("BytesError {}", err))
 }
 
@@ -1431,7 +1431,7 @@ impl GossipSeedClusterSettings {
 
 mod guid {
     use bytes::Bytes;
-    use uuid::{BytesError, Uuid};
+    use uuid::Uuid;
 
     pub(crate) fn from_uuid(uuid: Uuid) -> Bytes {
         let b = uuid.as_bytes();
@@ -1442,7 +1442,7 @@ mod guid {
         ])
     }
 
-    pub(crate) fn to_uuid(b: &[u8]) -> Result<Uuid, BytesError> {
+    pub(crate) fn to_uuid(b: &[u8]) -> Result<Uuid, uuid::Error> {
         Uuid::from_slice(&[
             b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6], b[8], b[9], b[10], b[11], b[12], b[13],
             b[14], b[15],
