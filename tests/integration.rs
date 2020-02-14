@@ -13,6 +13,7 @@ pub mod tcp {
     use super::fresh_stream_id;
     use eventstore::Slice;
     use futures::channel::oneshot;
+    use futures::SinkExt;
     use std::collections::HashMap;
     use std::error::Error;
     use std::net::ToSocketAddrs;
@@ -329,24 +330,44 @@ pub mod tcp {
         use futures::stream::StreamExt;
 
         let stream_id = fresh_stream_id("volatile");
-        let mut sub = connection.subcribe_to_stream(stream_id.as_str()).execute();
+        let mut sub = connection
+            .subcribe_to_stream(stream_id.as_str())
+            .execute_with_sub_events();
         let events = generate_events("volatile-test", 3);
 
         let (tx, recv) = oneshot::channel();
 
+        // Used as concurrency control, we don't want to write events before the subscription
+        // has been confirmed by the server.
+        let (mut confirmation_tx, mut confirmation_recv) = futures::channel::mpsc::unbounded();
+
         tokio::spawn(async move {
             let mut count = 0usize;
 
-            while let Some(_) = sub.next().await {
-                count += 1;
+            while let Some(evt) = sub.next().await {
+                match evt {
+                    eventstore::SubEvent::Confirmed => {
+                        let _ = confirmation_tx.send(()).await;
+                    }
 
-                if count == 3 {
-                    break;
+                    eventstore::SubEvent::EventAppeared { .. } => {
+                        count += 1;
+
+                        if count == 3 {
+                            break;
+                        }
+                    }
+
+                    eventstore::SubEvent::Dropped => {
+                        break;
+                    }
                 }
             }
 
             tx.send(count).unwrap();
         });
+
+        let _ = confirmation_recv.next().await;
 
         let _ = connection
             .write_events(stream_id)
@@ -387,23 +408,40 @@ pub mod tcp {
 
         let mut sub = connection
             .subscribe_to_stream_from(stream_id.clone())
-            .execute();
+            .execute_with_sub_events();
 
         let (tx, recv) = oneshot::channel();
+        // Used as concurrency control, we don't want to write events before the subscription
+        // has been confirmed by the server.
+        let (mut confirmation_tx, mut confirmation_recv) = futures::channel::mpsc::unbounded();
 
         tokio::spawn(async move {
             let mut count = 0usize;
 
-            while let Some(_) = sub.next().await {
-                count += 1;
+            while let Some(evt) = sub.next().await {
+                match evt {
+                    eventstore::SubEvent::Confirmed => {
+                        let _ = confirmation_tx.send(()).await;
+                    }
 
-                if count == 6 {
-                    break;
+                    eventstore::SubEvent::EventAppeared { .. } => {
+                        count += 1;
+
+                        if count == 6 {
+                            break;
+                        }
+                    }
+
+                    eventstore::SubEvent::Dropped => {
+                        break;
+                    }
                 }
             }
 
             tx.send(count).unwrap();
         });
+
+        let _ = confirmation_recv.next().await;
 
         let _ = connection
             .write_events(stream_id)

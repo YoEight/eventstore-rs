@@ -1066,15 +1066,39 @@ impl PersistentSubWrite {
     }
 }
 
-pub(crate) enum SubEvent {
+/// Events related to a subscription.
+pub enum SubEvent {
+    /// Indicates the subscription has been confirmed by the server.
     Confirmed,
 
+    /// An event notification from the server.
     EventAppeared {
         event: Box<ResolvedEvent>,
         retry_count: usize,
     },
 
+    /// Indicates the subscription has dropped.
     Dropped,
+}
+
+/// Helper function that filters out every subscription event that isn't an event notification.
+pub(crate) fn keep_subscription_events_only<S>(
+    stream: S,
+) -> impl Stream<Item = ResolvedEvent> + Send + Unpin
+where
+    S: Stream<Item = SubEvent> + Send + Unpin,
+{
+    use futures::stream::StreamExt;
+
+    stream.filter_map(|resp| {
+        let ret = match resp {
+            SubEvent::Confirmed { .. } => None,
+            SubEvent::Dropped => None,
+            SubEvent::EventAppeared { event, .. } => Some(*event),
+        };
+
+        futures::future::ready(ret)
+    })
 }
 
 #[derive(Debug)]

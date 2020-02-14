@@ -1090,7 +1090,7 @@ impl SubscribeToStream {
         mut self,
         creds_opt: Option<Credentials>,
         mut bus: mpsc::Sender<Msg>,
-    ) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
+    ) -> impl Stream<Item = types::SubEvent> + Send + Unpin {
         let (mut respond, promise) = mpsc::channel(DEFAULT_BOUNDED_SIZE);
 
         tokio::spawn(async move {
@@ -1175,15 +1175,7 @@ impl SubscribeToStream {
             Ok(()) as std::io::Result<()>
         });
 
-        promise.filter_map(|resp| {
-            let ret = match resp {
-                types::SubEvent::Confirmed { .. } => None,
-                types::SubEvent::Dropped => None,
-                types::SubEvent::EventAppeared { event, .. } => Some(*event),
-            };
-
-            futures::future::ready(ret)
-        })
+        promise
     }
 }
 
@@ -1431,7 +1423,7 @@ fn catchup_impl<C>(
     mut read_msg: <C as Catchup>::Msg,
     mut sub_msg: messages::SubscribeToStream,
     mut bus: mpsc::Sender<Msg>,
-) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin
+) -> impl Stream<Item = types::SubEvent> + Send + Unpin
 where
     C: Catchup + std::marker::Sync + std::marker::Send + 'static,
 {
@@ -1614,15 +1606,7 @@ where
         Ok(()) as std::io::Result<()>
     });
 
-    promise.filter_map(|resp| {
-        let ret = match resp {
-            types::SubEvent::Confirmed { .. } => None,
-            types::SubEvent::Dropped => None,
-            types::SubEvent::EventAppeared { event, .. } => Some(*event),
-        };
-
-        futures::future::ready(ret)
-    })
+    promise
 }
 
 async fn handle_catchup_sub<T: Track>(
@@ -1709,7 +1693,7 @@ impl CatchupRegularSubscription {
         self,
         creds_opt: Option<Credentials>,
         bus: mpsc::Sender<Msg>,
-    ) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
+    ) -> impl Stream<Item = types::SubEvent> + Send + Unpin {
         let track = RegularTrack {
             stream: self.stream,
         };
@@ -1749,7 +1733,7 @@ impl CatchupAllSubscription {
         self,
         creds_opt: Option<Credentials>,
         bus: mpsc::Sender<Msg>,
-    ) -> impl Stream<Item = types::ResolvedEvent> + Send + Unpin {
+    ) -> impl Stream<Item = types::SubEvent> + Send + Unpin {
         let track = AllTrack();
         let mut sub_msg = messages::SubscribeToStream::new();
         let mut read_msg = messages::ReadAllEvents::new();
