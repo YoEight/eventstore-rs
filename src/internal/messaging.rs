@@ -13,25 +13,27 @@ pub enum OpMsg {
     Failed(OperationError),
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Lifetime<A> {
     OneTime(A),
-    KeepAlive(A),
+    /// `super::command::Cmd` is used to know on which command we decide to stop. For example, in
+    /// case of subscription, `super::command::Cmd::SubscriptionDropped` will stop a subscription
+    /// transmission.
+    KeepAlive(super::command::Cmd, A),
 }
 
 impl<A> Lifetime<A> {
-    pub fn is_keep_alive(&self) -> bool {
-        if let Lifetime::KeepAlive(_) = self {
-            return true;
-        }
-
-        false
-    }
-
     pub fn inner(self) -> A {
         match self {
-            Lifetime::KeepAlive(a) => a,
+            Lifetime::KeepAlive(_, a) => a,
             Lifetime::OneTime(a) => a,
+        }
+    }
+
+    pub fn keep_alive_until(&self) -> Option<super::command::Cmd> {
+        match self {
+            Lifetime::KeepAlive(cmd, _) => Some(*cmd),
+            Lifetime::OneTime(_) => None,
         }
     }
 }
