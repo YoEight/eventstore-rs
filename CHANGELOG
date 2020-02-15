@@ -2,6 +2,9 @@
 =====
 * Expose subscription events so the user can be notified when a subscription has been confirmed or dropped by the server.
 * Upgrade to uuid 0.8.* version.
+* Fix memory leak in registry when dealing with subscriptions.
+* Allow user to convert UUID to GUID when sending events.
+* Fix persistent subscription regression when ack/nak.
 
 0.7.2
 =====
