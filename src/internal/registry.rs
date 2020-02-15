@@ -17,7 +17,23 @@ struct Request {
     retries: usize,
     started: Instant,
     mailbox: messaging::Mailbox,
-    keep_alive: bool,
+    keep_alive_until: Option<Cmd>,
+}
+
+impl Request {
+    fn keep_alive(&self) -> bool {
+        self.keep_alive_until.is_some()
+    }
+
+    fn inner_lifetime(self) -> (messaging::Mailbox, Lifetime<Pkg>) {
+        let lifetime = if let Some(cmd) = self.keep_alive_until {
+            Lifetime::KeepAlive(cmd, self.original)
+        } else {
+            Lifetime::OneTime(self.original)
+        };
+
+        (self.mailbox, lifetime)
+    }
 }
 
 #[derive(Debug)]
@@ -44,14 +60,14 @@ impl Registry {
     }
 
     pub fn register(&mut self, conn_id: Uuid, mailbox: messaging::Mailbox, pkg: Lifetime<Pkg>) {
-        let keep_alive = pkg.is_keep_alive();
+        let keep_alive_until = pkg.keep_alive_until();
         let req = Request {
             mailbox,
             conn_id,
             original: pkg.inner(),
             retries: 1,
             started: Instant::now(),
-            keep_alive,
+            keep_alive_until,
         };
 
         self.requests.insert(req.original.correlation, req);
@@ -128,13 +144,9 @@ impl Registry {
                     match result {
                         Ok(endpoint_opt) => {
                             let orig_cmd = req.original.cmd;
-                            let orig_pkg = if req.keep_alive {
-                                Lifetime::KeepAlive(req.original)
-                            } else {
-                                Lifetime::OneTime(req.original)
-                            };
+                            let (mailbox, orig_pkg) = req.inner_lifetime();
 
-                            self.postpone(req.mailbox, orig_pkg);
+                            self.postpone(mailbox, orig_pkg);
 
                             if let Some(endpoint) = endpoint_opt {
                                 warn!(
@@ -172,10 +184,13 @@ impl Registry {
                 }
 
                 _ => {
+                    let resp_cmd = pkg.cmd;
                     let _ = req.mailbox.send(OpMsg::Recv(pkg)).await;
 
-                    if req.keep_alive {
-                        self.requests.insert(req.original.correlation, req);
+                    if let Some(cmd) = req.keep_alive_until {
+                        if cmd != resp_cmd {
+                            self.requests.insert(req.original.correlation, req);
+                        }
                     }
                 }
             }
@@ -197,7 +212,16 @@ impl Registry {
         for key in self.requests.keys().copied().collect::<Vec<Uuid>>() {
             let mut req = self.requests.remove(&key).expect("impossible situation");
 
-            if !req.keep_alive && req.started.elapsed() >= self.timeout {
+            if req.conn_id != conn_id {
+                let _ = req
+                    .mailbox
+                    .send(OpMsg::Failed(OperationError::ConnectionHasDropped))
+                    .await;
+
+                continue;
+            }
+
+            if !req.keep_alive() && req.started.elapsed() >= self.timeout {
                 if req.retries + 1 > max_retries {
                     error!(
                         "Command {:?} [{:?}]: maximum retries threshold reached [{}], aborted!",
@@ -221,15 +245,6 @@ impl Registry {
 
                     pkgs.push(req.original.clone());
                 }
-            }
-
-            if req.conn_id != conn_id {
-                let _ = req
-                    .mailbox
-                    .send(OpMsg::Failed(OperationError::ConnectionHasDropped))
-                    .await;
-
-                continue;
             }
 
             self.requests.insert(key, req);

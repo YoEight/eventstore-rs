@@ -1105,7 +1105,10 @@ impl SubscribeToStream {
             )?;
             let sub_id = pkg.correlation;
             let _ = bus
-                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox.clone()))
+                .send(Msg::Transmit(
+                    Lifetime::KeepAlive(Cmd::SubscriptionDropped, pkg),
+                    mailbox.clone(),
+                ))
                 .await;
 
             while let Some(msg) = recv.next().await {
@@ -1460,7 +1463,7 @@ where
 
         let _ = bus
             .send(Msg::Transmit(
-                Lifetime::KeepAlive(sub_pkg.clone()),
+                Lifetime::KeepAlive(Cmd::SubscriptionDropped, sub_pkg.clone()),
                 mailbox.clone(),
             ))
             .await;
@@ -1584,7 +1587,7 @@ where
 
                         let _ = bus
                             .send(Msg::Transmit(
-                                Lifetime::KeepAlive(sub_pkg.clone()),
+                                Lifetime::KeepAlive(Cmd::SubscriptionDropped, sub_pkg.clone()),
                                 mailbox.clone(),
                             ))
                             .await;
@@ -2100,7 +2103,10 @@ impl ConnectToPersistentSubscription {
             )?;
 
             let _ = bus
-                .send(Msg::Transmit(Lifetime::KeepAlive(pkg), mailbox.clone()))
+                .send(Msg::Transmit(
+                    Lifetime::KeepAlive(Cmd::SubscriptionDropped, pkg),
+                    mailbox.clone(),
+                ))
                 .await;
 
             while let Some(msg) = recv.next().await {
