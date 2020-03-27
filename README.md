@@ -70,7 +70,7 @@ Contributions and bug reports are welcome!
 
 MIT License
 
-[GetEventStore]: https://eventstore.org/
+[GetEventStore]: https://eventstore.com/
 [Talk and exchange ideas in our dedicated Discord Server]: https://discord.gg/x7q37jJ
-[EventStore]: https://eventstore.org/
+[EventStore]: https://eventstore.com/
 

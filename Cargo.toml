@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.7.3"
+version = "0.7.4"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 edition = "2018"
 
@@ -10,7 +10,7 @@ edition = "2018"
 # build = "codegen.rs"
 
 license = "MIT"
-description = "GetEventStore TCP client"
+description = "EventStore TCP client"
 repository = "https://github.com/YoEight/eventstore-rs"
 readme = "README.md"
 keywords = ["database", "eventsourcing", "event", "eventstore", "ges"]
