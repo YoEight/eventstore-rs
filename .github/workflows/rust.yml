@@ -5,31 +5,48 @@ on:
 
 jobs:
   build:
+    name: Build
+    strategy:
+      matrix:
+        os: [ubuntu-18.04, windows-2019, macos-10.15]
+        rust: [stable, beta, nightly]
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
-    container:
-      image: rust:1.41
-
+    steps:
+    - uses: actions/checkout@v1
+    - name: Install
+      run: rustup default ${{ matrix.rust }}
+    - name: Build
+      run: cargo check --all-features
+      continue-on-error: ${{ matrix.rust == 'nightly' }}
+  tests:
+    name: Tests
+    needs: build
+    runs-on: ubuntu-18.04
     services:
       eventstore:
         image: eventstore/eventstore:latest
         env:
           EVENTSTORE_DEV: true
         ports:
-          - 1113/tcp
-          - 2113/tcp
-
+          - 1113:1113
+          - 2113:2113
+    steps:
+    - uses: actions/checkout@v1
+    - name: Run Tests
+      run: RUST_BACKTRACE='1' RUST_LOG='eventstore=debug' cargo test
+      
+  linting:
+    name: Linting
+    needs: tests
+    runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@v1
     - name: Install
       run: |
         rustup component add clippy-preview
         rustup component add rustfmt
-    - name: Build
-      run: cargo build --all-features
-    - name: Run tests
-      run: EVENTSTORE_HOST=eventstore RUST_BACKTRACE='1' RUST_LOG='eventstore=debug' cargo test --all-features
     - name: Linting
       run: cargo clippy --all-features -- -D warnings
     - name: Formatting
