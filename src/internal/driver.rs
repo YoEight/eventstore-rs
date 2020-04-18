@@ -190,7 +190,7 @@ impl Driver {
             default_user: setts.default_user.clone(),
             operation_timeout: setts.operation_timeout,
             init_req_opt: None,
-            reconnect_delay: Duration::from_secs(3),
+            reconnect_delay: setts.connection_timeout,
             max_reconnect: setts.connection_retry.to_usize(),
             sender,
             operation_check_period: setts.operation_check_period,
