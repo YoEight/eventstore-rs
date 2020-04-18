@@ -87,6 +87,12 @@ impl ConnectionBuilder {
         self
     }
 
+    /// Maximum delay to create a successful connection to a node.
+    pub fn connection_timeout(mut self, period: Duration) -> Self {
+        self.settings.connection_timeout = period;
+        self
+    }
+
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
     pub async fn single_node_connection(self, addr: SocketAddr) -> Connection {

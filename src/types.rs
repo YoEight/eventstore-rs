@@ -159,6 +159,9 @@ pub struct Settings {
     /// the connection has timeout or if the command was issued with a
     /// different connection.
     pub operation_check_period: Duration,
+
+    /// Maximum delay to create a successful connection to a node.
+    pub connection_timeout: Duration,
 }
 
 impl Default for Settings {
@@ -172,6 +175,7 @@ impl Default for Settings {
             default_user: None,
             connection_name: None,
             operation_check_period: Duration::from_secs(1),
+            connection_timeout: Duration::from_secs(3),
         }
     }
 }
