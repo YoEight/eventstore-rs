@@ -11,7 +11,7 @@ fn fresh_stream_id(prefix: &str) -> String {
 
 pub mod tcp {
     use super::fresh_stream_id;
-    use eventstore::Slice;
+    use eventstore::{Retry, Slice};
     use futures::channel::oneshot;
     use futures::SinkExt;
     use std::collections::HashMap;
@@ -646,6 +646,46 @@ pub mod tcp {
             Ok(()) as Result<(), Box<dyn Error>>
         })
         .unwrap();
+    }
+
+    #[test]
+    fn offline_server_test() {
+        block_on(async {
+            let host = std::env::var("EVENTSTORE_HOST").unwrap_or("127.0.0.1".to_string());
+            let conn_str = format!("{}:1114", host); // Be sure your server doesn't run on port 1114
+
+            info!("Connection string: {}", conn_str);
+
+            let endpoint = conn_str.to_socket_addrs().unwrap().next().unwrap();
+
+            let connection = eventstore::Connection::builder()
+                .connection_timeout(Duration::from_secs(0))
+                .connection_retry(Retry::Only(0))
+                .with_default_user(eventstore::Credentials::new("admin", "changeit"))
+                .single_node_connection(endpoint)
+                .await;
+
+            let stream_id = fresh_stream_id("stream-id");
+            let group_name = "group-name";
+
+            assert!(connection.read_all().execute().await.is_err());
+            assert!(connection.read_all().execute().await.is_err());
+            assert!(connection
+                .read_event(stream_id.as_str(), 0)
+                .execute()
+                .await
+                .is_err());
+            assert!(connection
+                .read_stream(stream_id.as_str())
+                .execute()
+                .await
+                .is_err());
+            assert!(connection
+                .create_persistent_subscription(stream_id.as_str(), group_name)
+                .execute()
+                .await
+                .is_err());
+        });
     }
 }
 #[cfg(feature = "es6")]

@@ -35,6 +35,7 @@ pub enum OperationError {
     WrongClientImpl(Option<Cmd>),
     ConnectionHasDropped,
     NotImplemented,
+    ConnectionClosed,
 }
 
 impl std::error::Error for OperationError {}
@@ -59,6 +60,7 @@ impl std::fmt::Display for OperationError {
             WrongClientImpl(info) => writeln!(f, "wrong client impl: {:?}", info),
             ConnectionHasDropped => writeln!(f, "connection has dropped"),
             NotImplemented => writeln!(f, "not implemented"),
+            ConnectionClosed => writeln!(f, "connection closed"),
         }
     }
 }
