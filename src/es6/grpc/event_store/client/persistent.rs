@@ -25,9 +25,9 @@ pub mod read_req {
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Content {
                 #[prost(message, tag = "1")]
-                Structured(super::super::Empty),
+                Structured(super::super::super::super::shared::Empty),
                 #[prost(message, tag = "2")]
-                String(super::super::Empty),
+                String(super::super::super::super::shared::Empty),
             }
         }
     }
@@ -36,14 +36,14 @@ pub mod read_req {
         #[prost(bytes, tag = "1")]
         pub id: std::vec::Vec<u8>,
         #[prost(message, repeated, tag = "2")]
-        pub ids: ::std::vec::Vec<super::Uuid>,
+        pub ids: ::std::vec::Vec<super::super::shared::Uuid>,
     }
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Nack {
         #[prost(bytes, tag = "1")]
         pub id: std::vec::Vec<u8>,
         #[prost(message, repeated, tag = "2")]
-        pub ids: ::std::vec::Vec<super::Uuid>,
+        pub ids: ::std::vec::Vec<super::super::shared::Uuid>,
         #[prost(enumeration = "nack::Action", tag = "3")]
         pub action: i32,
         #[prost(string, tag = "4")]
@@ -60,8 +60,6 @@ pub mod read_req {
             Stop = 4,
         }
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Content {
         #[prost(message, tag = "1")]
@@ -93,7 +91,7 @@ pub mod read_resp {
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct RecordedEvent {
             #[prost(message, optional, tag = "1")]
-            pub id: ::std::option::Option<super::super::Uuid>,
+            pub id: ::std::option::Option<super::super::super::shared::Uuid>,
             #[prost(string, tag = "2")]
             pub stream_name: std::string::String,
             #[prost(uint64, tag = "3")]
@@ -114,24 +112,27 @@ pub mod read_resp {
             #[prost(uint64, tag = "3")]
             CommitPosition(u64),
             #[prost(message, tag = "4")]
-            NoPosition(super::Empty),
+            NoPosition(super::super::super::shared::Empty),
         }
         #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum Count {
             #[prost(int32, tag = "5")]
             RetryCount(i32),
             #[prost(message, tag = "6")]
-            Empty(super::Empty),
+            NoRetryCount(super::super::super::shared::Empty),
         }
     }
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
+    pub struct SubscriptionConfirmation {
+        #[prost(string, tag = "1")]
+        pub subscription_id: std::string::String,
+    }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Content {
         #[prost(message, tag = "1")]
         Event(ReadEvent),
         #[prost(message, tag = "2")]
-        Empty(Empty),
+        SubscriptionConfirmation(SubscriptionConfirmation),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -258,27 +259,6 @@ pub mod delete_req {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteResp {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Uuid {
-    #[prost(oneof = "uuid::Value", tags = "1, 2")]
-    pub value: ::std::option::Option<uuid::Value>,
-}
-pub mod uuid {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Structured {
-        #[prost(int64, tag = "1")]
-        pub most_significant_bits: i64,
-        #[prost(int64, tag = "2")]
-        pub least_significant_bits: i64,
-    }
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Value {
-        #[prost(message, tag = "1")]
-        Structured(Structured),
-        #[prost(string, tag = "2")]
-        String(std::string::String),
-    }
-}
 #[doc = r" Generated client implementations."]
 pub mod persistent_subscriptions_client {
     #![allow(unused_variables, dead_code, missing_docs)]
@@ -323,8 +303,9 @@ pub mod persistent_subscriptions_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/persistent.PersistentSubscriptions/Create");
+            let path = http::uri::PathAndQuery::from_static(
+                "/event_store.client.persistent_subscriptions.PersistentSubscriptions/Create",
+            );
             self.inner.unary(request.into_request(), path, codec).await
         }
         pub async fn update(
@@ -338,8 +319,9 @@ pub mod persistent_subscriptions_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/persistent.PersistentSubscriptions/Update");
+            let path = http::uri::PathAndQuery::from_static(
+                "/event_store.client.persistent_subscriptions.PersistentSubscriptions/Update",
+            );
             self.inner.unary(request.into_request(), path, codec).await
         }
         pub async fn delete(
@@ -353,8 +335,9 @@ pub mod persistent_subscriptions_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/persistent.PersistentSubscriptions/Delete");
+            let path = http::uri::PathAndQuery::from_static(
+                "/event_store.client.persistent_subscriptions.PersistentSubscriptions/Delete",
+            );
             self.inner.unary(request.into_request(), path, codec).await
         }
         pub async fn read(
@@ -369,8 +352,9 @@ pub mod persistent_subscriptions_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/persistent.PersistentSubscriptions/Read");
+            let path = http::uri::PathAndQuery::from_static(
+                "/event_store.client.persistent_subscriptions.PersistentSubscriptions/Read",
+            );
             self.inner
                 .streaming(request.into_streaming_request(), path, codec)
                 .await

@@ -1,3 +1,1 @@
-#![allow(clippy::large_enum_variant)]
-pub mod persistent;
-pub mod streams;
+pub mod event_store;

@@ -33,9 +33,9 @@ pub mod read_req {
                 #[prost(uint64, tag = "2")]
                 Revision(u64),
                 #[prost(message, tag = "3")]
-                Start(super::super::Empty),
+                Start(super::super::super::super::shared::Empty),
                 #[prost(message, tag = "4")]
-                End(super::super::Empty),
+                End(super::super::super::super::shared::Empty),
             }
         }
         #[derive(Clone, PartialEq, ::prost::Message)]
@@ -49,9 +49,9 @@ pub mod read_req {
                 #[prost(message, tag = "1")]
                 Position(super::Position),
                 #[prost(message, tag = "2")]
-                Start(super::super::Empty),
+                Start(super::super::super::super::shared::Empty),
                 #[prost(message, tag = "3")]
-                End(super::super::Empty),
+                End(super::super::super::super::shared::Empty),
             }
         }
         #[derive(Clone, PartialEq, ::prost::Message)]
@@ -65,6 +65,8 @@ pub mod read_req {
         }
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct FilterOptions {
+            #[prost(uint32, tag = "5")]
+            pub checkpoint_interval_multiplier: u32,
             #[prost(oneof = "filter_options::Filter", tags = "1, 2")]
             pub filter: ::std::option::Option<filter_options::Filter>,
             #[prost(oneof = "filter_options::Window", tags = "3, 4")]
@@ -87,10 +89,10 @@ pub mod read_req {
             }
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Window {
-                #[prost(int32, tag = "3")]
-                Max(i32),
+                #[prost(uint32, tag = "3")]
+                Max(u32),
                 #[prost(message, tag = "4")]
-                Count(super::super::Empty),
+                Count(super::super::super::super::shared::Empty),
             }
         }
         #[derive(Clone, PartialEq, ::prost::Message)]
@@ -102,9 +104,9 @@ pub mod read_req {
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Content {
                 #[prost(message, tag = "1")]
-                Structured(super::super::Empty),
+                Structured(super::super::super::super::shared::Empty),
                 #[prost(message, tag = "2")]
-                String(super::super::Empty),
+                String(super::super::super::super::shared::Empty),
             }
         }
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -132,16 +134,14 @@ pub mod read_req {
             #[prost(message, tag = "7")]
             Filter(FilterOptions),
             #[prost(message, tag = "8")]
-            NoFilter(super::Empty),
+            NoFilter(super::super::super::shared::Empty),
         }
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadResp {
-    #[prost(message, optional, tag = "1")]
-    pub event: ::std::option::Option<read_resp::ReadEvent>,
+    #[prost(oneof = "read_resp::Content", tags = "1, 2, 3")]
+    pub content: ::std::option::Option<read_resp::Content>,
 }
 pub mod read_resp {
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -157,7 +157,7 @@ pub mod read_resp {
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct RecordedEvent {
             #[prost(message, optional, tag = "1")]
-            pub id: ::std::option::Option<super::super::Uuid>,
+            pub id: ::std::option::Option<super::super::super::shared::Uuid>,
             #[prost(string, tag = "2")]
             pub stream_name: std::string::String,
             #[prost(uint64, tag = "3")]
@@ -178,11 +178,30 @@ pub mod read_resp {
             #[prost(uint64, tag = "3")]
             CommitPosition(u64),
             #[prost(message, tag = "4")]
-            NoPosition(super::Empty),
+            NoPosition(super::super::super::shared::Empty),
         }
     }
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
+    pub struct SubscriptionConfirmation {
+        #[prost(string, tag = "1")]
+        pub subscription_id: std::string::String,
+    }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Checkpoint {
+        #[prost(uint64, tag = "1")]
+        pub commit_position: u64,
+        #[prost(uint64, tag = "2")]
+        pub prepare_position: u64,
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Content {
+        #[prost(message, tag = "1")]
+        Event(ReadEvent),
+        #[prost(message, tag = "2")]
+        Confirmation(SubscriptionConfirmation),
+        #[prost(message, tag = "3")]
+        Checkpoint(Checkpoint),
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AppendReq {
@@ -203,17 +222,17 @@ pub mod append_req {
             #[prost(uint64, tag = "2")]
             Revision(u64),
             #[prost(message, tag = "3")]
-            NoStream(super::Empty),
+            NoStream(super::super::super::shared::Empty),
             #[prost(message, tag = "4")]
-            Any(super::Empty),
+            Any(super::super::super::shared::Empty),
             #[prost(message, tag = "5")]
-            StreamExists(super::Empty),
+            StreamExists(super::super::super::shared::Empty),
         }
     }
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ProposedMessage {
         #[prost(message, optional, tag = "1")]
-        pub id: ::std::option::Option<super::Uuid>,
+        pub id: ::std::option::Option<super::super::shared::Uuid>,
         #[prost(map = "string, string", tag = "2")]
         pub metadata: ::std::collections::HashMap<std::string::String, std::string::String>,
         #[prost(bytes, tag = "3")]
@@ -221,8 +240,6 @@ pub mod append_req {
         #[prost(bytes, tag = "4")]
         pub data: std::vec::Vec<u8>,
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Content {
         #[prost(message, tag = "1")]
@@ -246,21 +263,19 @@ pub mod append_resp {
         #[prost(uint64, tag = "2")]
         pub prepare_position: u64,
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum CurrentRevisionOption {
         #[prost(uint64, tag = "1")]
         CurrentRevision(u64),
         #[prost(message, tag = "2")]
-        NoStream(Empty),
+        NoStream(super::super::shared::Empty),
     }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum PositionOption {
         #[prost(message, tag = "3")]
         Position(Position),
         #[prost(message, tag = "4")]
-        Empty(Empty),
+        NoPosition(super::super::shared::Empty),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -282,15 +297,13 @@ pub mod delete_req {
             #[prost(uint64, tag = "2")]
             Revision(u64),
             #[prost(message, tag = "3")]
-            NoStream(super::Empty),
+            NoStream(super::super::super::shared::Empty),
             #[prost(message, tag = "4")]
-            Any(super::Empty),
+            Any(super::super::super::shared::Empty),
             #[prost(message, tag = "5")]
-            StreamExists(super::Empty),
+            StreamExists(super::super::super::shared::Empty),
         }
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteResp {
@@ -305,14 +318,12 @@ pub mod delete_resp {
         #[prost(uint64, tag = "2")]
         pub prepare_position: u64,
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum PositionOption {
         #[prost(message, tag = "1")]
         Position(Position),
         #[prost(message, tag = "2")]
-        Empty(Empty),
+        NoPosition(super::super::shared::Empty),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -334,15 +345,13 @@ pub mod tombstone_req {
             #[prost(uint64, tag = "2")]
             Revision(u64),
             #[prost(message, tag = "3")]
-            NoStream(super::Empty),
+            NoStream(super::super::super::shared::Empty),
             #[prost(message, tag = "4")]
-            Any(super::Empty),
+            Any(super::super::super::shared::Empty),
             #[prost(message, tag = "5")]
-            StreamExists(super::Empty),
+            StreamExists(super::super::super::shared::Empty),
         }
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TombstoneResp {
@@ -357,35 +366,12 @@ pub mod tombstone_resp {
         #[prost(uint64, tag = "2")]
         pub prepare_position: u64,
     }
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Empty {}
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum PositionOption {
         #[prost(message, tag = "1")]
         Position(Position),
         #[prost(message, tag = "2")]
-        Empty(Empty),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Uuid {
-    #[prost(oneof = "uuid::Value", tags = "1, 2")]
-    pub value: ::std::option::Option<uuid::Value>,
-}
-pub mod uuid {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Structured {
-        #[prost(int64, tag = "1")]
-        pub most_significant_bits: i64,
-        #[prost(int64, tag = "2")]
-        pub least_significant_bits: i64,
-    }
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Value {
-        #[prost(message, tag = "1")]
-        Structured(Structured),
-        #[prost(string, tag = "2")]
-        String(std::string::String),
+        NoPosition(super::super::shared::Empty),
     }
 }
 #[doc = r" Generated client implementations."]
@@ -433,7 +419,8 @@ pub mod streams_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/streams.Streams/Read");
+            let path =
+                http::uri::PathAndQuery::from_static("/event_store.client.streams.Streams/Read");
             self.inner
                 .server_streaming(request.into_request(), path, codec)
                 .await
@@ -449,7 +436,8 @@ pub mod streams_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/streams.Streams/Append");
+            let path =
+                http::uri::PathAndQuery::from_static("/event_store.client.streams.Streams/Append");
             self.inner
                 .client_streaming(request.into_streaming_request(), path, codec)
                 .await
@@ -465,7 +453,8 @@ pub mod streams_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/streams.Streams/Delete");
+            let path =
+                http::uri::PathAndQuery::from_static("/event_store.client.streams.Streams/Delete");
             self.inner.unary(request.into_request(), path, codec).await
         }
         pub async fn tombstone(
@@ -479,7 +468,9 @@ pub mod streams_client {
                 )
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/streams.Streams/Tombstone");
+            let path = http::uri::PathAndQuery::from_static(
+                "/event_store.client.streams.Streams/Tombstone",
+            );
             self.inner.unary(request.into_request(), path, codec).await
         }
     }

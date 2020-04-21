@@ -74,8 +74,8 @@ pub enum Retry {
 }
 
 impl Retry {
-    pub(crate) fn to_usize(&self) -> usize {
-        match *self {
+    pub(crate) fn to_usize(self) -> usize {
+        match self {
             Retry::Undefinately => usize::max_value(),
             Retry::Only(x) => x,
         }
