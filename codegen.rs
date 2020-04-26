@@ -28,11 +28,12 @@ pub mod es6 {
         let files = [
             "protos/es6/persistent.proto",
             "protos/es6/streams.proto",
+            "protos/es6/shared.proto",
         ];
 
         tonic_build::configure()
             .build_server(false)
-            .out_dir("src/es6/grpc")
+            .out_dir("src/es6/grpc/event_store/client")
             .compile(
                 &files,
                 &["protos/es6"]

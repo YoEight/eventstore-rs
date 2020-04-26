@@ -1,6 +1,8 @@
 0.7.5
 =====
 * Make connection timeout period configurable.
+* Don't panic on second call if server is off.
+* Migrate gRPC interface to ES6 preview 3 version.
 
 0.7.4
 =====

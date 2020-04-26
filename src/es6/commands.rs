@@ -1,10 +1,10 @@
 //! Commands this client supports.
 use std::collections::HashMap;
 
-use futures::stream;
 use futures::Stream;
+use futures::{stream, TryStreamExt};
 
-use crate::es6::grpc::{persistent, streams};
+use crate::es6::grpc::event_store::client::{persistent, shared, streams};
 use crate::es6::types::{
     EventData, ExpectedVersion, PersistentSubscriptionSettings, Position, RecordedEvent,
     ResolvedEvent, Revision, WriteResult,
@@ -12,6 +12,7 @@ use crate::es6::types::{
 use crate::types;
 
 use persistent::persistent_subscriptions_client::PersistentSubscriptionsClient;
+use shared::{Empty, Uuid};
 use std::marker::Unpin;
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
@@ -20,8 +21,6 @@ use tonic::transport::Channel;
 use tonic::Request;
 
 fn convert_expected_version(version: ExpectedVersion) -> ExpectedStreamRevision {
-    use streams::append_req::Empty;
-
     match version {
         ExpectedVersion::Any => ExpectedStreamRevision::Any(Empty {}),
         ExpectedVersion::StreamExists => ExpectedStreamRevision::StreamExists(Empty {}),
@@ -30,7 +29,7 @@ fn convert_expected_version(version: ExpectedVersion) -> ExpectedStreamRevision 
     }
 }
 
-fn raw_uuid_to_uuid(src: streams::Uuid) -> uuid::Uuid {
+fn raw_uuid_to_uuid(src: Uuid) -> uuid::Uuid {
     use byteorder::{BigEndian, ByteOrder};
 
     let value = src
@@ -38,7 +37,7 @@ fn raw_uuid_to_uuid(src: streams::Uuid) -> uuid::Uuid {
         .expect("We expect Uuid value to be defined for now");
 
     match value {
-        streams::uuid::Value::Structured(s) => {
+        shared::uuid::Value::Structured(s) => {
             let mut buf = vec![];
 
             BigEndian::write_i64(&mut buf, s.most_significant_bits);
@@ -48,13 +47,13 @@ fn raw_uuid_to_uuid(src: streams::Uuid) -> uuid::Uuid {
                 .expect("We expect a valid UUID out of byte buffer")
         }
 
-        streams::uuid::Value::String(s) => s
+        shared::uuid::Value::String(s) => s
             .parse()
             .expect("We expect a valid UUID out of this String"),
     }
 }
 
-fn raw_persistent_uuid_to_uuid(src: persistent::Uuid) -> uuid::Uuid {
+fn raw_persistent_uuid_to_uuid(src: Uuid) -> uuid::Uuid {
     use byteorder::{BigEndian, ByteOrder};
 
     let value = src
@@ -62,7 +61,7 @@ fn raw_persistent_uuid_to_uuid(src: persistent::Uuid) -> uuid::Uuid {
         .expect("We expect Uuid value to be defined for now");
 
     match value {
-        persistent::uuid::Value::Structured(s) => {
+        shared::uuid::Value::Structured(s) => {
             let mut buf = vec![];
 
             BigEndian::write_i64(&mut buf, s.most_significant_bits);
@@ -72,7 +71,7 @@ fn raw_persistent_uuid_to_uuid(src: persistent::Uuid) -> uuid::Uuid {
                 .expect("We expect a valid UUID out of byte buffer")
         }
 
-        persistent::uuid::Value::String(s) => s
+        shared::uuid::Value::String(s) => s
             .parse()
             .expect("We expect a valid UUID out of this String"),
     }
@@ -82,16 +81,22 @@ fn convert_event_data(event: EventData) -> streams::AppendReq {
     use streams::append_req;
 
     let id = event.id_opt.unwrap_or_else(uuid::Uuid::new_v4);
-    let id = streams::uuid::Value::String(id.to_string());
-    let id = streams::Uuid { value: Some(id) };
+    let id = shared::uuid::Value::String(id.to_string());
+    let id = Uuid { value: Some(id) };
     let is_json = event.payload.is_json();
     let mut metadata: HashMap<String, String> = HashMap::new();
     let custom_metadata = event
         .custom_metadata
         .map_or_else(|| vec![], |p| (&*p.into_inner()).into());
 
+    let content_type = if is_json {
+        "application/json"
+    } else {
+        "application/octet-stream"
+    };
+
     metadata.insert("type".into(), event.event_type);
-    metadata.insert("is-json".into(), format!("{}", is_json));
+    metadata.insert("content-type".into(), content_type.into());
 
     let msg = append_req::ProposedMessage {
         id: Some(id),
@@ -293,7 +298,7 @@ fn configure_auth_req<A>(req: &mut Request<A>, creds_opt: Option<types::Credenti
 
 pub struct FilterConf {
     based_on_stream: bool,
-    max: Option<i32>,
+    max: Option<u32>,
     regex: Option<String>,
     prefixes: Vec<String>,
 }
@@ -315,7 +320,7 @@ impl FilterConf {
         temp
     }
 
-    pub fn max(self, max: i32) -> Self {
+    pub fn max(self, max: u32) -> Self {
         FilterConf {
             max: Some(max),
             ..self
@@ -337,7 +342,6 @@ impl FilterConf {
     pub fn into_proto(self) -> streams::read_req::options::FilterOptions {
         use options::filter_options::{Expression, Filter, Window};
         use streams::read_req::options::{self, FilterOptions};
-        use streams::read_req::Empty;
 
         let window = match self.max {
             Some(max) => Window::Max(max),
@@ -358,6 +362,7 @@ impl FilterConf {
         FilterOptions {
             filter: Some(filter),
             window: Some(window),
+            checkpoint_interval_multiplier: 1,
         }
     }
 }
@@ -436,7 +441,7 @@ impl WriteEvents {
                 prepare: pos.prepare_position,
             },
 
-            PositionOption::Empty(_) => Position::start(),
+            PositionOption::NoPosition(_) => Position::start(),
         };
 
         let write_result = WriteResult {
@@ -561,10 +566,9 @@ impl ReadStreamEvents {
         Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
         tonic::Status,
     > {
-        use futures::stream::TryStreamExt;
         use streams::read_req::options::stream_options::RevisionOption;
         use streams::read_req::options::{self, StreamOption, StreamOptions};
-        use streams::read_req::{Empty, Options};
+        use streams::read_req::Options;
 
         let read_direction = match self.direction {
             types::ReadDirection::Forward => 0,
@@ -609,9 +613,14 @@ impl ReadStreamEvents {
         configure_auth_req(&mut req, self.creds);
 
         let stream = self.client.read(req).await?.into_inner();
+        let stream = stream.map_ok(|resp| {
+            let read_event = match resp.content.unwrap() {
+                streams::read_resp::Content::Event(event) => event,
+                _ => unreachable!(),
+            };
 
-        // TODO - I'm not so sure about that unwrap here.
-        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+            convert_proto_read_event(read_event)
+        });
 
         Ok(Box::new(stream))
     }
@@ -722,10 +731,9 @@ impl ReadAllEvents {
         mut self,
         count: u64,
     ) -> Result<Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>>>, tonic::Status> {
-        use futures::stream::TryStreamExt;
         use streams::read_req::options::all_options::AllOption;
         use streams::read_req::options::{self, AllOptions, StreamOption};
-        use streams::read_req::{Empty, Options};
+        use streams::read_req::Options;
 
         let read_direction = match self.direction {
             types::ReadDirection::Forward => 0,
@@ -777,9 +785,14 @@ impl ReadAllEvents {
         configure_auth_req(&mut req, self.creds);
 
         let stream = self.client.read(req).await?.into_inner();
+        let stream = stream.map_ok(|resp| {
+            let read_event = match resp.content.unwrap() {
+                streams::read_resp::Content::Event(event) => event,
+                _ => unreachable!(),
+            };
 
-        // TODO - I'm not so sure about that unwrap here.
-        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+            convert_proto_read_event(read_event)
+        });
 
         Ok(Box::new(stream))
     }
@@ -854,7 +867,7 @@ impl DeleteStream {
     pub async fn execute(mut self) -> Result<Option<Position>, tonic::Status> {
         if self.hard_delete {
             use streams::tombstone_req::options::ExpectedStreamRevision;
-            use streams::tombstone_req::{Empty, Options};
+            use streams::tombstone_req::Options;
             use streams::tombstone_resp::PositionOption;
 
             let expected_stream_revision = match self.version {
@@ -890,14 +903,14 @@ impl DeleteStream {
                         Ok(Some(pos))
                     }
 
-                    PositionOption::Empty(_) => Ok(None),
+                    PositionOption::NoPosition(_) => Ok(None),
                 }
             } else {
                 Ok(None)
             }
         } else {
             use streams::delete_req::options::ExpectedStreamRevision;
-            use streams::delete_req::{Empty, Options};
+            use streams::delete_req::Options;
             use streams::delete_resp::PositionOption;
 
             let expected_stream_revision = match self.version {
@@ -933,7 +946,7 @@ impl DeleteStream {
                         Ok(Some(pos))
                     }
 
-                    PositionOption::Empty(_) => Ok(None),
+                    PositionOption::NoPosition(_) => Ok(None),
                 }
             } else {
                 Ok(None)
@@ -1034,10 +1047,10 @@ impl RegularCatchupSubscribe {
         Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
         tonic::Status,
     > {
-        use futures::stream::TryStreamExt;
+        use futures::future;
         use streams::read_req::options::stream_options::RevisionOption;
         use streams::read_req::options::{self, StreamOption, StreamOptions, SubscriptionOptions};
-        use streams::read_req::{Empty, Options};
+        use streams::read_req::Options;
 
         let read_direction = 0; // <- Going forward.
 
@@ -1078,9 +1091,15 @@ impl RegularCatchupSubscribe {
         configure_auth_req(&mut req, self.creds_opt);
 
         let stream = self.client.read(req).await?.into_inner();
-
-        // TODO - I'm not so sure about that unwrap here.
-        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+        let stream = stream.try_filter_map(|resp| {
+            match resp.content.unwrap() {
+                streams::read_resp::Content::Event(event) => {
+                    future::ok(Some(convert_proto_read_event(event)))
+                }
+                // TODO - We might end exposing when the subscription is confirmed by the server.
+                _ => future::ok(None),
+            }
+        });
 
         Ok(Box::new(stream))
     }
@@ -1153,10 +1172,10 @@ impl AllCatchupSubscribe {
         Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
         tonic::Status,
     > {
-        use futures::stream::TryStreamExt;
+        use futures::future;
         use streams::read_req::options::all_options::AllOption;
         use streams::read_req::options::{self, AllOptions, StreamOption, SubscriptionOptions};
-        use streams::read_req::{Empty, Options};
+        use streams::read_req::Options;
 
         let read_direction = 0; // <- Going forward.
 
@@ -1204,9 +1223,15 @@ impl AllCatchupSubscribe {
         configure_auth_req(&mut req, self.creds_opt);
 
         let stream = self.client.read(req).await?.into_inner();
-
-        // TODO - I'm not so sure about that unwrap here.
-        let stream = stream.map_ok(|resp| convert_proto_read_event(resp.event.unwrap()));
+        let stream = stream.try_filter_map(|resp| {
+            match resp.content.unwrap() {
+                streams::read_resp::Content::Event(event) => {
+                    future::ok(Some(convert_proto_read_event(event)))
+                }
+                // TODO - We might end exposing when the subscription is confirmed by the server.
+                _ => future::ok(None),
+            }
+        });
 
         Ok(Box::new(stream))
     }
@@ -1451,9 +1476,8 @@ impl ConnectToPersistentSubscription {
     pub async fn execute(mut self) -> Result<(SubscriptionRead, SubscriptionWrite), tonic::Status> {
         use futures::channel::mpsc;
         use futures::sink::SinkExt;
-        use futures::stream::TryStreamExt;
         use persistent::read_req::options::{self, UuidOption};
-        use persistent::read_req::{self, Empty, Options};
+        use persistent::read_req::{self, Options};
         use persistent::read_resp;
         use persistent::ReadReq;
 
@@ -1487,8 +1511,7 @@ impl ConnectToPersistentSubscription {
                 .expect("Why response content wouldn't be defined?")
             {
                 read_resp::Content::Event(evt) => Some(convert_persistent_proto_read_event(evt)),
-
-                read_resp::Content::Empty(_) => None,
+                _ => None,
             };
 
             futures::future::ready(Ok(ret))
@@ -1509,14 +1532,12 @@ pub struct SubscriptionRead {
 
 impl SubscriptionRead {
     pub async fn try_next(&mut self) -> Result<Option<ResolvedEvent>, tonic::Status> {
-        use futures::stream::TryStreamExt;
-
         self.inner.try_next().await
     }
 }
-fn to_proto_uuid(id: uuid::Uuid) -> persistent::Uuid {
-    persistent::Uuid {
-        value: Some(persistent::uuid::Value::String(format!("{}", id))),
+fn to_proto_uuid(id: uuid::Uuid) -> Uuid {
+    Uuid {
+        value: Some(shared::uuid::Value::String(format!("{}", id))),
     }
 }
 

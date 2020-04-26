@@ -944,8 +944,7 @@ pub mod es6 {
     }
 
     #[test]
-    #[should_panic]
-    // Expect to panic because the lastest ES6 preview isn't updated on dockerhub yet.
+    #[ignore]
     fn es6_preview_test() {
         block_on(async {
             use std::env;
@@ -961,14 +960,30 @@ pub mod es6 {
                 .single_node_connection(uri)
                 .await?;
 
+            debug!("Before test_write_events…");
             test_write_events(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_read_stream_events…");
             test_read_stream_events(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_delete_stream…");
             test_delete_stream(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_subscription…");
             test_subscription(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_create_persistent_subscription…");
             test_create_persistent_subscription(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_update_persistent_subscription…");
             test_update_persistent_subscription(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_delete_persistent_subscription…");
             test_delete_persistent_subscription(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_persistent_subscription…");
             test_persistent_subscription(&connection).await?;
+            debug!("Complete");
 
             Ok(()) as Result<(), Box<dyn std::error::Error>>
         })
