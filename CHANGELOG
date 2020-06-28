@@ -1,3 +1,7 @@
+0.7.6
+=====
+* Implement secure connection for the TCP API.
+
 0.7.5
 =====
 * Make connection timeout period configurable.

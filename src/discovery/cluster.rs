@@ -14,6 +14,7 @@ pub(crate) async fn discover(
     mut consumer: mpsc::Receiver<Option<Endpoint>>,
     sender: mpsc::Sender<Msg>,
     settings: GossipSeedClusterSettings,
+    secure_mode: bool,
 ) {
     let preference = NodePreference::Random;
     let client = reqwest::Client::new();
@@ -101,7 +102,17 @@ pub(crate) async fn discover(
             .await;
 
             if let Some(node) = result_opt {
-                let _ = sender.clone().send(Msg::Establish(node.tcp_endpoint)).await;
+                let _ = if secure_mode {
+                    sender.clone().send(Msg::Establish(node.tcp_endpoint)).await
+                } else {
+                    sender
+                        .clone()
+                        .send(Msg::Establish(
+                            node.secure_tcp_endpoint
+                                .expect("We expect secure_tcp_endpoint to be defined"),
+                        ))
+                        .await
+                };
 
                 break;
             }

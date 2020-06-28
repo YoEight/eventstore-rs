@@ -93,6 +93,21 @@ impl ConnectionBuilder {
         self
     }
 
+    /// Maximum delay to physically connect to a node. This property differs from
+    /// `connection_timeout` by referencing the delay to have a connected socket to a node, whereas
+    /// `connection_timeout` refers to the whole connection, validation included.
+    pub fn socket_connection_timeout(mut self, period: Duration) -> Self {
+        self.settings.socket_connection_timeout = period;
+        self
+    }
+
+    #[cfg(feature = "tls")]
+    /// Enable secure connection with the server/cluster.
+    pub fn enable_secure_connection(mut self, config: crate::SecureSettings) -> Self {
+        self.settings.tls_client_config = Some(config);
+        self
+    }
+
     /// Creates a connection to a single EventStore node. The connection will
     /// start right away.
     pub async fn single_node_connection(self, addr: SocketAddr) -> Connection {
@@ -200,16 +215,15 @@ impl Connection {
     }
 
     fn make(settings: Settings, discovery: DiscoveryProcess) -> Connection {
-        let sender = Self::initialize(&settings, discovery);
+        let sender = Self::initialize(settings, discovery);
 
         Connection { sender }
     }
 
-    fn initialize(settings: &Settings, discovery: DiscoveryProcess) -> Sender<Msg> {
+    fn initialize(settings: Settings, discovery: DiscoveryProcess) -> Sender<Msg> {
         let (sender, recv) = channel(DEFAULT_BOX_SIZE);
         let (start_discovery, run_discovery) = futures::channel::mpsc::channel(DEFAULT_BOX_SIZE);
         let cloned_sender = sender.clone();
-        let driver = Driver::new(&settings, start_discovery, sender.clone());
 
         match discovery {
             DiscoveryProcess::Static(addr) => {
@@ -220,11 +234,29 @@ impl Connection {
             }
 
             DiscoveryProcess::ClusterThroughGossip(setts) => {
-                let action = discovery::cluster::discover(run_discovery, sender.clone(), setts);
+                #[cfg(feature = "tls")]
+                {
+                    let secure_mode = settings.tls_client_config.is_some();
+                    let action = discovery::cluster::discover(
+                        run_discovery,
+                        sender.clone(),
+                        setts,
+                        secure_mode,
+                    );
 
-                tokio::spawn(action);
+                    tokio::spawn(action);
+                }
+                #[cfg(not(feature = "tls"))]
+                {
+                    let action =
+                        discovery::cluster::discover(run_discovery, sender.clone(), setts, false);
+
+                    tokio::spawn(action);
+                }
             }
         };
+
+        let driver = Driver::new(settings, start_discovery, sender.clone());
 
         tokio::spawn(connection_state_machine(cloned_sender, recv, driver));
         sender

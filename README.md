@@ -11,7 +11,7 @@ Rust [EventStore] TCP Client.
 
 ## State of implemented features
 
-- [x] Can connect to GetEventStore  >=4.* servers.
+- [x] Can connect to GetEventStore  >=4.* servers (for version 20.6 and above enable the `es6` feature flag and use the `es6` module).
 - [x] Connection health tracking.
 - [x] Operation timeout detection and retry.
 - [x] Write events.
@@ -23,7 +23,7 @@ Rust [EventStore] TCP Client.
 - [x] Catchup Subscriptions.
 - [x] Persistent Subscriptions.
 - [x] Support connection to server clusters. (through gossip, using custom DNS server is still TODO)
-- [ ] Support SSL connection.
+- [x] Support SSL connection.
 
 # Example
 
