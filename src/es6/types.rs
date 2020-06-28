@@ -32,6 +32,30 @@ pub enum ExpectedVersion {
     Exact(u64),
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+/// Actual revision of a stream.
+pub enum CurrentRevision {
+    /// The last event's number.
+    Current(u64),
+
+    /// The stream doesn't exist.
+    NoStream,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+/// Expected revision before a write occurs.
+pub enum ExpectedRevision {
+    /// States that the last event written to the stream should have an event number matching your
+    /// expected value.
+    Expected(u64),
+
+    /// You expected that write should not conflict with anything and should always succeed.
+    Any,
+
+    /// You expected the stream should exist.
+    StreamExists,
+}
+
 /// Holds data of event about to be sent to the server.
 pub struct EventData {
     pub(crate) event_type: String,
@@ -304,3 +328,21 @@ impl Default for PersistentSubscriptionSettings {
         PersistentSubscriptionSettings::default()
     }
 }
+
+#[derive(Clone, Debug, Copy, Eq, PartialEq)]
+pub struct WrongExpectedVersion {
+    pub current: CurrentRevision,
+    pub expected: ExpectedRevision,
+}
+
+impl std::fmt::Display for WrongExpectedVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "WrongExpectedVersion: expected: {:?}, got: {:?}",
+            self.expected, self.current
+        )
+    }
+}
+
+impl std::error::Error for WrongExpectedVersion {}

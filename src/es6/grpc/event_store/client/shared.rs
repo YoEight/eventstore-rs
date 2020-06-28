@@ -21,3 +21,8 @@ pub mod uuid {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Empty {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StreamIdentifier {
+    #[prost(bytes, tag = "3")]
+    pub stream_name: std::vec::Vec<u8>,
+}

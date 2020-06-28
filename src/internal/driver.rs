@@ -202,7 +202,7 @@ impl Driver {
         let mut sender = self.sender.clone();
 
         tokio::spawn(async move {
-            while let Some(_) = tick.next().await {
+            while tick.next().await.is_some() {
                 let _ = sender.send(Msg::Tick).await;
             }
         });
@@ -224,7 +224,11 @@ impl Driver {
     pub(crate) fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
             self.phase = Phase::Establishing;
-            self.candidate = Some(Connection::new(self.settings.clone(), self.sender.clone(), endpoint.addr));
+            self.candidate = Some(Connection::new(
+                self.settings.clone(),
+                self.sender.clone(),
+                endpoint.addr,
+            ));
             self.last_endpoint = Some(endpoint);
         }
     }

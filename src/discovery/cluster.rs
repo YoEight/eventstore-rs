@@ -3,7 +3,6 @@ use crate::types::{Endpoint, GossipSeed, GossipSeedClusterSettings, NodePreferen
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use rand;
 use rand::seq::SliceRandom;
 use std::iter::FromIterator;
 use std::net::{AddrParseError, SocketAddr};

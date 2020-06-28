@@ -37,13 +37,13 @@ jobs:
     - name: Run Tests
       run: RUST_BACKTRACE='1' RUST_LOG='eventstore=debug' cargo test
 
-  tests-preview:
-    name: Tests on ES 6 preview 3
+  tests-next:
+    name: Tests on 20.6.0 Stable
     needs: tests
     runs-on: ubuntu-18.04
     services:
       eventstore:
-        image: eventstore/eventstore:6.0.0-preview3-bionic
+        image: eventstore/eventstore:20.6.0-bionic
         env:
           EVENTSTORE_DEV: true
         ports:
@@ -51,11 +51,11 @@ jobs:
     steps:
       - uses: actions/checkout@v1
       - name: Run Tests
-        run: RUST_BACKTRACE='1' RUST_LOG='integration=debug' cargo test --all-features es6::es6_preview_test -- --exact --ignored
+        run: RUST_BACKTRACE='1' RUST_LOG='integration=debug' cargo test --all-features es6::es6_20_6_test -- --exact --ignored
       
   linting:
     name: Linting
-    needs: tests-preview
+    needs: tests-next
     runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@v1

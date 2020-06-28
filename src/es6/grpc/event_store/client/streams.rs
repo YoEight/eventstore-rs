@@ -22,8 +22,9 @@ pub mod read_req {
     pub mod options {
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct StreamOptions {
-            #[prost(string, tag = "1")]
-            pub stream_name: std::string::String,
+            #[prost(message, optional, tag = "1")]
+            pub stream_identifier:
+                ::std::option::Option<super::super::super::shared::StreamIdentifier>,
             #[prost(oneof = "stream_options::RevisionOption", tags = "2, 3, 4")]
             pub revision_option: ::std::option::Option<stream_options::RevisionOption>,
         }
@@ -83,7 +84,7 @@ pub mod read_req {
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Filter {
                 #[prost(message, tag = "1")]
-                StreamName(Expression),
+                StreamIdentifier(Expression),
                 #[prost(message, tag = "2")]
                 EventType(Expression),
             }
@@ -140,7 +141,7 @@ pub mod read_req {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadResp {
-    #[prost(oneof = "read_resp::Content", tags = "1, 2, 3")]
+    #[prost(oneof = "read_resp::Content", tags = "1, 2, 3, 4")]
     pub content: ::std::option::Option<read_resp::Content>,
 }
 pub mod read_resp {
@@ -158,8 +159,9 @@ pub mod read_resp {
         pub struct RecordedEvent {
             #[prost(message, optional, tag = "1")]
             pub id: ::std::option::Option<super::super::super::shared::Uuid>,
-            #[prost(string, tag = "2")]
-            pub stream_name: std::string::String,
+            #[prost(message, optional, tag = "2")]
+            pub stream_identifier:
+                ::std::option::Option<super::super::super::shared::StreamIdentifier>,
             #[prost(uint64, tag = "3")]
             pub stream_revision: u64,
             #[prost(uint64, tag = "4")]
@@ -193,6 +195,11 @@ pub mod read_resp {
         #[prost(uint64, tag = "2")]
         pub prepare_position: u64,
     }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct StreamNotFound {
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
+    }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Content {
         #[prost(message, tag = "1")]
@@ -201,6 +208,8 @@ pub mod read_resp {
         Confirmation(SubscriptionConfirmation),
         #[prost(message, tag = "3")]
         Checkpoint(Checkpoint),
+        #[prost(message, tag = "4")]
+        StreamNotFound(StreamNotFound),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -211,8 +220,8 @@ pub struct AppendReq {
 pub mod append_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(oneof = "options::ExpectedStreamRevision", tags = "2, 3, 4, 5")]
         pub expected_stream_revision: ::std::option::Option<options::ExpectedStreamRevision>,
     }
@@ -250,10 +259,8 @@ pub mod append_req {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AppendResp {
-    #[prost(oneof = "append_resp::CurrentRevisionOption", tags = "1, 2")]
-    pub current_revision_option: ::std::option::Option<append_resp::CurrentRevisionOption>,
-    #[prost(oneof = "append_resp::PositionOption", tags = "3, 4")]
-    pub position_option: ::std::option::Option<append_resp::PositionOption>,
+    #[prost(oneof = "append_resp::Result", tags = "1, 2")]
+    pub result: ::std::option::Option<append_resp::Result>,
 }
 pub mod append_resp {
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -263,19 +270,65 @@ pub mod append_resp {
         #[prost(uint64, tag = "2")]
         pub prepare_position: u64,
     }
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum CurrentRevisionOption {
-        #[prost(uint64, tag = "1")]
-        CurrentRevision(u64),
-        #[prost(message, tag = "2")]
-        NoStream(super::super::shared::Empty),
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Success {
+        #[prost(oneof = "success::CurrentRevisionOption", tags = "1, 2")]
+        pub current_revision_option: ::std::option::Option<success::CurrentRevisionOption>,
+        #[prost(oneof = "success::PositionOption", tags = "3, 4")]
+        pub position_option: ::std::option::Option<success::PositionOption>,
+    }
+    pub mod success {
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum CurrentRevisionOption {
+            #[prost(uint64, tag = "1")]
+            CurrentRevision(u64),
+            #[prost(message, tag = "2")]
+            NoStream(super::super::super::shared::Empty),
+        }
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum PositionOption {
+            #[prost(message, tag = "3")]
+            Position(super::Position),
+            #[prost(message, tag = "4")]
+            NoPosition(super::super::super::shared::Empty),
+        }
+    }
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct WrongExpectedVersion {
+        #[prost(oneof = "wrong_expected_version::CurrentRevisionOption", tags = "1, 2")]
+        pub current_revision_option:
+            ::std::option::Option<wrong_expected_version::CurrentRevisionOption>,
+        #[prost(
+            oneof = "wrong_expected_version::ExpectedRevisionOption",
+            tags = "3, 4, 5"
+        )]
+        pub expected_revision_option:
+            ::std::option::Option<wrong_expected_version::ExpectedRevisionOption>,
+    }
+    pub mod wrong_expected_version {
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum CurrentRevisionOption {
+            #[prost(uint64, tag = "1")]
+            CurrentRevision(u64),
+            #[prost(message, tag = "2")]
+            NoStream(super::super::super::shared::Empty),
+        }
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum ExpectedRevisionOption {
+            #[prost(uint64, tag = "3")]
+            ExpectedRevision(u64),
+            #[prost(message, tag = "4")]
+            Any(super::super::super::shared::Empty),
+            #[prost(message, tag = "5")]
+            StreamExists(super::super::super::shared::Empty),
+        }
     }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum PositionOption {
-        #[prost(message, tag = "3")]
-        Position(Position),
-        #[prost(message, tag = "4")]
-        NoPosition(super::super::shared::Empty),
+    pub enum Result {
+        #[prost(message, tag = "1")]
+        Success(Success),
+        #[prost(message, tag = "2")]
+        WrongExpectedVersion(WrongExpectedVersion),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -286,8 +339,8 @@ pub struct DeleteReq {
 pub mod delete_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(oneof = "options::ExpectedStreamRevision", tags = "2, 3, 4, 5")]
         pub expected_stream_revision: ::std::option::Option<options::ExpectedStreamRevision>,
     }
@@ -334,8 +387,8 @@ pub struct TombstoneReq {
 pub mod tombstone_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(oneof = "options::ExpectedStreamRevision", tags = "2, 3, 4, 5")]
         pub expected_stream_revision: ::std::option::Option<options::ExpectedStreamRevision>,
     }
@@ -479,6 +532,11 @@ pub mod streams_client {
             Self {
                 inner: self.inner.clone(),
             }
+        }
+    }
+    impl<T> std::fmt::Debug for StreamsClient<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "StreamsClient {{ ... }}")
         }
     }
 }

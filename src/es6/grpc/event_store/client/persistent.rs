@@ -6,8 +6,8 @@ pub struct ReadReq {
 pub mod read_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(string, tag = "2")]
         pub group_name: std::string::String,
         #[prost(int32, tag = "3")]
@@ -92,8 +92,9 @@ pub mod read_resp {
         pub struct RecordedEvent {
             #[prost(message, optional, tag = "1")]
             pub id: ::std::option::Option<super::super::super::shared::Uuid>,
-            #[prost(string, tag = "2")]
-            pub stream_name: std::string::String,
+            #[prost(message, optional, tag = "2")]
+            pub stream_identifier:
+                ::std::option::Option<super::super::super::shared::StreamIdentifier>,
             #[prost(uint64, tag = "3")]
             pub stream_revision: u64,
             #[prost(uint64, tag = "4")]
@@ -143,8 +144,8 @@ pub struct CreateReq {
 pub mod create_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(string, tag = "2")]
         pub group_name: std::string::String,
         #[prost(message, optional, tag = "3")]
@@ -197,8 +198,8 @@ pub struct UpdateReq {
 pub mod update_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(string, tag = "2")]
         pub group_name: std::string::String,
         #[prost(message, optional, tag = "3")]
@@ -251,8 +252,8 @@ pub struct DeleteReq {
 pub mod delete_req {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Options {
-        #[prost(string, tag = "1")]
-        pub stream_name: std::string::String,
+        #[prost(message, optional, tag = "1")]
+        pub stream_identifier: ::std::option::Option<super::super::shared::StreamIdentifier>,
         #[prost(string, tag = "2")]
         pub group_name: std::string::String,
     }
@@ -365,6 +366,11 @@ pub mod persistent_subscriptions_client {
             Self {
                 inner: self.inner.clone(),
             }
+        }
+    }
+    impl<T> std::fmt::Debug for PersistentSubscriptionsClient<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "PersistentSubscriptionsClient {{ ... }}")
         }
     }
 }

@@ -6,13 +6,13 @@ use futures::{stream, TryStreamExt};
 
 use crate::es6::grpc::event_store::client::{persistent, shared, streams};
 use crate::es6::types::{
-    EventData, ExpectedVersion, PersistentSubscriptionSettings, Position, RecordedEvent,
-    ResolvedEvent, Revision, WriteResult,
+    EventData, ExpectedRevision, ExpectedVersion, PersistentSubscriptionSettings, Position,
+    RecordedEvent, ResolvedEvent, Revision, WriteResult, WrongExpectedVersion,
 };
 use crate::types;
 
 use persistent::persistent_subscriptions_client::PersistentSubscriptionsClient;
-use shared::{Empty, Uuid};
+use shared::{Empty, StreamIdentifier, Uuid};
 use std::marker::Unpin;
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
@@ -87,7 +87,7 @@ fn convert_event_data(event: EventData) -> streams::AppendReq {
     let mut metadata: HashMap<String, String> = HashMap::new();
     let custom_metadata = event
         .custom_metadata
-        .map_or_else(|| vec![], |p| (&*p.into_inner()).into());
+        .map_or_else(Vec::new, |p| (&*p.into_inner()).into());
 
     let content_type = if is_json {
         "application/json"
@@ -141,9 +141,16 @@ fn convert_proto_recorded_event(
         false
     };
 
+    let stream_id = String::from_utf8(
+        event
+            .stream_identifier
+            .expect("stream_identifier is always defined")
+            .stream_name,
+    )
+    .expect("It's always UTF-8");
     RecordedEvent {
         id,
-        stream_id: event.stream_name,
+        stream_id,
         revision: event.stream_revision,
         position,
         event_type,
@@ -182,9 +189,17 @@ fn convert_persistent_proto_recorded_event(
         false
     };
 
+    let stream_id = String::from_utf8(
+        event
+            .stream_identifier
+            .expect("stream_identifier is always defined")
+            .stream_name,
+    )
+    .expect("string is UTF-8 valid");
+
     RecordedEvent {
         id,
-        stream_id: event.stream_name,
+        stream_id,
         revision: event.stream_revision,
         position,
         event_type,
@@ -354,7 +369,7 @@ impl FilterConf {
         };
 
         let filter = if self.based_on_stream {
-            Filter::StreamName(expr)
+            Filter::StreamIdentifier(expr)
         } else {
             Filter::EventType(expr)
         };
@@ -404,17 +419,22 @@ impl WriteEvents {
     }
 
     /// Sends asynchronously the write command to the server.
-    pub async fn send<S>(mut self, stream: S) -> Result<WriteResult, tonic::Status>
+    pub async fn send<S>(
+        mut self,
+        stream: S,
+    ) -> Result<Result<WriteResult, WrongExpectedVersion>, tonic::Status>
     where
         S: Stream<Item = EventData> + Send + Sync + 'static,
     {
-        use crate::es6::commands::streams::append_resp::{CurrentRevisionOption, PositionOption};
         use stream::StreamExt;
         use streams::append_req::{self, Content};
         use streams::AppendReq;
 
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream.into_bytes(),
+        });
         let header = Content::Options(append_req::Options {
-            stream_name: self.stream,
+            stream_identifier,
             expected_stream_revision: Some(convert_expected_version(self.version)),
         });
         let header = AppendReq {
@@ -430,26 +450,49 @@ impl WriteEvents {
 
         let resp = self.client.append(req).await?.into_inner();
 
-        let next_expected_version = match resp.current_revision_option.unwrap() {
-            CurrentRevisionOption::CurrentRevision(rev) => rev,
-            CurrentRevisionOption::NoStream(_) => 0,
-        };
+        match resp.result.unwrap() {
+            streams::append_resp::Result::Success(success) => {
+                let next_expected_version = match success.current_revision_option.unwrap() {
+                    streams::append_resp::success::CurrentRevisionOption::CurrentRevision(rev) => {
+                        rev
+                    }
+                    streams::append_resp::success::CurrentRevisionOption::NoStream(_) => 0,
+                };
 
-        let position = match resp.position_option.unwrap() {
-            PositionOption::Position(pos) => Position {
-                commit: pos.commit_position,
-                prepare: pos.prepare_position,
-            },
+                let position = match success.position_option.unwrap() {
+                    streams::append_resp::success::PositionOption::Position(pos) => Position {
+                        commit: pos.commit_position,
+                        prepare: pos.prepare_position,
+                    },
 
-            PositionOption::NoPosition(_) => Position::start(),
-        };
+                    streams::append_resp::success::PositionOption::NoPosition(_) => {
+                        Position::start()
+                    }
+                };
 
-        let write_result = WriteResult {
-            next_expected_version,
-            position,
-        };
+                let write_result = WriteResult {
+                    next_expected_version,
+                    position,
+                };
 
-        Ok(write_result)
+                Ok(Ok(write_result))
+            }
+
+            streams::append_resp::Result::WrongExpectedVersion(error) => {
+                let current = match error.current_revision_option.unwrap() {
+                    streams::append_resp::wrong_expected_version::CurrentRevisionOption::CurrentRevision(rev) => crate::es6::types::CurrentRevision::Current(rev),
+                    streams::append_resp::wrong_expected_version::CurrentRevisionOption::NoStream(_) => crate::es6::types::CurrentRevision::NoStream,
+                };
+
+                let expected = match error.expected_revision_option.unwrap() {
+                    streams::append_resp::wrong_expected_version::ExpectedRevisionOption::ExpectedRevision(rev) => ExpectedRevision::Expected(rev),
+                    streams::append_resp::wrong_expected_version::ExpectedRevisionOption::Any(_) => ExpectedRevision::Any,
+                    streams::append_resp::wrong_expected_version::ExpectedRevisionOption::StreamExists(_) => ExpectedRevision::StreamExists,
+                };
+
+                Ok(Err(WrongExpectedVersion { current, expected }))
+            }
+        }
     }
 }
 
@@ -581,8 +624,11 @@ impl ReadStreamEvents {
             Revision::End => RevisionOption::End(Empty {}),
         };
 
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream.into_bytes(),
+        });
         let stream_options = StreamOptions {
-            stream_name: self.stream,
+            stream_identifier,
             revision_option: Some(revision_option),
         };
 
@@ -878,9 +924,11 @@ impl DeleteStream {
             };
 
             let expected_stream_revision = Some(expected_stream_revision);
-
+            let stream_identifier = Some(StreamIdentifier {
+                stream_name: self.stream.into_bytes(),
+            });
             let options = Options {
-                stream_name: self.stream,
+                stream_identifier,
                 expected_stream_revision,
             };
 
@@ -921,9 +969,11 @@ impl DeleteStream {
             };
 
             let expected_stream_revision = Some(expected_stream_revision);
-
+            let stream_identifier = Some(StreamIdentifier {
+                stream_name: self.stream.into_bytes(),
+            });
             let options = Options {
-                stream_name: self.stream,
+                stream_identifier,
                 expected_stream_revision,
             };
 
@@ -1059,8 +1109,11 @@ impl RegularCatchupSubscribe {
             None => RevisionOption::Start(Empty {}),
         };
 
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream_id.into_bytes(),
+        });
         let stream_options = StreamOptions {
-            stream_name: self.stream_id,
+            stream_identifier,
             revision_option: Some(revision_option),
         };
 
@@ -1286,8 +1339,11 @@ impl CreatePersistentSubscription {
         use persistent::CreateReq;
 
         let settings = convert_settings_create(self.sub_settings);
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream_id.into_bytes(),
+        });
         let options = Options {
-            stream_name: self.stream_id,
+            stream_identifier,
             group_name: self.group_name,
             settings: Some(settings),
         };
@@ -1355,8 +1411,11 @@ impl UpdatePersistentSubscription {
         use persistent::UpdateReq;
 
         let settings = convert_settings_update(self.sub_settings);
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream_id.into_bytes(),
+        });
         let options = Options {
-            stream_name: self.stream_id,
+            stream_identifier,
             group_name: self.group_name,
             settings: Some(settings),
         };
@@ -1411,8 +1470,11 @@ impl DeletePersistentSubscription {
     pub async fn execute(mut self) -> Result<(), tonic::Status> {
         use persistent::delete_req::Options;
 
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream_id.into_bytes(),
+        });
         let options = Options {
-            stream_name: self.stream_id,
+            stream_identifier,
             group_name: self.group_name,
         };
 
@@ -1487,8 +1549,11 @@ impl ConnectToPersistentSubscription {
             content: Some(options::uuid_option::Content::String(Empty {})),
         };
 
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream_id.into_bytes(),
+        });
         let options = Options {
-            stream_name: self.stream_id,
+            stream_identifier,
             group_name: self.group_name,
             buffer_size: self.batch_size,
             uuid_option: Some(uuid_option),
