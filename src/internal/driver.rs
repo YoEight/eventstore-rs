@@ -158,43 +158,37 @@ pub(crate) struct Driver {
     last_endpoint: Option<Endpoint>,
     discovery: Sender<Option<Endpoint>>,
     connection_name: Option<protobuf::Chars>,
-    default_user: Option<Credentials>,
-    operation_timeout: Duration,
     init_req_opt: Option<InitReq>,
-    reconnect_delay: Duration,
     max_reconnect: usize,
     sender: Sender<Msg>,
-    operation_check_period: Duration,
     last_operation_check: Instant,
+    settings: Settings,
 }
 
 impl Driver {
     pub(crate) fn new(
-        setts: &Settings,
+        settings: Settings,
         disc: Sender<Option<Endpoint>>,
         sender: Sender<Msg>,
     ) -> Driver {
         let connection_name: Option<protobuf::Chars> =
-            setts.connection_name.as_ref().map(|c| c.as_str().into());
+            settings.connection_name.as_ref().map(|c| c.as_str().into());
 
         Driver {
-            registry: Registry::new(setts.operation_timeout, setts.operation_retry),
+            registry: Registry::new(settings.operation_timeout, settings.operation_retry),
             candidate: None,
-            tracker: HealthTracker::new(&setts),
+            tracker: HealthTracker::new(&settings),
             attempt_opt: None,
             state: ConnectionState::Init,
             phase: Phase::Reconnecting,
             last_endpoint: None,
             discovery: disc,
             connection_name,
-            default_user: setts.default_user.clone(),
-            operation_timeout: setts.operation_timeout,
             init_req_opt: None,
-            reconnect_delay: setts.connection_timeout,
-            max_reconnect: setts.connection_retry.to_usize(),
+            max_reconnect: settings.connection_retry.to_usize(),
             sender,
-            operation_check_period: setts.operation_check_period,
             last_operation_check: Instant::now(),
+            settings,
         }
     }
 
@@ -230,7 +224,7 @@ impl Driver {
     pub(crate) fn on_establish(&mut self, endpoint: Endpoint) {
         if self.state == ConnectionState::Connecting && self.phase == Phase::EndpointDiscovery {
             self.phase = Phase::Establishing;
-            self.candidate = Some(Connection::new(self.sender.clone(), endpoint.addr));
+            self.candidate = Some(Connection::new(self.settings.clone(), self.sender.clone(), endpoint.addr));
             self.last_endpoint = Some(endpoint);
         }
     }
@@ -278,7 +272,7 @@ impl Driver {
                 info!("Connection established: {} on {}.", id, conn.desc);
                 self.tracker.reset();
 
-                match self.default_user.clone() {
+                match self.settings.default_user.clone() {
                     Some(creds) => self.authenticate(creds).await,
                     None => self.identify_client().await,
                 }
@@ -422,7 +416,7 @@ impl Driver {
 
     fn has_init_req_timeout(&self) -> bool {
         if let Some(ref req) = self.init_req_opt {
-            req.started.elapsed() >= self.operation_timeout
+            req.started.elapsed() >= self.settings.operation_timeout
         } else {
             false
         }
@@ -430,7 +424,7 @@ impl Driver {
 
     fn conn_has_timeout(&self) -> bool {
         if let Some(att) = self.attempt_opt.as_ref() {
-            att.started.elapsed() >= self.reconnect_delay
+            att.started.elapsed() >= self.settings.connection_timeout
         } else {
             false
         }
@@ -512,7 +506,7 @@ impl Driver {
         } else {
             // Connected state
             if let Some(ref mut conn) = self.candidate {
-                if self.last_operation_check.elapsed() >= self.operation_check_period {
+                if self.last_operation_check.elapsed() >= self.settings.operation_check_period {
                     let pkgs = self.registry.check_and_retry(conn.id).await;
                     self.last_operation_check = Instant::now();
 

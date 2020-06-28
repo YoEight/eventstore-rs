@@ -132,8 +132,27 @@ impl LinkTos {
     }
 }
 
+#[cfg(feature = "tls")]
+#[derive(Clone)]
+/// Settings to configure a secure connection for the TCP API.
+pub struct SecureSettings {
+    pub domain: webpki::DNSName,
+    pub rustls_config: rustls::ClientConfig,
+}
+
+#[cfg(feature = "tls")]
+impl SecureSettings {
+    /// Creates a default secure connection settings with a default `rustls::ClientConfig` configuration.
+    pub fn new(domain: webpki::DNSName) -> Self {
+        SecureSettings {
+            domain,
+            rustls_config: Default::default(),
+        }
+    }
+}
+
 /// Global connection settings.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Settings {
     /// Maximum delay of inactivity before the client sends a heartbeat request.
     pub heartbeat_delay: Duration,
@@ -164,6 +183,15 @@ pub struct Settings {
 
     /// Maximum delay to create a successful connection to a node.
     pub connection_timeout: Duration,
+
+    /// Maximum delay to physically connect to a node. This property differs from
+    /// `connection_timeout` by referencing the delay to have a connected socket to a node, whereas
+    /// `connection_timeout` refers to the whole connection, validation included.
+    pub socket_connection_timeout: Duration,
+
+    #[cfg(feature = "tls")]
+    /// TLS configuration for secured connection.
+    pub tls_client_config: Option<SecureSettings>,
 }
 
 impl Default for Settings {
@@ -178,6 +206,9 @@ impl Default for Settings {
             connection_name: None,
             operation_check_period: Duration::from_secs(1),
             connection_timeout: Duration::from_secs(3),
+            socket_connection_timeout: Duration::from_secs(1),
+            #[cfg(feature = "tls")]
+            tls_client_config: None,
         }
     }
 }
