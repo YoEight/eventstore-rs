@@ -945,7 +945,7 @@ pub mod es6 {
 
     #[test]
     #[ignore]
-    fn es6_preview_test() {
+    fn es6_20_6_test() {
         block_on(async {
             use std::env;
 

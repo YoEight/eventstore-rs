@@ -1,6 +1,7 @@
-0.7.6
+0.8.0
 =====
 * Implement secure connection for the TCP API.
+* Support 20.6 stable version (behind 20.6).
 
 0.7.5
 =====

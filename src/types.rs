@@ -11,7 +11,6 @@ use futures::sink::SinkExt;
 use protobuf::Chars;
 use serde::de::Deserialize;
 use serde::ser::Serialize;
-use serde_json;
 use uuid::Uuid;
 
 use crate::internal::command::Cmd;

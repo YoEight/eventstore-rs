@@ -111,7 +111,7 @@ async fn start_read_write_threads<S>(
         }
     });
 
-    let mut writing_bus = bus.clone();
+    let mut writing_bus = bus;
 
     tokio::spawn(async move {
         while let Some(pkg) = recv.next().await {

@@ -7,7 +7,6 @@ use futures::stream::TryStreamExt;
 use futures::Stream;
 use protobuf::Chars;
 use serde::ser::SerializeSeq;
-use serde_json;
 
 use crate::internal::messaging::Msg;
 use crate::internal::operations;

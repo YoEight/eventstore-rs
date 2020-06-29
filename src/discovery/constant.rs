@@ -9,7 +9,7 @@ pub(crate) async fn discover(
     mut sender: mpsc::Sender<Msg>,
     endpoint: Endpoint,
 ) {
-    while let Some(_) = consumer.next().await {
+    while consumer.next().await.is_some() {
         let _ = sender.send(Msg::Establish(endpoint)).await;
     }
 }
