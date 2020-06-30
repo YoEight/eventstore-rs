@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@v1
       - name: Run Tests
         run: RUST_BACKTRACE='1' RUST_LOG='integration=debug' cargo test --all-features es6::es6_20_6_test -- --exact --ignored
-      
+
   linting:
     name: Linting
     needs: tests-next

@@ -10,11 +10,12 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    container:
-      image: rust:1.39
-
     steps:
     - uses: actions/checkout@v1
+    - name: Install latest Rust stable toolchain
+      run: |
+        rustup update
+        rustup default stable
     - name: Login on Crates.IO
       env:
         TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
