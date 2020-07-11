@@ -153,7 +153,7 @@ impl Connection {
             let client_config =
                 tonic::transport::ClientTlsConfig::new().rustls_client_config(rustls_config);
 
-            channel = channel.tls_config(client_config);
+            channel = channel.tls_config(client_config)?;
         }
 
         let channel = channel.connect().await?;
