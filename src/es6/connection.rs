@@ -33,6 +33,7 @@ impl rustls::ServerCertVerifier for NoVerification {
 /// or a single thread can make many asynchronous requests. To get the most
 /// performance out of the connection, it is generally recommended to use it
 /// in this way.
+#[derive(Clone)]
 pub struct Connection {
     settings: Settings,
     streams: streams::streams_client::StreamsClient<Channel>,
