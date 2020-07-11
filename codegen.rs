@@ -7,17 +7,17 @@ pub mod tcp {
         let generated_file = Path::new("src/internal/messages.rs");
 
         if !generated_file.exists() {
-            protoc_rust::run(protoc_rust::Args {
-                out_dir: "src/internal",
-                input: &["protos/tcp/messages.proto"],
-                includes: &["protos/tcp"],
-                customize: Customize {
+            protoc_rust::Codegen::new()
+                .out_dir("src/internal")
+                .inputs(&["protos/tcp/messages.proto"])
+                .include("protos/tcp")
+                .customize(Customize {
                     carllerche_bytes_for_bytes: Some(true),
                     carllerche_bytes_for_string: Some(true),
                     ..Default::default()
-                },
-            })
-            .expect("protoc");
+                })
+                .run()
+                .expect("Running protoc failed");
         }
     }
 }

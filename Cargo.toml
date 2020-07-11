@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 edition = "2018"
 
@@ -69,7 +69,7 @@ base64 = { version = "^0.11", optional = true }
 tokio-rustls = { version = "0.13", optional = true }
 
 [build-dependencies]
-protoc-rust = "2.10"
+protoc-rust = "2.16"
 tonic-build = "0.2"
 
 [[test]]
