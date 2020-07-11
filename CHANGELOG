@@ -2,6 +2,7 @@
 =====
 * Bump protobuf version.
 * Bump tonic version.
+* Make Connection cloneable.
 
 0.8.0
 =====
