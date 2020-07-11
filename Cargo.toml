@@ -59,7 +59,7 @@ vec1 = "1.4"
 rand = "0.7"
 byteorder = { version = "1.2", optional = true }
 http = { version = "0.2", optional = true }
-tonic = { version = "0.2", features = ["tls", "tls-roots"], optional = true }
+tonic = { version = "0.2.2", features = ["tls", "tls-roots"], optional = true }
 prost = { version = "0.6", optional = true }
 prost-derive = { version = "0.6", optional = true }
 prost-types = { version = "0.6", optional = true }
