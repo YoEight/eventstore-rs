@@ -659,13 +659,13 @@ impl ReadStreamEvents {
         configure_auth_req(&mut req, self.creds);
 
         let stream = self.client.read(req).await?.into_inner();
-        let stream = stream.map_ok(|resp| {
-            let read_event = match resp.content.unwrap() {
-                streams::read_resp::Content::Event(event) => event,
-                _ => unreachable!(),
+        let stream = stream.try_filter_map(|resp| {
+            let value = match resp.content.unwrap() {
+                streams::read_resp::Content::Event(event) => Some(convert_proto_read_event(event)),
+                _ => None,
             };
 
-            convert_proto_read_event(read_event)
+            futures::future::ok(value)
         });
 
         Ok(Box::new(stream))
@@ -831,13 +831,13 @@ impl ReadAllEvents {
         configure_auth_req(&mut req, self.creds);
 
         let stream = self.client.read(req).await?.into_inner();
-        let stream = stream.map_ok(|resp| {
-            let read_event = match resp.content.unwrap() {
-                streams::read_resp::Content::Event(event) => event,
-                _ => unreachable!(),
+        let stream = stream.try_filter_map(|resp| {
+            let value = match resp.content.unwrap() {
+                streams::read_resp::Content::Event(event) => Some(convert_proto_read_event(event)),
+                _ => None,
             };
 
-            convert_proto_read_event(read_event)
+            futures::future::ok(value)
         });
 
         Ok(Box::new(stream))
