@@ -730,6 +730,22 @@ pub mod es6 {
         Ok(())
     }
 
+    // We read all stream events by batch.
+    async fn test_read_all_stream_events(
+        connection: &es6::connection::Connection,
+    ) -> Result<(), Box<dyn Error>> {
+        // Eventstore should always have "some" events in $all, since eventstore itself uses streams, ouroboros style.
+        let mut stream = connection
+            .read_all()
+            .start_from_beginning()
+            .execute(1)
+            .await?;
+
+        while let Some(_event) = stream.try_next().await? {}
+
+        Ok(())
+    }
+
     // We read stream events by batch. We also test if we can properly read a
     // stream thoroughly.
     async fn test_read_stream_events(
@@ -980,6 +996,9 @@ pub mod es6 {
 
             debug!("Before test_write_events…");
             test_write_events(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_all_read_stream_events…");
+            test_read_all_stream_events(&connection).await?;
             debug!("Complete");
             debug!("Before test_read_stream_events…");
             test_read_stream_events(&connection).await?;

@@ -776,7 +776,10 @@ impl ReadAllEvents {
     pub async fn execute(
         mut self,
         count: u64,
-    ) -> Result<Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>>>, tonic::Status> {
+    ) -> Result<
+        Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
+        tonic::Status,
+    > {
         use streams::read_req::options::all_options::AllOption;
         use streams::read_req::options::{self, AllOptions, StreamOption};
         use streams::read_req::Options;
