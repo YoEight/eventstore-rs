@@ -767,6 +767,24 @@ pub mod es6 {
         Ok(())
     }
 
+    // We check to see the client can handle the correct GRPC proto response when
+    // a stream does not exist
+    async fn test_read_stream_events_non_existent(
+        connection: &es6::connection::Connection,
+    ) -> Result<(), Box<dyn Error>> {
+        let stream_id = fresh_stream_id("read_stream_events");
+
+        let mut stream = connection
+            .read_stream(stream_id)
+            .start_from_beginning()
+            .execute(1)
+            .await?;
+
+        assert!(stream.try_next().await?.is_none());
+
+        Ok(())
+    }
+
     // We write an event into a stream then delete that stream.
     async fn test_delete_stream(
         connection: &es6::connection::Connection,
@@ -965,6 +983,9 @@ pub mod es6 {
             debug!("Complete");
             debug!("Before test_read_stream_events…");
             test_read_stream_events(&connection).await?;
+            debug!("Complete");
+            debug!("Before test_read_stream_events_non_existent");
+            test_read_stream_events_non_existent(&connection).await?;
             debug!("Complete");
             debug!("Before test_delete_stream…");
             test_delete_stream(&connection).await?;
