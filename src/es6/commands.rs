@@ -505,7 +505,6 @@ pub struct ReadStreamEvents {
     resolve_link_tos: bool,
     direction: types::ReadDirection,
     creds: Option<types::Credentials>,
-    filter: Option<FilterConf>,
 }
 
 impl ReadStreamEvents {
@@ -520,7 +519,6 @@ impl ReadStreamEvents {
             revision: Revision::Start,
             resolve_link_tos: false,
             direction: types::ReadDirection::Forward,
-            filter: None,
             creds,
         }
     }
@@ -594,13 +592,6 @@ impl ReadStreamEvents {
         }
     }
 
-    pub fn filter(self, filter: FilterConf) -> Self {
-        ReadStreamEvents {
-            filter: Some(filter),
-            ..self
-        }
-    }
-
     /// Sends asynchronously the read command to the server.
     pub async fn execute(
         mut self,
@@ -636,15 +627,10 @@ impl ReadStreamEvents {
             content: Some(options::uuid_option::Content::String(Empty {})),
         };
 
-        let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
-            None => options::FilterOption::NoFilter(Empty {}),
-        };
-
         let options = Options {
             stream_option: Some(StreamOption::Stream(stream_options)),
             resolve_links: self.resolve_link_tos,
-            filter_option: Some(filter_option),
+            filter_option: Some(options::FilterOption::NoFilter(Empty {})),
             count_option: Some(options::CountOption::Count(count)),
             uuid_option: Some(uuid_option),
             read_direction,
@@ -679,7 +665,6 @@ pub struct ReadAllEvents {
     resolve_link_tos: bool,
     direction: types::ReadDirection,
     creds: Option<types::Credentials>,
-    filter: Option<FilterConf>,
 }
 
 impl ReadAllEvents {
@@ -692,7 +677,6 @@ impl ReadAllEvents {
             revision: Revision::Start,
             resolve_link_tos: false,
             direction: types::ReadDirection::Forward,
-            filter: None,
             creds,
         }
     }
@@ -765,13 +749,6 @@ impl ReadAllEvents {
         }
     }
 
-    pub fn filter(self, filter: FilterConf) -> Self {
-        ReadAllEvents {
-            filter: Some(filter),
-            ..self
-        }
-    }
-
     /// Sends asynchronously the read command to the server.
     pub async fn execute(
         mut self,
@@ -811,15 +788,10 @@ impl ReadAllEvents {
             content: Some(options::uuid_option::Content::String(Empty {})),
         };
 
-        let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
-            None => options::FilterOption::NoFilter(Empty {}),
-        };
-
         let options = Options {
             stream_option: Some(StreamOption::All(stream_options)),
             resolve_links: self.resolve_link_tos,
-            filter_option: Some(filter_option),
+            filter_option: Some(options::FilterOption::NoFilter(Empty {})),
             count_option: Some(options::CountOption::Count(count)),
             uuid_option: Some(uuid_option),
             read_direction,
@@ -1034,7 +1006,6 @@ pub struct RegularCatchupSubscribe {
     resolve_link_tos: bool,
     revision: Option<u64>,
     creds_opt: Option<types::Credentials>,
-    filter: Option<FilterConf>,
 }
 
 impl RegularCatchupSubscribe {
@@ -1048,7 +1019,6 @@ impl RegularCatchupSubscribe {
             stream_id,
             resolve_link_tos: false,
             revision: None,
-            filter: None,
             creds_opt,
         }
     }
@@ -1080,13 +1050,6 @@ impl RegularCatchupSubscribe {
     pub fn credentials(self, creds: types::Credentials) -> Self {
         RegularCatchupSubscribe {
             creds_opt: Some(creds),
-            ..self
-        }
-    }
-
-    pub fn filter(self, filter: FilterConf) -> Self {
-        RegularCatchupSubscribe {
-            filter: Some(filter),
             ..self
         }
     }
@@ -1124,15 +1087,10 @@ impl RegularCatchupSubscribe {
             content: Some(options::uuid_option::Content::String(Empty {})),
         };
 
-        let filter_option = match self.filter {
-            Some(filter) => options::FilterOption::Filter(filter.into_proto()),
-            None => options::FilterOption::NoFilter(Empty {}),
-        };
-
         let options = Options {
             stream_option: Some(StreamOption::Stream(stream_options)),
             resolve_links: self.resolve_link_tos,
-            filter_option: Some(filter_option),
+            filter_option: Some(options::FilterOption::NoFilter(Empty {})),
             count_option: Some(options::CountOption::Subscription(SubscriptionOptions {})),
             uuid_option: Some(uuid_option),
             read_direction,
@@ -1212,6 +1170,7 @@ impl AllCatchupSubscribe {
         }
     }
 
+    /// Filters events or streams based upon a predicate.
     pub fn filter(self, filter: FilterConf) -> Self {
         AllCatchupSubscribe {
             filter: Some(filter),
