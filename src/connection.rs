@@ -9,7 +9,7 @@ use crate::discovery;
 use crate::internal::commands;
 use crate::internal::driver::{Driver, Report};
 use crate::internal::messaging::{Msg, OpMsg};
-use crate::types::{self, GossipSeedClusterSettings, OperationError, Settings, StreamMetadata};
+use crate::types::{self, ClusterSettings, OperationError, Settings, StreamMetadata};
 
 /// Represents a connection to a single node. `Client` maintains a full duplex
 /// connection to the EventStore server. An EventStore connection operates
@@ -116,14 +116,9 @@ impl ConnectionBuilder {
             .await
     }
 
-    /// Creates a connection to a cluster of EventStore nodes. The connection will
-    /// start right away. Those `GossipSeed` should be the external HTTP endpoint
-    /// of a node. The standard external HTTP endpoint is running on `2113`.
-    pub async fn cluster_nodes_through_gossip_connection(
-        self,
-        setts: GossipSeedClusterSettings,
-    ) -> Connection {
-        self.start_common_with_runtime(DiscoveryProcess::ClusterThroughGossip(setts))
+    /// Creates a connection to a cluster of EventStore nodes.
+    pub async fn cluster_nodes_connection(self, setts: ClusterSettings) -> Connection {
+        self.start_common_with_runtime(DiscoveryProcess::Cluster(Box::new(setts)))
             .await
     }
 
@@ -204,7 +199,7 @@ async fn connection_state_machine(
 
 enum DiscoveryProcess {
     Static(SocketAddr),
-    ClusterThroughGossip(GossipSeedClusterSettings),
+    Cluster(Box<ClusterSettings>),
 }
 
 impl Connection {
@@ -234,14 +229,14 @@ impl Connection {
                 tokio::spawn(action);
             }
 
-            DiscoveryProcess::ClusterThroughGossip(setts) => {
+            DiscoveryProcess::Cluster(setts) => {
                 #[cfg(feature = "tls")]
                 {
                     let secure_mode = settings.tls_client_config.is_some();
                     let action = discovery::cluster::discover(
                         run_discovery,
                         sender.clone(),
-                        setts,
+                        *setts,
                         secure_mode,
                     );
 
@@ -250,7 +245,7 @@ impl Connection {
                 #[cfg(not(feature = "tls"))]
                 {
                     let action =
-                        discovery::cluster::discover(run_discovery, sender.clone(), setts, false);
+                        discovery::cluster::discover(run_discovery, sender.clone(), *setts, false);
 
                     tokio::spawn(action);
                 }

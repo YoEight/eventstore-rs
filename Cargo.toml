@@ -1,6 +1,6 @@
 [package]
 name = "eventstore"
-version = "0.8.1"
+version = "0.8.2"
 authors = ["Yorick Laupa <yo.eight@gmail.com>"]
 edition = "2018"
 
@@ -56,7 +56,7 @@ serde_derive = "1.0"
 log = "0.4"
 reqwest = { version = "0.10", features = ["json"] }
 vec1 = "1.4"
-rand = "0.7"
+rand = { version = "0.7", features = ["getrandom", "small_rng"] }
 byteorder = { version = "1.2", optional = true }
 http = { version = "0.2", optional = true }
 tonic = { version = "0.3", features = ["tls", "tls-roots"], optional = true }
@@ -67,6 +67,7 @@ rustls = { version = "0.18", features = ["dangerous_configuration"], optional = 
 webpki = { version = "0.21", optional = true }
 base64 = { version = "^0.11", optional = true }
 tokio-rustls = { version = "0.14", optional = true }
+trust-dns-resolver = "0.19"
 
 [build-dependencies]
 protoc-rust = "2.16"

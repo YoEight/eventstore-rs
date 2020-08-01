@@ -61,6 +61,7 @@ jobs:
     - uses: actions/checkout@v1
     - name: Install
       run: |
+        rustup update
         rustup component add clippy-preview
         rustup component add rustfmt
     - name: Linting
