@@ -113,8 +113,6 @@ pub(crate) async fn discover(
 
             if let Some(node) = result_opt {
                 let _ = if secure_mode {
-                    sender.clone().send(Msg::Establish(node.tcp_endpoint)).await
-                } else {
                     sender
                         .clone()
                         .send(Msg::Establish(
@@ -122,6 +120,8 @@ pub(crate) async fn discover(
                                 .expect("We expect secure_tcp_endpoint to be defined"),
                         ))
                         .await
+                } else {
+                    sender.clone().send(Msg::Establish(node.tcp_endpoint)).await
                 };
 
                 break;
