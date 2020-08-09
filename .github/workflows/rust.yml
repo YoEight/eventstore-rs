@@ -1,7 +1,12 @@
-name: Rust
+name: CI
 
 on:
-  - pull_request
+  pull_request:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: '0 3 * * 0' # Every sunday at 3am UTC.
 
 jobs:
   build:

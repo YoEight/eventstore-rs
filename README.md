@@ -1,7 +1,7 @@
 # eventstore-rs
 ![Crates.io](https://img.shields.io/crates/v/eventstore.svg)
 ![Crates.io](https://img.shields.io/crates/d/eventstore.svg)
-![Travis (.org)](https://img.shields.io/travis/YoEight/eventstore-rs.svg)
+![Github action CI workflow](https://github.com/YoEight/eventstore-rs/workflows/CI/badge.svg?branch=master)
 ![Discord](https://img.shields.io/discord/415421715385155584.svg)
 ![Crates.io](https://img.shields.io/crates/l/eventstore.svg)
 
