@@ -1,9 +1,11 @@
 use crate::internal::messaging::Msg;
-use crate::types::{Endpoint, GossipSeed, GossipSeedClusterSettings, NodePreference};
+use crate::types::{ClusterSettings, Either, Endpoint, GossipSeed, NodePreference};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
+use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
+use rand::SeedableRng;
 use std::iter::FromIterator;
 use std::net::{AddrParseError, SocketAddr};
 use std::time::Duration;
@@ -12,16 +14,18 @@ use uuid::Uuid;
 pub(crate) async fn discover(
     mut consumer: mpsc::Receiver<Option<Endpoint>>,
     sender: mpsc::Sender<Msg>,
-    settings: GossipSeedClusterSettings,
+    settings: ClusterSettings,
     secure_mode: bool,
 ) {
     let preference = NodePreference::Random;
     let client = reqwest::Client::new();
     let mut previous_candidates = None;
+    let mut rng = SmallRng::from_entropy();
 
     async fn discover(
+        rng: &mut SmallRng,
         client: &reqwest::Client,
-        settings: &GossipSeedClusterSettings,
+        settings: &ClusterSettings,
         previous_candidates: &mut Option<Vec<Member>>,
         preference: NodePreference,
         failed_endpoint: Option<Endpoint>,
@@ -29,7 +33,13 @@ pub(crate) async fn discover(
         let candidates = match previous_candidates.take() {
             Some(old_candidates) => candidates_from_old_gossip(failed_endpoint, old_candidates),
 
-            None => candidates_from_dns(&settings),
+            None => match candidates_from_dns(rng, &settings).await {
+                Ok(seeds) => seeds,
+                Err(e) => {
+                    error!("Error when performing DNS resolution: {}", e);
+                    Vec::new()
+                }
+            },
         };
 
         let mut outcome = None;
@@ -56,7 +66,7 @@ pub(crate) async fn discover(
                     if members.is_empty() {
                         continue;
                     } else {
-                        outcome = determine_best_node(preference, members.as_slice());
+                        outcome = determine_best_node(rng, preference, members.as_slice());
 
                         if outcome.is_some() {
                             *previous_candidates = Some(members);
@@ -92,6 +102,7 @@ pub(crate) async fn discover(
             }
 
             let result_opt = discover(
+                &mut rng,
                 &client,
                 &settings,
                 &mut previous_candidates,
@@ -102,8 +113,6 @@ pub(crate) async fn discover(
 
             if let Some(node) = result_opt {
                 let _ = if secure_mode {
-                    sender.clone().send(Msg::Establish(node.tcp_endpoint)).await
-                } else {
                     sender
                         .clone()
                         .send(Msg::Establish(
@@ -111,26 +120,43 @@ pub(crate) async fn discover(
                                 .expect("We expect secure_tcp_endpoint to be defined"),
                         ))
                         .await
+                } else {
+                    sender.clone().send(Msg::Establish(node.tcp_endpoint)).await
                 };
 
                 break;
             }
 
             tokio::time::delay_for(Duration::from_millis(500)).await;
+            warn!("Timeout when trying to discover candidate, retrying...");
             att += 1;
         }
     }
 }
 
-fn candidates_from_dns(settings: &GossipSeedClusterSettings) -> Vec<GossipSeed> {
-    // TODO - Currently we only shuffling from the initial seed list.
-    // Later on, we will also try to get candidates from the DNS server
-    // itself.
-    let mut rng = rand::thread_rng();
-    let mut src = settings.seeds.clone();
+async fn candidates_from_dns(
+    rng: &mut SmallRng,
+    settings: &ClusterSettings,
+) -> Result<Vec<GossipSeed>, trust_dns_resolver::error::ResolveError> {
+    let mut src = match settings.kind.as_ref() {
+        Either::Left(seeds) => {
+            Ok::<Vec<GossipSeed>, trust_dns_resolver::error::ResolveError>(seeds.clone().into_vec())
+        }
+        Either::Right(dns) => {
+            let lookup = dns.resolver.srv_lookup(dns.domain_name.clone()).await?;
+            let mut seeds = Vec::new();
 
-    src.shuffle(&mut rng);
-    src.into_vec()
+            for ip in lookup.ip_iter() {
+                let seed = GossipSeed::from_socket_addr(SocketAddr::new(ip, settings.gossip_port));
+                seeds.push(seed);
+            }
+
+            Ok(seeds)
+        }
+    }?;
+
+    src.shuffle(rng);
+    Ok(src)
 }
 
 fn candidates_from_old_gossip(
@@ -371,7 +397,11 @@ async fn get_gossip_from(
     }
 }
 
-fn determine_best_node(preference: NodePreference, members: &[Member]) -> Option<NodeEndpoints> {
+fn determine_best_node(
+    rng: &mut SmallRng,
+    preference: NodePreference,
+    members: &[Member],
+) -> Option<NodeEndpoints> {
     fn allowed_states(state: VNodeState) -> bool {
         match state {
             VNodeState::Manager | VNodeState::ShuttingDown | VNodeState::Shutdown => false,
@@ -386,15 +416,10 @@ fn determine_best_node(preference: NodePreference, members: &[Member]) -> Option
 
     members.as_mut_slice().sort_by(|a, b| a.state.cmp(&b.state));
 
-    {
-        let mut rng = rand::thread_rng();
-
-        if let NodePreference::Random = preference {
-            members.shuffle(&mut rng);
-        }
-
-        // TODO - Implement other node preferences.
-    };
+    //TODO - Implement other node preferences.
+    if let NodePreference::Random = preference {
+        members.shuffle(rng);
+    }
 
     let member_opt = members.into_iter().next();
 

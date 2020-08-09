@@ -22,8 +22,8 @@ Rust [EventStore] TCP Client.
 - [x] Volatile Subscriptions.
 - [x] Catchup Subscriptions.
 - [x] Persistent Subscriptions.
-- [x] Support connection to server clusters. (through gossip, using custom DNS server is still TODO)
-- [x] Support SSL connection.
+- [x] Support connection to server clusters. (through gossip seeds or DNS)
+- [x] Support SSL connection.
 
 # Example
 

@@ -1443,29 +1443,76 @@ impl std::fmt::Display for NodePreference {
 }
 
 #[derive(Debug)]
+pub(crate) enum Either<A, B> {
+    Left(A),
+    Right(B),
+}
+
+impl<A, B> Either<A, B> {
+    pub(crate) fn as_ref(&self) -> Either<&A, &B> {
+        match self {
+            Either::Left(a) => Either::Left(&a),
+            Either::Right(b) => Either::Right(&b),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DnsClusterSettings {
+    pub(crate) resolver: trust_dns_resolver::TokioAsyncResolver,
+    pub(crate) domain_name: trust_dns_resolver::Name,
+}
+
+pub type GossipSeeds = vec1::Vec1<GossipSeed>;
+
+#[derive(Debug)]
 /// Contains settings related to a cluster of fixed nodes.
-pub struct GossipSeedClusterSettings {
-    pub(crate) seeds: vec1::Vec1<GossipSeed>,
+pub struct ClusterSettings {
+    pub(crate) kind: Either<GossipSeeds, DnsClusterSettings>,
     pub(crate) preference: NodePreference,
     pub(crate) gossip_timeout: Duration,
     pub(crate) max_discover_attempts: usize,
+    pub(crate) gossip_port: u16,
 }
 
-impl GossipSeedClusterSettings {
-    /// Creates a `GossipSeedClusterSettings` from a non-empty list of gossip
-    /// seeds.
-    pub fn new(seeds: vec1::Vec1<GossipSeed>) -> GossipSeedClusterSettings {
-        GossipSeedClusterSettings {
-            seeds,
+impl ClusterSettings {
+    /// Creates a `ClusterSettings` from a non-empty list of gossip
+    /// seeds.  The connection will start right away. Those `GossipSeed` should be the external HTTP
+    /// endpoint of a node. The standard external HTTP endpoint is running on `2113`.
+    pub fn from_seeds(seeds: vec1::Vec1<GossipSeed>) -> Self {
+        ClusterSettings {
+            kind: Either::Left(seeds),
             preference: NodePreference::Random,
             gossip_timeout: Duration::from_secs(1),
             max_discover_attempts: 10,
+            gossip_port: 2113,
+        }
+    }
+
+    /// Creates a `ClusterSettings` where nodes composing the cluster will be fetched through DNS
+    /// lookups. Will use 2113 as a default gossip port (default external HTTP port).
+    /// Ideal if you cluster composition changes over time.
+    pub fn from_dns(
+        resolver: trust_dns_resolver::TokioAsyncResolver,
+        domain_name: trust_dns_resolver::Name,
+    ) -> Self {
+        let conf = DnsClusterSettings {
+            resolver,
+            domain_name,
+        };
+
+        ClusterSettings {
+            kind: Either::Right(conf),
+            preference: NodePreference::Random,
+            gossip_timeout: Duration::from_secs(1),
+            max_discover_attempts: 10,
+            gossip_port: 2113,
         }
     }
 
     /// Maximum duration a node should take when requested a gossip request.
-    pub fn set_gossip_timeout(self, gossip_timeout: Duration) -> GossipSeedClusterSettings {
-        GossipSeedClusterSettings {
+    pub fn set_gossip_timeout(self, gossip_timeout: Duration) -> Self {
+        ClusterSettings {
             gossip_timeout,
             ..self
         }
@@ -1473,9 +1520,18 @@ impl GossipSeedClusterSettings {
 
     /// Maximum number of retries during a discovery process. Discovery process
     /// is when the client tries to figure out the best node to connect to.
-    pub fn set_max_discover_attempts(self, max_attempt: usize) -> GossipSeedClusterSettings {
-        GossipSeedClusterSettings {
+    pub fn set_max_discover_attempts(self, max_attempt: usize) -> Self {
+        ClusterSettings {
             max_discover_attempts: max_attempt,
+            ..self
+        }
+    }
+
+    /// Sets the well-known port on which the cluster gossip is taking place. Only used when using
+    /// the DNS configuration.
+    pub fn set_gossip_port(self, gossip_port: u16) -> Self {
+        ClusterSettings {
+            gossip_port,
             ..self
         }
     }
