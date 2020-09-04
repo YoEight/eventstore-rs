@@ -35,7 +35,8 @@ es6 = [
   "prost-types",
   "rustls",
   "webpki",
-  "base64"
+  "base64",
+  "pin-project"
 ]
 tls = [
     "tokio-rustls",
@@ -68,6 +69,7 @@ webpki = { version = "0.21", optional = true }
 base64 = { version = "^0.11", optional = true }
 tokio-rustls = { version = "0.14", optional = true }
 trust-dns-resolver = "0.19"
+pin-project = { version = "0.4", optional = true }
 
 [build-dependencies]
 protoc-rust = "2.16"

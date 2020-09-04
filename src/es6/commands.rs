@@ -1,8 +1,9 @@
 //! Commands this client supports.
 use std::collections::HashMap;
 
-use futures::Stream;
-use futures::{stream, TryStreamExt};
+use futures::{ready, Stream, StreamExt};
+use futures::{stream, Future, FutureExt, TryStreamExt};
+use pin_project::{pin_project, project};
 
 use crate::es6::grpc::event_store::client::{persistent, shared, streams};
 use crate::es6::types::{
@@ -17,8 +18,13 @@ use std::marker::Unpin;
 use streams::append_req::options::ExpectedStreamRevision;
 use streams::streams_client::StreamsClient;
 
+use crate::es6::grpc::event_store::client::streams::read_req::options::stream_options::RevisionOption;
+use crate::es6::grpc::event_store::client::streams::read_req::options::StreamOption;
+use futures::stream::StreamFuture;
+use futures::task::Context;
+use tokio::macros::support::{Pin, Poll};
 use tonic::transport::Channel;
-use tonic::Request;
+use tonic::{Request, Streaming};
 
 fn convert_expected_version(version: ExpectedVersion) -> ExpectedStreamRevision {
     match version {
@@ -655,6 +661,108 @@ impl ReadStreamEvents {
         });
 
         Ok(Box::new(stream))
+    }
+
+    // pub async fn read_through(
+    //     batch: usize,
+    // ) -> Result<
+    //     Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
+    //     tonic::Status,
+    // > {
+    // }
+}
+
+type RSTFut = Result<
+    StreamFuture<Box<dyn Stream<Item = Result<streams::ReadResp, tonic::Status>> + Send + Unpin>>,
+    Box<dyn Future<Output = Result<tonic::Response<Streaming<streams::ReadResp>>, tonic::Status>>>,
+>;
+
+#[pin_project]
+struct ReadStreamThrough {
+    client: StreamsClient<Channel>,
+    start: u64,
+    offset: u64,
+    stream_options: streams::read_req::options::StreamOptions,
+    options: streams::read_req::Options,
+    #[pin]
+    future: Option<StreamFuture<Streaming<streams::ReadResp>>>,
+
+    #[pin]
+    stream_future: Option<
+        Pin<
+            Box<
+                dyn Future<
+                    Output = Result<tonic::Response<Streaming<streams::ReadResp>>, tonic::Status>,
+                >,
+            >,
+        >,
+    >,
+}
+
+impl Stream for ReadStreamThrough {
+    type Item = Result<streams::ReadResp, tonic::Status>;
+
+    fn poll_next<'a>(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
+        loop {
+            let __ReadStreamThroughProjection {
+                mut client,
+                start,
+                offset,
+                stream_options: stream_options,
+                options,
+                mut future,
+                mut stream_future,
+            } = self.as_mut().project();
+
+            if stream_future.is_some() {
+                match ready!(stream_future.take().unwrap().as_mut().poll(ctx)) {
+                    Ok(resp) => {
+                        future.set(Some(resp.into_inner().into_future().into()));
+                    }
+                    Err(e) => {
+                        future.set(None);
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                }
+            } else if future.is_some() {
+                let (step, next) = ready!(future.as_mut().as_pin_mut().unwrap().poll(ctx));
+                if let Some(result) = step {
+                    if let Ok(resp) = result.as_ref() {
+                        // `content` is always defined here.
+                        if let Some(content) = resp.content.as_ref() {
+                            if let streams::read_resp::Content::Event(ref event) = content {
+                                let event = event
+                                    .link
+                                    .as_ref()
+                                    .or(event.event.as_ref())
+                                    .expect("Resolved event can't be undefined");
+
+                                *offset = event.stream_revision;
+                            }
+                        }
+                    }
+                    future.set(Some(next.into_future()));
+                    return Poll::Ready(Some(result));
+                } else if *start != *offset { // Means we need to issue the next batch.
+                }
+            } else if *start == *offset {
+                // Means we never issued a request yet.
+                let mut new_options = options.clone();
+                let mut new_stream_options = stream_options.clone();
+
+                new_stream_options.revision_option = Some(RevisionOption::Revision(*offset));
+                new_options.stream_option = Some(StreamOption::Stream(new_stream_options));
+                *start = *offset;
+
+                let req = streams::ReadReq {
+                    options: Some(new_options),
+                };
+
+                stream_future.set(Some(Box::pin(client.read(req))));
+            }
+        }
+
+        Poll::Ready(None)
     }
 }
 
