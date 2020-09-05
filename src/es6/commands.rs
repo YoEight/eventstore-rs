@@ -663,13 +663,138 @@ impl ReadStreamEvents {
         Ok(Box::new(stream))
     }
 
-    // pub async fn read_through(
-    //     batch: usize,
-    // ) -> Result<
-    //     Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
-    //     tonic::Status,
-    // > {
-    // }
+    pub async fn read_through(
+        self,
+        batch: usize,
+    ) -> Result<Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Unpin>, tonic::Status>
+    {
+        use streams::read_req::options::stream_options::RevisionOption;
+        use streams::read_req::options::{self, StreamOption, StreamOptions};
+        use streams::read_req::Options;
+
+        let read_direction = match self.direction {
+            types::ReadDirection::Forward => 0,
+            types::ReadDirection::Backward => 1,
+        };
+
+        let revision_option = match self.revision {
+            Revision::Exact(rev) => RevisionOption::Revision(rev),
+            Revision::Start => RevisionOption::Start(Empty {}),
+            Revision::End => RevisionOption::End(Empty {}),
+        };
+
+        let stream_identifier = Some(StreamIdentifier {
+            stream_name: self.stream.into_bytes(),
+        });
+        let stream_options = StreamOptions {
+            stream_identifier,
+            revision_option: Some(revision_option),
+        };
+
+        let uuid_option = options::UuidOption {
+            content: Some(options::uuid_option::Content::String(Empty {})),
+        };
+
+        let options = Options {
+            stream_option: Some(StreamOption::Stream(stream_options)),
+            resolve_links: self.resolve_link_tos,
+            filter_option: Some(options::FilterOption::NoFilter(Empty {})),
+            count_option: Some(options::CountOption::Count(batch as u64)),
+            uuid_option: Some(uuid_option),
+            read_direction,
+        };
+
+        //read_through_regular_stream()
+        unimplemented!()
+    }
+}
+
+async fn read_through_regular_stream(
+    start: u64,
+    mut client: StreamsClient<Channel>,
+    options: streams::read_req::Options,
+    stream_options: streams::read_req::options::StreamOptions,
+) -> Result<Box<dyn Stream<Item = Result<streams::ReadResp, tonic::Status>>>, tonic::Status> {
+    let req = streams::ReadReq {
+        options: Some(options.clone()),
+    };
+
+    struct State {
+        completed: bool,
+        start: u64,
+        offset: u64,
+        options: streams::read_req::Options,
+        stream_options: streams::read_req::options::StreamOptions,
+        client: StreamsClient<Channel>,
+        future: StreamFuture<Streaming<streams::ReadResp>>,
+    }
+
+    let future = client.read(req).await?.into_inner().into_future();
+
+    let init_state = State {
+        completed: false,
+        start,
+        offset: start,
+        options,
+        stream_options,
+        future,
+        client,
+    };
+
+    let stream = futures::stream::unfold(init_state, |mut state| async move {
+        loop {
+            if state.completed {
+                break;
+            }
+
+            let (result, next) = state.future.await;
+            state.future = next.into_future();
+
+            if let Some(result) = result {
+                if let Some(event) = result.as_ref().ok() {
+                    if let streams::read_resp::Content::Event(ref event) =
+                        event.content.as_ref().unwrap()
+                    {
+                        let event = event.link.as_ref().or(event.event.as_ref()).unwrap();
+                        state.offset = event.stream_revision;
+                    }
+                }
+
+                state.completed = result.is_err();
+
+                return Some((result, state));
+            } else if state.start == state.offset {
+                // We reach end of stream.
+                state.completed = true;
+            } else {
+                let mut new_options = state.options.clone();
+                let mut new_stream_options = state.stream_options.clone();
+
+                new_stream_options.revision_option = Some(RevisionOption::Revision(state.offset));
+                new_options.stream_option = Some(StreamOption::Stream(new_stream_options));
+
+                let req = streams::ReadReq {
+                    options: Some(new_options),
+                };
+
+                let result = state.client.read(req).await;
+                match result {
+                    Err(e) => {
+                        state.completed = true;
+                        return Some((Err(e), state));
+                    }
+
+                    Ok(stream) => {
+                        state.future = stream.into_inner().into_future();
+                    }
+                }
+            }
+        }
+
+        None
+    });
+
+    Ok(Box::new(stream))
 }
 
 type RSTFut = Result<
@@ -699,72 +824,72 @@ struct ReadStreamThrough {
     >,
 }
 
-impl Stream for ReadStreamThrough {
-    type Item = Result<streams::ReadResp, tonic::Status>;
-
-    fn poll_next<'a>(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
-        loop {
-            let __ReadStreamThroughProjection {
-                mut client,
-                start,
-                offset,
-                stream_options: stream_options,
-                options,
-                mut future,
-                mut stream_future,
-            } = self.as_mut().project();
-
-            if stream_future.is_some() {
-                match ready!(stream_future.take().unwrap().as_mut().poll(ctx)) {
-                    Ok(resp) => {
-                        future.set(Some(resp.into_inner().into_future().into()));
-                    }
-                    Err(e) => {
-                        future.set(None);
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                }
-            } else if future.is_some() {
-                let (step, next) = ready!(future.as_mut().as_pin_mut().unwrap().poll(ctx));
-                if let Some(result) = step {
-                    if let Ok(resp) = result.as_ref() {
-                        // `content` is always defined here.
-                        if let Some(content) = resp.content.as_ref() {
-                            if let streams::read_resp::Content::Event(ref event) = content {
-                                let event = event
-                                    .link
-                                    .as_ref()
-                                    .or(event.event.as_ref())
-                                    .expect("Resolved event can't be undefined");
-
-                                *offset = event.stream_revision;
-                            }
-                        }
-                    }
-                    future.set(Some(next.into_future()));
-                    return Poll::Ready(Some(result));
-                } else if *start != *offset { // Means we need to issue the next batch.
-                }
-            } else if *start == *offset {
-                // Means we never issued a request yet.
-                let mut new_options = options.clone();
-                let mut new_stream_options = stream_options.clone();
-
-                new_stream_options.revision_option = Some(RevisionOption::Revision(*offset));
-                new_options.stream_option = Some(StreamOption::Stream(new_stream_options));
-                *start = *offset;
-
-                let req = streams::ReadReq {
-                    options: Some(new_options),
-                };
-
-                stream_future.set(Some(Box::pin(client.read(req))));
-            }
-        }
-
-        Poll::Ready(None)
-    }
-}
+// impl Stream for ReadStreamThrough {
+//     type Item = Result<streams::ReadResp, tonic::Status>;
+//
+//     fn poll_next<'a>(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
+//         loop {
+//             let __ReadStreamThroughProjection {
+//                 mut client,
+//                 start,
+//                 offset,
+//                 stream_options: stream_options,
+//                 options,
+//                 mut future,
+//                 mut stream_future,
+//             } = self.as_mut().project();
+//
+//             if stream_future.is_some() {
+//                 match ready!(stream_future.take().unwrap().as_mut().poll(ctx)) {
+//                     Ok(resp) => {
+//                         future.set(Some(resp.into_inner().into_future().into()));
+//                     }
+//                     Err(e) => {
+//                         future.set(None);
+//                         return Poll::Ready(Some(Err(e)));
+//                     }
+//                 }
+//             } else if future.is_some() {
+//                 let (step, next) = ready!(future.as_mut().as_pin_mut().unwrap().poll(ctx));
+//                 if let Some(result) = step {
+//                     if let Ok(resp) = result.as_ref() {
+//                         // `content` is always defined here.
+//                         if let Some(content) = resp.content.as_ref() {
+//                             if let streams::read_resp::Content::Event(ref event) = content {
+//                                 let event = event
+//                                     .link
+//                                     .as_ref()
+//                                     .or(event.event.as_ref())
+//                                     .expect("Resolved event can't be undefined");
+//
+//                                 *offset = event.stream_revision;
+//                             }
+//                         }
+//                     }
+//                     future.set(Some(next.into_future()));
+//                     return Poll::Ready(Some(result));
+//                 } else if *start != *offset { // Means we need to issue the next batch.
+//                 }
+//             } else if *start == *offset {
+//                 // Means we never issued a request yet.
+//                 let mut new_options = options.clone();
+//                 let mut new_stream_options = stream_options.clone();
+//
+//                 new_stream_options.revision_option = Some(RevisionOption::Revision(*offset));
+//                 new_options.stream_option = Some(StreamOption::Stream(new_stream_options));
+//                 *start = *offset;
+//
+//                 let req = streams::ReadReq {
+//                     options: Some(new_options),
+//                 };
+//
+//                 stream_future.set(Some(Box::pin(client.read(req))));
+//             }
+//         }
+//
+//         Poll::Ready(None)
+//     }
+// }
 
 /// Like `ReadStreamEvents` but specialized to system stream '$all'.
 pub struct ReadAllEvents {
