@@ -1,6 +1,7 @@
 0.8.2
 =====
 * Adding `read_through` function when reading a stream (`$all` included).
+* Support latest `message_timeout_ms` and `checkpoint_after_ms` persistent.proto changes.
 
 0.8.1
 =====

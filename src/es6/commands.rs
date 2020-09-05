@@ -222,9 +222,17 @@ fn convert_settings_create(
         resolve_links: settings.resolve_links,
         revision: settings.revision,
         extra_statistics: settings.extra_stats,
-        message_timeout: settings.message_timeout.as_millis() as i64,
+        message_timeout: Some(
+            persistent::create_req::settings::MessageTimeout::MessageTimeoutMs(
+                settings.message_timeout.as_millis() as i32,
+            ),
+        ),
         max_retry_count: settings.max_retry_count,
-        checkpoint_after: settings.checkpoint_after.as_millis() as i64,
+        checkpoint_after: Some(
+            persistent::create_req::settings::CheckpointAfter::CheckpointAfterMs(
+                settings.checkpoint_after.as_millis() as i32,
+            ),
+        ),
         min_checkpoint_count: settings.min_checkpoint_count,
         max_checkpoint_count: settings.max_checkpoint_count,
         max_subscriber_count: settings.max_subscriber_count,
@@ -248,9 +256,17 @@ fn convert_settings_update(
         resolve_links: settings.resolve_links,
         revision: settings.revision,
         extra_statistics: settings.extra_stats,
-        message_timeout: settings.message_timeout.as_millis() as i64,
+        message_timeout: Some(
+            persistent::update_req::settings::MessageTimeout::MessageTimeoutMs(
+                settings.message_timeout.as_millis() as i32,
+            ),
+        ),
         max_retry_count: settings.max_retry_count,
-        checkpoint_after: settings.checkpoint_after.as_millis() as i64,
+        checkpoint_after: Some(
+            persistent::update_req::settings::CheckpointAfter::CheckpointAfterMs(
+                settings.checkpoint_after.as_millis() as i32,
+            ),
+        ),
         min_checkpoint_count: settings.min_checkpoint_count,
         max_checkpoint_count: settings.max_checkpoint_count,
         max_subscriber_count: settings.max_subscriber_count,

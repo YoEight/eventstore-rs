@@ -159,12 +159,8 @@ pub mod create_req {
         pub revision: u64,
         #[prost(bool, tag = "3")]
         pub extra_statistics: bool,
-        #[prost(int64, tag = "4")]
-        pub message_timeout: i64,
         #[prost(int32, tag = "5")]
         pub max_retry_count: i32,
-        #[prost(int64, tag = "6")]
-        pub checkpoint_after: i64,
         #[prost(int32, tag = "7")]
         pub min_checkpoint_count: i32,
         #[prost(int32, tag = "8")]
@@ -179,6 +175,26 @@ pub mod create_req {
         pub history_buffer_size: i32,
         #[prost(enumeration = "ConsumerStrategy", tag = "13")]
         pub named_consumer_strategy: i32,
+        #[prost(oneof = "settings::MessageTimeout", tags = "4, 14")]
+        pub message_timeout: ::std::option::Option<settings::MessageTimeout>,
+        #[prost(oneof = "settings::CheckpointAfter", tags = "6, 15")]
+        pub checkpoint_after: ::std::option::Option<settings::CheckpointAfter>,
+    }
+    pub mod settings {
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum MessageTimeout {
+            #[prost(int64, tag = "4")]
+            MessageTimeoutTicks(i64),
+            #[prost(int32, tag = "14")]
+            MessageTimeoutMs(i32),
+        }
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum CheckpointAfter {
+            #[prost(int64, tag = "6")]
+            CheckpointAfterTicks(i64),
+            #[prost(int32, tag = "15")]
+            CheckpointAfterMs(i32),
+        }
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
@@ -213,12 +229,8 @@ pub mod update_req {
         pub revision: u64,
         #[prost(bool, tag = "3")]
         pub extra_statistics: bool,
-        #[prost(int64, tag = "4")]
-        pub message_timeout: i64,
         #[prost(int32, tag = "5")]
         pub max_retry_count: i32,
-        #[prost(int64, tag = "6")]
-        pub checkpoint_after: i64,
         #[prost(int32, tag = "7")]
         pub min_checkpoint_count: i32,
         #[prost(int32, tag = "8")]
@@ -233,6 +245,26 @@ pub mod update_req {
         pub history_buffer_size: i32,
         #[prost(enumeration = "ConsumerStrategy", tag = "13")]
         pub named_consumer_strategy: i32,
+        #[prost(oneof = "settings::MessageTimeout", tags = "4, 14")]
+        pub message_timeout: ::std::option::Option<settings::MessageTimeout>,
+        #[prost(oneof = "settings::CheckpointAfter", tags = "6, 15")]
+        pub checkpoint_after: ::std::option::Option<settings::CheckpointAfter>,
+    }
+    pub mod settings {
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum MessageTimeout {
+            #[prost(int64, tag = "4")]
+            MessageTimeoutTicks(i64),
+            #[prost(int32, tag = "14")]
+            MessageTimeoutMs(i32),
+        }
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum CheckpointAfter {
+            #[prost(int64, tag = "6")]
+            CheckpointAfterTicks(i64),
+            #[prost(int32, tag = "15")]
+            CheckpointAfterMs(i32),
+        }
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
