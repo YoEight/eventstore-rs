@@ -656,6 +656,16 @@ impl ReadStreamEvents {
 
         Ok(Box::new(stream))
     }
+
+    /// Reads all the events of a stream.
+    pub async fn read_through(
+        self,
+    ) -> Result<
+        Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
+        tonic::Status,
+    > {
+        self.execute(u64::MAX).await
+    }
 }
 
 /// Like `ReadStreamEvents` but specialized to system stream '$all'.
@@ -816,6 +826,16 @@ impl ReadAllEvents {
         });
 
         Ok(Box::new(stream))
+    }
+
+    /// Reads all the events of $all stream.
+    pub async fn read_through(
+        self,
+    ) -> Result<
+        Box<dyn Stream<Item = Result<ResolvedEvent, tonic::Status>> + Send + Unpin>,
+        tonic::Status,
+    > {
+        self.execute(u64::MAX).await
     }
 }
 
