@@ -1,8 +1,8 @@
 //! Commands this client supports.
 use std::collections::HashMap;
 
-use futures::Stream;
 use futures::{stream, TryStreamExt};
+use futures::{Stream, StreamExt};
 
 use crate::es6::grpc::event_store::client::{persistent, shared, streams};
 use crate::es6::types::{
@@ -442,7 +442,6 @@ impl WriteEvents {
     where
         S: Stream<Item = EventData> + Send + Sync + 'static,
     {
-        use stream::StreamExt;
         use streams::append_req::{self, Content};
         use streams::AppendReq;
 
@@ -1566,7 +1565,16 @@ impl ConnectToPersistentSubscription {
         configure_auth_req(&mut req, self.creds.clone());
 
         let _ = sender.send(read_req).await;
-        let stream = self.client.read(req).await?.into_inner();
+        let mut stream = self.client.read(req).await?.into_inner();
+        let mut sub_id_opt = None;
+
+        if let Some(evt) = stream.try_next().await? {
+            if let Some(content) = evt.content {
+                if let read_resp::Content::SubscriptionConfirmation(params) = content {
+                    sub_id_opt = Some(params.subscription_id);
+                }
+            }
+        }
 
         let stream = stream.try_filter_map(|resp| {
             let ret = match resp
@@ -1583,7 +1591,7 @@ impl ConnectToPersistentSubscription {
         let read = SubscriptionRead {
             inner: Box::new(stream),
         };
-        let write = SubscriptionWrite { sender };
+        let write = SubscriptionWrite { sub_id_opt, sender };
 
         Ok((read, write))
     }
@@ -1605,6 +1613,7 @@ fn to_proto_uuid(id: uuid::Uuid) -> Uuid {
 }
 
 pub struct SubscriptionWrite {
+    sub_id_opt: Option<String>,
     sender: futures::channel::mpsc::Sender<persistent::ReadReq>,
 }
 
@@ -1622,9 +1631,13 @@ impl SubscriptionWrite {
         use persistent::ReadReq;
 
         let ids = event_ids.into_iter().map(to_proto_uuid).collect();
-
         let ack = Ack {
-            id: Vec::new(),
+            id: base64::encode(
+                self.sub_id_opt
+                    .as_ref()
+                    .expect("subscription id must be defined"),
+            )
+            .into_bytes(),
             ids,
         };
 
@@ -1662,7 +1675,12 @@ impl SubscriptionWrite {
         };
 
         let nack = Nack {
-            id: Vec::new(),
+            id: base64::encode(
+                self.sub_id_opt
+                    .as_ref()
+                    .expect("subscription id must be defined"),
+            )
+            .into_bytes(),
             ids,
             action,
             reason,
