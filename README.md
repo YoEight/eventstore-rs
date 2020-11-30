@@ -1,3 +1,7 @@
+
+# REPO HAS MOVED!
+## This client is now officiallly supported by EventStore Ltd. The code is now hosted here: https://github.com/EventStore/EventStoreDB-Client-Rust
+
 # eventstore-rs
 ![Crates.io](https://img.shields.io/crates/v/eventstore.svg)
 ![Crates.io](https://img.shields.io/crates/d/eventstore.svg)
